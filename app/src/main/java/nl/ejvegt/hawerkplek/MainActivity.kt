@@ -202,7 +202,9 @@ class MainActivity : Activity() {
     private lateinit var mediaStatus: TextView
     private lateinit var settingsTitle: TextView
     private lateinit var settingsMenu: View
-    private lateinit var apiSection: View
+    private lateinit var haSection: View
+    private lateinit var pveSection: View
+    private lateinit var fritzSection: View
     private lateinit var updateSection: View
     private lateinit var updateVersion: TextView
     private lateinit var ghTokenInput: EditText
@@ -259,7 +261,9 @@ class MainActivity : Activity() {
         mediaStatus = findViewById(R.id.mediaStatus)
         settingsTitle = findViewById(R.id.settingsTitle)
         settingsMenu = findViewById(R.id.settingsMenu)
-        apiSection = findViewById(R.id.apiSection)
+        haSection = findViewById(R.id.haSection)
+        pveSection = findViewById(R.id.pveSection)
+        fritzSection = findViewById(R.id.fritzSection)
         updateSection = findViewById(R.id.updateSection)
         updateVersion = findViewById(R.id.updateVersion)
         ghTokenInput = findViewById(R.id.ghTokenInput)
@@ -285,9 +289,13 @@ class MainActivity : Activity() {
         tabDash.setOnClickListener { selectTab(TAB_DASH) }
         tabMedia.setOnClickListener { selectTab(TAB_MEDIA) }
         findViewById<Button>(R.id.settingsButton).setOnClickListener { showSettings(true) }
-        findViewById<Button>(R.id.saveButton).setOnClickListener { saveSettings() }
-        findViewById<View>(R.id.menuApi).setOnClickListener { showSettingsPage(PAGE_API) }
-        findViewById<View>(R.id.menuUpdate).setOnClickListener { showSettingsPage(PAGE_UPDATE) }
+        listOf(R.id.saveHa, R.id.savePve, R.id.saveFritz).forEach { id ->
+            findViewById<Button>(id).setOnClickListener { saveSettings() }
+        }
+        menuItem(R.id.menuHa, R.drawable.ic_tab_ha, PAGE_HA)
+        menuItem(R.id.menuPve, R.drawable.ic_tab_pve, PAGE_PVE)
+        menuItem(R.id.menuFritz, R.drawable.ic_tab_fritz, PAGE_FRITZ)
+        menuItem(R.id.menuUpdate, R.drawable.ic_update, PAGE_UPDATE)
         findViewById<Button>(R.id.updateSaveButton).setOnClickListener { saveUpdateSettings() }
         findViewById<Button>(R.id.checkUpdateButton).setOnClickListener {
             saveUpdateSettings(close = false)
@@ -377,18 +385,24 @@ class MainActivity : Activity() {
     private fun ghToken() = setting(KEY_GH_TOKEN, BuildConfig.GH_UPDATE_TOKEN)
 
     private val PAGE_MENU = 0
-    private val PAGE_API = 1
-    private val PAGE_UPDATE = 2
+    private val PAGE_HA = 1
+    private val PAGE_PVE = 2
+    private val PAGE_FRITZ = 3
+    private val PAGE_UPDATE = 4
     private var settingsPage = PAGE_MENU
 
     /** Instellingen: menu, of één van de twee onderdelen. */
     private fun showSettingsPage(page: Int) {
         settingsPage = page
         settingsMenu.visibility = if (page == PAGE_MENU) View.VISIBLE else View.GONE
-        apiSection.visibility = if (page == PAGE_API) View.VISIBLE else View.GONE
+        haSection.visibility = if (page == PAGE_HA) View.VISIBLE else View.GONE
+        pveSection.visibility = if (page == PAGE_PVE) View.VISIBLE else View.GONE
+        fritzSection.visibility = if (page == PAGE_FRITZ) View.VISIBLE else View.GONE
         updateSection.visibility = if (page == PAGE_UPDATE) View.VISIBLE else View.GONE
         settingsTitle.text = when (page) {
-            PAGE_API -> "API's en tokens"
+            PAGE_HA -> "Home Assistant"
+            PAGE_PVE -> "Proxmox"
+            PAGE_FRITZ -> "Fritzbox"
             PAGE_UPDATE -> "Updates"
             else -> "Instellingen"
         }
@@ -400,6 +414,18 @@ class MainActivity : Activity() {
                 updateStatus.text = if (ghToken().isEmpty()) "Vul eerst het GitHub-token in." else ""
             }
         }
+    }
+
+    /** Menu-item met het logo van het tabblad ervoor (hoogte 28dp, breedte naar verhouding). */
+    private fun menuItem(viewId: Int, iconRes: Int, page: Int) {
+        val item = findViewById<TextView>(viewId)
+        getDrawable(iconRes)?.let { d ->
+            val h = dp(28)
+            val w = if (d.intrinsicHeight > 0) h * d.intrinsicWidth / d.intrinsicHeight else h
+            d.setBounds(0, 0, w, h)
+            item.setCompoundDrawablesRelative(d, null, null, null)
+        }
+        item.setOnClickListener { showSettingsPage(page) }
     }
 
     private fun saveUpdateSettings(close: Boolean = true) {
@@ -445,7 +471,7 @@ class MainActivity : Activity() {
         pveNodes.clear()
         haActiveUntil = 0L
         fritzPossibleChannels.clear()
-        showSettings(false)
+        showSettingsPage(PAGE_MENU)
         refreshCurrentTab(force = true)
     }
 
