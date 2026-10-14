@@ -130,6 +130,11 @@ class MainActivity : Activity() {
         const val MEDIA_PLAYER = "media_player.googletv_box"
         /** Dezelfde box via de Android Debug Bridge-integratie: start elke app betrouwbaar. */
         const val MEDIA_ADB = "media_player.android_tv_192_168_50_140"
+        /** De LG-tv in de woonkamer (webOS). */
+        const val MEDIA_TV = "media_player.lg_webos_tv_oled55b46la"
+        /** Ingangen van de Denon (interne namen): apps via de Google TV-box, tv kijken via TV+. */
+        const val SOURCE_APPS = "GoogleTV Box"
+        const val SOURCE_TV = "KPN Hangplek"
 
         /** App-tegels: naam, pakketnaam op de Google TV, kleur van de tegel. */
         val MEDIA_APPS = listOf(
@@ -2332,14 +2337,16 @@ class MainActivity : Activity() {
         mediaNowCard.header.addView(mediaPowerSwitch)
         mediaList.addView(mediaNowCard.root)
 
-        MEDIA_APPS.chunked(2).forEach { pair ->
+        val tiles = listOf<(Boolean) -> View>({ second -> watchTvTile(second) }) +
+            MEDIA_APPS.map { app -> { second: Boolean -> appTile(app, second) } }
+        tiles.chunked(2).forEach { pair ->
             val row = LinearLayout(this).apply {
                 orientation = LinearLayout.HORIZONTAL
                 layoutParams = LinearLayout.LayoutParams(
                     ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT
                 ).apply { bottomMargin = dp(12) }
             }
-            pair.forEachIndexed { i, app -> row.addView(appTile(app, i == 1)) }
+            pair.forEachIndexed { i, make -> row.addView(make(i == 1)) }
             if (pair.size == 1) {
                 row.addView(View(this).apply {
                     layoutParams = LinearLayout.LayoutParams(0, dp(100), 1f).apply { marginStart = dp(12) }
@@ -2366,12 +2373,40 @@ class MainActivity : Activity() {
                 gravity = Gravity.CENTER
             }
         }
-        return tile.apply { setupTile(app, second) }
+        return tile.apply {
+            setupTile(app.color, second) { launchApp(app) }
+            setOnLongClickListener {
+                AlertDialog.Builder(this@MainActivity)
+                    .setTitle(app.name)
+                    .setMessage("Pakketnaam: ${app.pkg}" + (app.link?.let { "\nDeeplink: $it" } ?: ""))
+                    .setPositiveButton("OK", null)
+                    .show()
+                true
+            }
+        }
     }
 
-    private fun View.setupTile(app: MediaApp, second: Boolean) {
+    /** Tegel "TV kijken": tv en receiver aan, receiver op TV+ woonkamer. */
+    private fun watchTvTile(second: Boolean): View = LinearLayout(this).apply {
+        orientation = LinearLayout.VERTICAL
+        gravity = Gravity.CENTER
+        addView(ImageView(this@MainActivity).apply {
+            setImageResource(R.drawable.ic_tv_watch)
+            layoutParams = LinearLayout.LayoutParams(dp(44), dp(44))
+        })
+        addView(TextView(this@MainActivity).apply {
+            text = "TV kijken"
+            textSize = 17f
+            setTextColor(Color.WHITE)
+            setTypeface(typeface, Typeface.BOLD)
+            gravity = Gravity.CENTER
+        })
+        setupTile(0xFF1565C0.toInt(), second) { watchTv() }
+    }
+
+    private fun View.setupTile(color: Int, second: Boolean, onTap: () -> Unit) {
         background = GradientDrawable().apply {
-            setColor(app.color)
+            setColor(color)
             cornerRadius = dp(16).toFloat()
         }
         layoutParams = LinearLayout.LayoutParams(0, dp(100), 1f).apply { if (second) marginStart = dp(12) }
@@ -2380,15 +2415,50 @@ class MainActivity : Activity() {
         setOnClickListener {
             alpha = 0.6f
             postDelayed({ alpha = 1f }, 250)
-            launchApp(app)
+            onTap()
         }
-        setOnLongClickListener {
-            AlertDialog.Builder(this@MainActivity)
-                .setTitle(app.name)
-                .setMessage("Pakketnaam: ${app.pkg}" + (app.link?.let { "\nDeeplink: $it" } ?: ""))
-                .setPositiveButton("OK", null)
-                .show()
-            true
+    }
+
+    // ---------- Automatisch: tv en receiver klaarzetten ----------
+
+    private fun stateOf(entity: String): JSONObject? =
+        runCatching { JSONObject(haRequest("GET", "/api/states/$entity", null)) }.getOrNull()
+
+    /** Stilletjes een dienst aanroepen (geen foutmelding in beeld). */
+    private fun quietService(service: String, data: JSONObject) {
+        runCatching { haRequest("POST", "/api/services/$service", data.toString()) }
+    }
+
+    /**
+     * Zet de LG-tv aan en de receiver aan op [source]. Draait op de achtergrond en blokkeert niets.
+     */
+    private fun prepareWatching(source: String) {
+        // LG-tv aan (staat hij uit, dan is hij in HA vaak 'unavailable')
+        if (stateOf(MEDIA_TV)?.optString("state") != "on") {
+            quietService("media_player/turn_on", JSONObject().put("entity_id", MEDIA_TV))
+        }
+        // Receiver aan en op de juiste bron
+        val rec = stateOf(DASH_RECEIVER)
+        if (rec?.optString("state") in listOf(null, "off", "standby", "unavailable")) {
+            quietService("media_player/turn_on", JSONObject().put("entity_id", DASH_RECEIVER))
+            Thread.sleep(3_000)
+        }
+        for (attempt in 0 until 3) {
+            val current = stateOf(DASH_RECEIVER)?.optJSONObject("attributes")?.optString("source")
+            if (current == source) break
+            quietService("media_player/select_source", JSONObject().put("entity_id", DASH_RECEIVER).put("source", source))
+            Thread.sleep(2_000)
+        }
+    }
+
+    private fun watchTv() {
+        mediaStatus.text = "TV kijken: tv en receiver aanzetten…"
+        thread {
+            prepareWatching(SOURCE_TV)
+            runOnUiThread {
+                mediaStatus.text = "TV kijken: receiver staat op TV+ woonkamer"
+                refreshMedia()
+            }
         }
     }
 
@@ -2421,6 +2491,7 @@ class MainActivity : Activity() {
         val known = prefs().getString(prefKey, null)
         val attempts = all.sortedBy { if (it.first == "adb") 0 else if (it.first == known) 1 else 2 }
 
+        thread { prepareWatching(SOURCE_APPS) }  // tv + receiver tegelijk klaarzetten
         thread {
             // Box eerst aan (nodig voor de mediaspeler-methode)
             if (currentMediaState() != "on") {
