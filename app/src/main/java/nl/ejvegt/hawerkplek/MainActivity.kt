@@ -45,6 +45,9 @@ import kotlin.concurrent.thread
 
 class MainActivity : Activity() {
 
+    /** Een app op de Google TV-box. */
+    class MediaApp(val name: String, val pkg: String, val color: Int)
+
     companion object {
         /** De schakelaars op het Home Assistant-tabblad, met de exacte lampen (entity-ID's) per groep. */
         val LIGHT_GROUPS = listOf(
@@ -97,6 +100,21 @@ class MainActivity : Activity() {
 
         /** Interne nummers van de tabbladen. */
         const val TAB_DASH = 3
+        const val TAB_MEDIA = 4
+
+        /** Multimedia: Google TV-box (Android TV Remote-integratie). */
+        const val MEDIA_REMOTE = "remote.googletv_box"
+        const val MEDIA_PLAYER = "media_player.googletv_box"
+
+        /** App-tegels: naam, pakketnaam op de Google TV, kleur van de tegel. */
+        val MEDIA_APPS = listOf(
+            MediaApp("Netflix", "com.netflix.ninja", 0xFFB20710.toInt()),
+            MediaApp("Prime Video", "com.amazon.amazonvideo.livingroom", 0xFF0F79AF.toInt()),
+            MediaApp("YouTube", "com.google.android.youtube.tv", 0xFFC4302B.toInt()),
+            MediaApp("NLziet", "nl.nlziet", 0xFFE65100.toInt()),
+            MediaApp("Viaplay", "com.viaplay.android", 0xFF6A1B9A.toInt()),
+            MediaApp("F1 TV", "com.formulaone.production", 0xFF263238.toInt()),
+        )
 
         /** De Proxmox VM's/containers (VMID) die op het Proxmox-tabblad staan. */
         val PVE_VMIDS = listOf(103)
@@ -154,6 +172,10 @@ class MainActivity : Activity() {
     private lateinit var tabDash: View
     private lateinit var dashList: LinearLayout
     private lateinit var dashStatus: TextView
+    private lateinit var mediaPanel: View
+    private lateinit var tabMedia: View
+    private lateinit var mediaList: LinearLayout
+    private lateinit var mediaStatus: TextView
 
     private val handler = Handler(Looper.getMainLooper())
     private var currentTab = 0
@@ -198,6 +220,10 @@ class MainActivity : Activity() {
         tabDash = findViewById(R.id.tabDash)
         dashList = findViewById(R.id.dashList)
         dashStatus = findViewById(R.id.dashStatus)
+        mediaPanel = findViewById(R.id.mediaPanel)
+        tabMedia = findViewById(R.id.tabMedia)
+        mediaList = findViewById(R.id.mediaList)
+        mediaStatus = findViewById(R.id.mediaStatus)
 
         // Android 15+: app loopt door achter status- en navigatiebalk; ruimte vrijhouden
         findViewById<View>(R.id.root).setOnApplyWindowInsetsListener { v, insets ->
@@ -215,11 +241,13 @@ class MainActivity : Activity() {
         tabPve.setOnClickListener { selectTab(1) }
         tabFritz.setOnClickListener { selectTab(2) }
         tabDash.setOnClickListener { selectTab(TAB_DASH) }
+        tabMedia.setOnClickListener { selectTab(TAB_MEDIA) }
         findViewById<Button>(R.id.settingsButton).setOnClickListener { showSettings(true) }
         findViewById<Button>(R.id.saveButton).setOnClickListener { saveSettings() }
 
         buildFritzRows()
         buildDashboard()
+        buildMedia()
         buildGroupCards()
         selectTab(prefs().getInt(KEY_TAB, 0))
     }
@@ -249,8 +277,8 @@ class MainActivity : Activity() {
     private fun selectTab(tab: Int) {
         currentTab = tab
         settingsPanel.visibility = View.GONE
-        val panels = listOf(haPanel, pvePanel, fritzPanel, dashPanel)
-        val tabs = listOf(tabHa, tabPve, tabFritz, tabDash)
+        val panels = listOf(haPanel, pvePanel, fritzPanel, dashPanel, mediaPanel)
+        val tabs = listOf(tabHa, tabPve, tabFritz, tabDash, tabMedia)
         panels.forEachIndexed { i, p -> p.visibility = if (i == tab) View.VISIBLE else View.GONE }
         tabs.forEachIndexed { i, t ->
             t.alpha = if (i == tab) 1f else 0.35f
@@ -265,6 +293,7 @@ class MainActivity : Activity() {
             0 -> refreshLights()
             1 -> refreshPve()
             TAB_DASH -> refreshDashboard()
+            TAB_MEDIA -> refreshMedia()
             else -> if (force || System.currentTimeMillis() - lastFritzRefresh > FRITZ_REFRESH_MS) refreshFritz()
         }
     }
@@ -1897,8 +1926,9 @@ class MainActivity : Activity() {
             val err = runCatching { haRequest("POST", "/api/services/$domain/$service", data.toString()) }
                 .exceptionOrNull()
             runOnUiThread {
-                if (err != null) dashStatus.text = "Mislukt: ${err.message ?: err.javaClass.simpleName}"
-                handler.postDelayed({ if (currentTab == TAB_DASH) refreshDashboard() }, 1_500)
+                val status = if (currentTab == TAB_MEDIA) mediaStatus else dashStatus
+                if (err != null) status.text = "Mislukt: ${err.message ?: err.javaClass.simpleName}"
+                handler.postDelayed({ if (currentTab == TAB_DASH || currentTab == TAB_MEDIA) refreshCurrentTab(force = true) }, 1_500)
             }
         }
     }
@@ -1910,6 +1940,132 @@ class MainActivity : Activity() {
             minimumFractionDigits = decimals
             maximumFractionDigits = decimals
         }.format(v)
+
+    // ================= Multimedia (Google TV-box) =================
+    // Apps starten via de Android TV Remote-integratie: remote.turn_on met activity = pakketnaam.
+    // De box gaat daarbij vanzelf aan.
+
+    private lateinit var mediaNowCard: DashCard
+    private lateinit var mediaPowerSwitch: Switch
+    @Volatile private var mediaBusy = false
+    private var updatingMedia = false
+
+    private fun buildMedia() {
+        mediaNowCard = DashCard("📺  GoogleTV Box")
+        mediaNowCard.big.textSize = 20f
+        mediaPowerSwitch = Switch(this).apply {
+            setOnCheckedChangeListener { _, on ->
+                if (!updatingMedia) {
+                    haService("remote", if (on) "turn_on" else "turn_off", JSONObject().put("entity_id", MEDIA_REMOTE))
+                }
+            }
+        }
+        mediaNowCard.header.addView(mediaPowerSwitch)
+        mediaList.addView(mediaNowCard.root)
+
+        MEDIA_APPS.chunked(2).forEach { pair ->
+            val row = LinearLayout(this).apply {
+                orientation = LinearLayout.HORIZONTAL
+                layoutParams = LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT
+                ).apply { bottomMargin = dp(12) }
+            }
+            pair.forEachIndexed { i, app -> row.addView(appTile(app, i == 1)) }
+            if (pair.size == 1) {
+                row.addView(View(this).apply {
+                    layoutParams = LinearLayout.LayoutParams(0, dp(100), 1f).apply { marginStart = dp(12) }
+                })
+            }
+            mediaList.addView(row)
+        }
+    }
+
+    private fun appTile(app: MediaApp, second: Boolean): View = TextView(this).apply {
+        text = app.name
+        textSize = 19f
+        setTextColor(Color.WHITE)
+        setTypeface(typeface, Typeface.BOLD)
+        gravity = Gravity.CENTER
+        background = GradientDrawable().apply {
+            setColor(app.color)
+            cornerRadius = dp(16).toFloat()
+        }
+        layoutParams = LinearLayout.LayoutParams(0, dp(100), 1f).apply { if (second) marginStart = dp(12) }
+        isClickable = true
+        isFocusable = true
+        setOnClickListener {
+            alpha = 0.6f
+            postDelayed({ alpha = 1f }, 250)
+            launchApp(app)
+        }
+        setOnLongClickListener {
+            AlertDialog.Builder(this@MainActivity)
+                .setTitle(app.name)
+                .setMessage("Pakketnaam: ${app.pkg}")
+                .setPositiveButton("OK", null)
+                .show()
+            true
+        }
+    }
+
+    private fun launchApp(app: MediaApp) {
+        mediaStatus.text = "${app.name} openen…"
+        haService(
+            "remote", "turn_on",
+            JSONObject().put("entity_id", MEDIA_REMOTE).put("activity", app.pkg)
+        )
+    }
+
+    private fun refreshMedia() {
+        if ((haUrl().isEmpty() && haLocalUrl().isEmpty()) || haToken().isEmpty()) {
+            mediaStatus.text = "Vul de Home Assistant-gegevens in via ⚙"
+            return
+        }
+        if (mediaBusy) return
+        mediaBusy = true
+        thread {
+            try {
+                val remote = runCatching { JSONObject(haRequest("GET", "/api/states/$MEDIA_REMOTE", null)) }
+                val player = runCatching { JSONObject(haRequest("GET", "/api/states/$MEDIA_PLAYER", null)) }
+                runOnUiThread { showMedia(remote, player) }
+            } finally {
+                mediaBusy = false
+            }
+        }
+    }
+
+    private fun showMedia(remote: Result<JSONObject>, player: Result<JSONObject>) {
+        val r = remote.getOrNull()
+        if (r == null) {
+            mediaNowCard.big.text = "Niet bereikbaar"
+            mediaNowCard.sub.text = ""
+            mediaStatus.text = "Kan $MEDIA_REMOTE niet vinden:\n${remote.exceptionOrNull()?.message}"
+            return
+        }
+        val on = r.optString("state") == "on"
+        updatingMedia = true
+        mediaPowerSwitch.isChecked = on
+        mediaPowerSwitch.isEnabled = r.optString("state") != "unavailable"
+        updatingMedia = false
+
+        val pAttrs = player.getOrNull()?.optJSONObject("attributes")
+        val rAttrs = r.optJSONObject("attributes")
+        val appId = pAttrs?.optString("app_id")?.takeIf { it.isNotEmpty() }
+            ?: rAttrs?.optString("current_activity")?.takeIf { it.isNotEmpty() }
+        val appName = MEDIA_APPS.firstOrNull { it.pkg == appId }?.name
+            ?: pAttrs?.optString("app_name")?.takeIf { it.isNotEmpty() }
+            ?: appId
+        val title = pAttrs?.optString("media_title")?.takeIf { it.isNotEmpty() }
+
+        mediaNowCard.big.text = when {
+            !on -> "Uit"
+            appName != null -> appName
+            else -> "Aan"
+        }
+        mediaNowCard.sub.text = if (on && title != null) title else if (on) "Tik op een app om hem te openen" else "Tik op een app: de box gaat vanzelf aan"
+        if (mediaStatus.text.endsWith("openen…") || mediaStatus.text.startsWith("Kan ")) mediaStatus.text = ""
+        if (mediaStatus.text.isEmpty()) mediaStatus.text = haRouteLabel()
+    }
 
     // ================= Hulpjes =================
 
