@@ -314,6 +314,7 @@ class MainActivity : Activity() {
         tabDash.setOnClickListener { selectTab(TAB_DASH) }
         tabMedia.setOnClickListener { selectTab(TAB_MEDIA) }
         findViewById<Button>(R.id.settingsButton).setOnClickListener { showSettings(true) }
+        findViewById<View>(R.id.powerButton).setOnClickListener { confirmAllOff() }
         listOf(R.id.saveHa, R.id.savePve, R.id.saveFritz).forEach { id ->
             findViewById<Button>(id).setOnClickListener { saveSettings() }
         }
@@ -2446,6 +2447,44 @@ class MainActivity : Activity() {
             alpha = 0.6f
             postDelayed({ alpha = 1f }, 250)
             onTap()
+        }
+    }
+
+    // ---------- Alles uit ----------
+
+    private fun confirmAllOff() {
+        AlertDialog.Builder(this)
+            .setTitle("Alles uit?")
+            .setMessage("Alle lampen, de tv, de receiver en de GoogleTV-box gaan uit.")
+            .setPositiveButton("Alles uit") { _, _ -> allOff() }
+            .setNegativeButton("Annuleren", null)
+            .show()
+    }
+
+    private fun allOff() {
+        val status = when (currentTab) {
+            TAB_DASH -> dashStatus
+            TAB_MEDIA -> mediaStatus
+            1 -> pveStatus
+            2 -> fritzStatus
+            else -> statusText
+        }
+        status.text = "Alles uitzetten…"
+        thread {
+            val lights = JSONArray().apply { LIGHT_GROUPS.forEach { (_, ids) -> ids.forEach { put(it) } } }
+            val calls = listOf(
+                "light/turn_off" to JSONObject().put("entity_id", lights),
+                "media_player/turn_off" to JSONObject().put("entity_id", MEDIA_TV),
+                "media_player/turn_off" to JSONObject().put("entity_id", DASH_RECEIVER),
+                "remote/turn_off" to JSONObject().put("entity_id", MEDIA_REMOTE),
+            )
+            val failed = calls.count { (service, data) ->
+                runCatching { haRequest("POST", "/api/services/$service", data.toString()) }.isFailure
+            }
+            runOnUiThread {
+                status.text = if (failed == 0) "Alles is uit" else "Niet alles ging uit ($failed van ${calls.size} mislukt)"
+                handler.postDelayed({ refreshCurrentTab(force = true) }, 1_500)
+            }
         }
     }
 

@@ -225,9 +225,27 @@
             android:layout_height="wrap_content"
             android:layout_gravity="top|end"
             android:layout_margin="8dp"
+            android:minWidth="0dp"
+            android:minHeight="0dp"
+            android:padding="10dp"
             android:text="⚙"
             android:textColor="#B0B0B0"
             android:textSize="24sp" />
+
+        <!-- Alles uit: lampen, tv, receiver, mediaspeler -->
+        <ImageButton
+            android:id="@+id/powerButton"
+            style="?android:attr/borderlessButtonStyle"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_gravity="top|end"
+            android:layout_marginTop="8dp"
+            android:layout_marginEnd="56dp"
+            android:contentDescription="Alles uit"
+            android:minWidth="0dp"
+            android:minHeight="0dp"
+            android:padding="12dp"
+            android:src="@drawable/ic_power" />
 
         <!-- ===== Instellingen ===== -->
         <ScrollView
