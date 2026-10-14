@@ -144,6 +144,7 @@ class MainActivity : Activity() {
             MediaApp("NLziet", "nl.nlziet", 0xFF000000.toInt(), scheme = "nlziet://", logo = R.drawable.logo_nlziet),
             MediaApp("Viaplay", "com.viaplay.android", 0xFF1D1D27.toInt(), scheme = "viaplay://", logo = R.drawable.logo_viaplay, alt = listOf("https://viaplay.nl/", "https://viaplay.com/")),
             MediaApp("F1 TV", "com.formulaone.production", 0xFFCE2C1D.toInt(), scheme = "f1tv://", logo = R.drawable.logo_f1tv, alt = listOf("https://f1tv.formula1.com/")),
+            MediaApp("Kodi", "org.xbmc.kodi", 0xFF121212.toInt(), logo = R.drawable.logo_kodi),
         )
 
         /** De Proxmox VM's/containers (VMID) die op het Proxmox-tabblad staan. */
