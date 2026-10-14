@@ -1,0 +1,76 @@
+name: Build APK
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+
+      - uses: gradle/actions/setup-gradle@v4
+
+      # Gegevens en sleutel komen uit de repository-secrets, nooit uit de code
+      - name: Gegevens en sleutel klaarzetten
+        env:
+          HA_URL: ${{ secrets.HA_URL }}
+          HA_URL_LOCAL: ${{ secrets.HA_URL_LOCAL }}
+          HA_TOKEN: ${{ secrets.HA_TOKEN }}
+          PVE_URL: ${{ secrets.PVE_URL }}
+          PVE_TOKEN_ID: ${{ secrets.PVE_TOKEN_ID }}
+          PVE_SECRET: ${{ secrets.PVE_SECRET }}
+          FRITZ_URL: ${{ secrets.FRITZ_URL }}
+          FRITZ_USER: ${{ secrets.FRITZ_USER }}
+          FRITZ_PASS: ${{ secrets.FRITZ_PASS }}
+          KEYSTORE_B64: ${{ secrets.KEYSTORE_B64 }}
+        run: |
+          {
+            echo "HA_URL=$HA_URL"
+            echo "HA_URL_LOCAL=$HA_URL_LOCAL"
+            echo "HA_TOKEN=$HA_TOKEN"
+            echo "PVE_URL=$PVE_URL"
+            echo "PVE_TOKEN_ID=$PVE_TOKEN_ID"
+            echo "PVE_SECRET=$PVE_SECRET"
+            echo "FRITZ_URL=$FRITZ_URL"
+            echo "FRITZ_USER=$FRITZ_USER"
+            echo "FRITZ_PASS=$FRITZ_PASS"
+          } > local.properties
+          if [ -n "$KEYSTORE_B64" ]; then echo "$KEYSTORE_B64" | base64 -d > thuisapp.jks; fi
+
+      - name: APK bouwen
+        env:
+          KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
+        run: |
+          chmod +x gradlew
+          ./gradlew assembleRelease
+          VERSION=$(grep -oP 'versionName = "\K[^"]+' app/build.gradle.kts)
+          echo "VERSION=$VERSION" >> $GITHUB_ENV
+          cp app/build/outputs/apk/release/app-release.apk "thuisapp-$VERSION.apk"
+
+      - name: Gegevens opruimen
+        if: always()
+        run: rm -f local.properties thuisapp.jks
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: thuisapp-${{ env.VERSION }}
+          path: thuisapp-*.apk
+
+      # Vaste plek om te downloaden: Releases → nieuwste
+      - uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v${{ env.VERSION }}-${{ github.run_number }}
+          name: Thuisapp ${{ env.VERSION }} (build ${{ github.run_number }})
+          files: thuisapp-*.apk
+          make_latest: true
