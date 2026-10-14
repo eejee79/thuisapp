@@ -128,6 +128,8 @@ class MainActivity : Activity() {
         /** Multimedia: Google TV-box (Android TV Remote-integratie). */
         const val MEDIA_REMOTE = "remote.googletv_box"
         const val MEDIA_PLAYER = "media_player.googletv_box"
+        /** Dezelfde box via de Android Debug Bridge-integratie: start elke app betrouwbaar. */
+        const val MEDIA_ADB = "media_player.android_tv_192_168_50_140"
 
         /** App-tegels: naam, pakketnaam op de Google TV, kleur van de tegel. */
         val MEDIA_APPS = listOf(
@@ -2398,6 +2400,12 @@ class MainActivity : Activity() {
         mediaStatus.text = "${app.name} openen…"
         val remote = { activity: String -> JSONObject().put("entity_id", MEDIA_REMOTE).put("activity", activity) }
         val all = buildList {
+            // 1. Via ADB: precies wat de box doet als je de app-tegel kiest (TV- of gewone app)
+            add(Triple("adb", "androidtv/adb_command", JSONObject().put("entity_id", MEDIA_ADB).put(
+                "command",
+                "monkey -p ${app.pkg} -c android.intent.category.LEANBACK_LAUNCHER -c android.intent.category.LAUNCHER 1"
+            )))
+            // 2. Reserve via de Remote-integratie (alleen manieren zonder meldingen op de tv)
             app.link?.let { add(Triple("link", "remote/turn_on", remote(it))) }
             add(Triple("market", "remote/turn_on", remote("market://launch?id=${app.pkg}")))
             add(
@@ -2408,20 +2416,10 @@ class MainActivity : Activity() {
                 )
             )
             add(Triple("pkg", "remote/turn_on", remote(app.pkg)))
-            app.scheme?.let { add(Triple("scheme", "remote/turn_on", remote(it))) }
-            // Start via een Android-intent: het startscherm-item van de app (TV of gewoon)
-            add(Triple("appuri", "remote/turn_on", remote("android-app://${app.pkg}")))
-            add(Triple("leanback", "remote/turn_on", remote(
-                "intent:#Intent;action=android.intent.action.MAIN;category=android.intent.category.LEANBACK_LAUNCHER;package=${app.pkg};end"
-            )))
-            add(Triple("launcher", "remote/turn_on", remote(
-                "intent:#Intent;action=android.intent.action.MAIN;category=android.intent.category.LAUNCHER;package=${app.pkg};end"
-            )))
-            app.alt.forEachIndexed { n, url -> add(Triple("alt$n", "remote/turn_on", remote(url))) }
         }
         val prefKey = "launch_${app.pkg}"
         val known = prefs().getString(prefKey, null)
-        val attempts = all.sortedBy { if (it.first == known) 0 else 1 }
+        val attempts = all.sortedBy { if (it.first == "adb") 0 else if (it.first == known) 1 else 2 }
 
         thread {
             // Box eerst aan (nodig voor de mediaspeler-methode)
