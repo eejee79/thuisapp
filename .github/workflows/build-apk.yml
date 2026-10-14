@@ -34,6 +34,7 @@ jobs:
           FRITZ_USER: ${{ secrets.FRITZ_USER }}
           FRITZ_PASS: ${{ secrets.FRITZ_PASS }}
           KEYSTORE_B64: ${{ secrets.KEYSTORE_B64 }}
+          GH_UPDATE_TOKEN: ${{ secrets.GH_UPDATE_TOKEN }}
         run: |
           {
             echo "HA_URL=$HA_URL"
@@ -46,6 +47,8 @@ jobs:
             echo "FRITZ_USER=$FRITZ_USER"
             echo "FRITZ_PASS=$FRITZ_PASS"
           } > local.properties
+          # Optioneel: GitHub-token voor updates in de app (anders in de app invullen)
+          if [ -n "$GH_UPDATE_TOKEN" ]; then echo "GH_UPDATE_TOKEN=$GH_UPDATE_TOKEN" >> local.properties; fi
           if [ -n "$KEYSTORE_B64" ]; then echo "$KEYSTORE_B64" | base64 -d > thuisapp.jks; fi
 
       # Controleert de secrets op veelgemaakte kopieerfouten, zonder ze te tonen

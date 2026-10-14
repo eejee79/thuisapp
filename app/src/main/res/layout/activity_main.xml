@@ -6,6 +6,19 @@
     android:background="#121212"
     android:orientation="vertical">
 
+    <!-- Melding nieuwe versie -->
+    <TextView
+        android:id="@+id/updateBanner"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:background="#1B5E20"
+        android:gravity="center"
+        android:padding="12dp"
+        android:textColor="#FFFFFF"
+        android:textSize="15sp"
+        android:textStyle="bold"
+        android:visibility="gone" />
+
     <FrameLayout
         android:layout_width="match_parent"
         android:layout_height="0dp"
@@ -231,6 +244,7 @@
                 android:padding="24dp">
 
                 <TextView
+                    android:id="@+id/settingsTitle"
                     android:layout_width="wrap_content"
                     android:layout_height="wrap_content"
                     android:layout_marginBottom="16dp"
@@ -238,6 +252,43 @@
                     android:textColor="#FFFFFF"
                     android:textSize="24sp"
                     android:textStyle="bold" />
+
+                <!-- Menu: twee onderdelen -->
+                <LinearLayout
+                    android:id="@+id/settingsMenu"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:orientation="vertical">
+
+                    <TextView
+                        android:id="@+id/menuApi"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:layout_marginBottom="12dp"
+                        android:background="#1E1E1E"
+                        android:padding="20dp"
+                        android:text="🔑   API's en tokens\nHome Assistant, Proxmox, Fritzbox"
+                        android:textColor="#FFFFFF"
+                        android:textSize="17sp" />
+
+                    <TextView
+                        android:id="@+id/menuUpdate"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:background="#1E1E1E"
+                        android:padding="20dp"
+                        android:text="⬆   Updates"
+                        android:textColor="#FFFFFF"
+                        android:textSize="17sp" />
+                </LinearLayout>
+
+                <!-- Onderdeel: API's en tokens -->
+                <LinearLayout
+                    android:id="@+id/apiSection"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:orientation="vertical"
+                    android:visibility="gone">
 
                 <TextView
                     android:layout_width="wrap_content"
@@ -411,6 +462,70 @@
                     android:layout_height="wrap_content"
                     android:layout_marginTop="24dp"
                     android:text="Opslaan" />
+                </LinearLayout>
+
+                <!-- Onderdeel: Updates -->
+                <LinearLayout
+                    android:id="@+id/updateSection"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:orientation="vertical"
+                    android:visibility="gone">
+
+                    <TextView
+                        android:id="@+id/updateVersion"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:textColor="#FFFFFF"
+                        android:textSize="18sp" />
+
+                    <TextView
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:layout_marginTop="20dp"
+                        android:text="GitHub-token (alleen lezen, repo thuisapp)"
+                        android:textColor="#B0B0B0" />
+
+                    <EditText
+                        android:id="@+id/ghTokenInput"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:hint="github_pat_…"
+                        android:inputType="textPassword"
+                        android:textColor="#FFFFFF"
+                        android:textColorHint="#666666" />
+
+                    <Switch
+                        android:id="@+id/autoUpdateSwitch"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:layout_marginTop="12dp"
+                        android:text="Automatisch controleren bij openen"
+                        android:textColor="#FFFFFF"
+                        android:textSize="16sp" />
+
+                    <Button
+                        android:id="@+id/updateSaveButton"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:layout_marginTop="20dp"
+                        android:text="Opslaan" />
+
+                    <Button
+                        android:id="@+id/checkUpdateButton"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:layout_marginTop="8dp"
+                        android:text="Controleer nu" />
+
+                    <TextView
+                        android:id="@+id/updateStatus"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:layout_marginTop="16dp"
+                        android:textColor="#B0B0B0"
+                        android:textSize="15sp" />
+                </LinearLayout>
             </LinearLayout>
         </ScrollView>
     </FrameLayout>

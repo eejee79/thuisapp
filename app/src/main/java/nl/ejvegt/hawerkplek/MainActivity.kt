@@ -2,6 +2,13 @@ package nl.ejvegt.hawerkplek
 
 import android.app.Activity
 import android.app.AlertDialog
+import android.app.PendingIntent
+import android.content.BroadcastReceiver
+import android.content.Intent
+import android.content.IntentFilter
+import android.content.pm.PackageInstaller
+import android.net.Uri
+import android.provider.Settings
 import android.content.Context
 import android.content.res.ColorStateList
 import android.graphics.Color
@@ -25,6 +32,8 @@ import android.widget.TextView
 import org.json.JSONArray
 import org.json.JSONObject
 import java.net.HttpURLConnection
+import java.io.File
+import java.io.IOException
 import java.net.URL
 import java.security.KeyStore
 import java.time.Instant
@@ -144,6 +153,12 @@ class MainActivity : Activity() {
         private const val KEY_FRITZ_PASS = "fritz_pass"
         private const val KEY_FRITZ_PIN = "fritz_cert_pin"
         private const val KEY_TAB = "tab"
+        private const val KEY_GH_TOKEN = "gh_update_token"
+        private const val KEY_AUTO_UPDATE = "auto_update"
+
+        /** GitHub-repository waar de nieuwe versies (Releases) staan. */
+        private const val UPDATE_REPO = "eejee79/thuisapp"
+        private const val ACTION_INSTALL_DONE = "nl.ejvegt.hawerkplek.INSTALL_DONE"
 
         /** Fritzbox niet elke 3 s bevragen; 15 s is ruim genoeg. */
         const val FRITZ_REFRESH_MS = 15_000L
@@ -185,6 +200,15 @@ class MainActivity : Activity() {
     private lateinit var tabMedia: View
     private lateinit var mediaList: LinearLayout
     private lateinit var mediaStatus: TextView
+    private lateinit var settingsTitle: TextView
+    private lateinit var settingsMenu: View
+    private lateinit var apiSection: View
+    private lateinit var updateSection: View
+    private lateinit var updateVersion: TextView
+    private lateinit var ghTokenInput: EditText
+    private lateinit var autoUpdateSwitch: Switch
+    private lateinit var updateStatus: TextView
+    private lateinit var updateBanner: TextView
 
     private val handler = Handler(Looper.getMainLooper())
     private var currentTab = 0
@@ -233,6 +257,15 @@ class MainActivity : Activity() {
         tabMedia = findViewById(R.id.tabMedia)
         mediaList = findViewById(R.id.mediaList)
         mediaStatus = findViewById(R.id.mediaStatus)
+        settingsTitle = findViewById(R.id.settingsTitle)
+        settingsMenu = findViewById(R.id.settingsMenu)
+        apiSection = findViewById(R.id.apiSection)
+        updateSection = findViewById(R.id.updateSection)
+        updateVersion = findViewById(R.id.updateVersion)
+        ghTokenInput = findViewById(R.id.ghTokenInput)
+        autoUpdateSwitch = findViewById(R.id.autoUpdateSwitch)
+        updateStatus = findViewById(R.id.updateStatus)
+        updateBanner = findViewById(R.id.updateBanner)
 
         // Android 15+: app loopt door achter status- en navigatiebalk; ruimte vrijhouden
         findViewById<View>(R.id.root).setOnApplyWindowInsetsListener { v, insets ->
@@ -253,12 +286,29 @@ class MainActivity : Activity() {
         tabMedia.setOnClickListener { selectTab(TAB_MEDIA) }
         findViewById<Button>(R.id.settingsButton).setOnClickListener { showSettings(true) }
         findViewById<Button>(R.id.saveButton).setOnClickListener { saveSettings() }
+        findViewById<View>(R.id.menuApi).setOnClickListener { showSettingsPage(PAGE_API) }
+        findViewById<View>(R.id.menuUpdate).setOnClickListener { showSettingsPage(PAGE_UPDATE) }
+        findViewById<Button>(R.id.updateSaveButton).setOnClickListener { saveUpdateSettings() }
+        findViewById<Button>(R.id.checkUpdateButton).setOnClickListener {
+            saveUpdateSettings(close = false)
+            checkForUpdate(manual = true)
+        }
+        updateBanner.setOnClickListener { pendingRelease?.let { startUpdate(it) } }
 
         buildFritzRows()
         buildDashboard()
         buildMedia()
         buildGroupCards()
         selectTab(prefs().getInt(KEY_TAB, 0))
+
+        if (prefs().getBoolean(KEY_AUTO_UPDATE, true) && ghToken().isNotEmpty()) {
+            checkForUpdate(manual = false)
+        }
+    }
+
+    override fun onDestroy() {
+        installReceiver?.let { runCatching { unregisterReceiver(it) } }
+        super.onDestroy()
     }
 
     override fun onResume() {
@@ -274,7 +324,7 @@ class MainActivity : Activity() {
     @Deprecated("Deprecated in Java")
     override fun onBackPressed() {
         if (settingsPanel.visibility == View.VISIBLE) {
-            showSettings(false)
+            if (settingsPage != PAGE_MENU) showSettingsPage(PAGE_MENU) else showSettings(false)
         } else {
             @Suppress("DEPRECATION")
             super.onBackPressed()
@@ -324,6 +374,41 @@ class MainActivity : Activity() {
     private fun fritzUrl() = setting(KEY_FRITZ_URL, BuildConfig.FRITZ_URL).trimEnd('/')
     private fun fritzUser() = setting(KEY_FRITZ_USER, BuildConfig.FRITZ_USER)
     private fun fritzPass() = setting(KEY_FRITZ_PASS, BuildConfig.FRITZ_PASS)
+    private fun ghToken() = setting(KEY_GH_TOKEN, BuildConfig.GH_UPDATE_TOKEN)
+
+    private val PAGE_MENU = 0
+    private val PAGE_API = 1
+    private val PAGE_UPDATE = 2
+    private var settingsPage = PAGE_MENU
+
+    /** Instellingen: menu, of één van de twee onderdelen. */
+    private fun showSettingsPage(page: Int) {
+        settingsPage = page
+        settingsMenu.visibility = if (page == PAGE_MENU) View.VISIBLE else View.GONE
+        apiSection.visibility = if (page == PAGE_API) View.VISIBLE else View.GONE
+        updateSection.visibility = if (page == PAGE_UPDATE) View.VISIBLE else View.GONE
+        settingsTitle.text = when (page) {
+            PAGE_API -> "API's en tokens"
+            PAGE_UPDATE -> "Updates"
+            else -> "Instellingen"
+        }
+        if (page == PAGE_UPDATE) {
+            updateVersion.text = "Geïnstalleerd: versie ${BuildConfig.VERSION_NAME}"
+            ghTokenInput.setText(ghToken())
+            autoUpdateSwitch.isChecked = prefs().getBoolean(KEY_AUTO_UPDATE, true)
+            if (updateStatus.text.isEmpty()) {
+                updateStatus.text = if (ghToken().isEmpty()) "Vul eerst het GitHub-token in." else ""
+            }
+        }
+    }
+
+    private fun saveUpdateSettings(close: Boolean = true) {
+        prefs().edit()
+            .putString(KEY_GH_TOKEN, ghTokenInput.text.toString().trim())
+            .putBoolean(KEY_AUTO_UPDATE, autoUpdateSwitch.isChecked)
+            .apply()
+        if (close) showSettingsPage(PAGE_MENU)
+    }
 
     private fun showSettings(show: Boolean) {
         if (show) {
@@ -336,6 +421,7 @@ class MainActivity : Activity() {
             fritzUrlInput.setText(fritzUrl())
             fritzUserInput.setText(fritzUser())
             fritzPassInput.setText(fritzPass())
+            showSettingsPage(PAGE_MENU)
         }
         settingsPanel.visibility = if (show) View.VISIBLE else View.GONE
     }
@@ -361,6 +447,229 @@ class MainActivity : Activity() {
         fritzPossibleChannels.clear()
         showSettings(false)
         refreshCurrentTab(force = true)
+    }
+
+    // ================= Updates via GitHub Releases =================
+    // Haalt de nieuwste release op, downloadt de APK en laat Android hem installeren.
+
+    private class Release(val version: String, val tag: String, val apiUrl: String, val size: Long)
+
+    @Volatile private var pendingRelease: Release? = null
+    @Volatile private var updateBusy = false
+    @Volatile private var downloadBusy = false
+    private var installReceiver: BroadcastReceiver? = null
+
+    /** "1.15" > "1.9": per onderdeel numeriek vergelijken. */
+    private fun isNewer(remote: String, local: String): Boolean {
+        val r = remote.split('.', '-').map { it.toIntOrNull() ?: 0 }
+        val l = local.split('.', '-').map { it.toIntOrNull() ?: 0 }
+        for (i in 0 until maxOf(r.size, l.size)) {
+            val a = r.getOrElse(i) { 0 }
+            val b = l.getOrElse(i) { 0 }
+            if (a != b) return a > b
+        }
+        return false
+    }
+
+    private fun githubGet(url: String, accept: String): HttpURLConnection {
+        val conn = URL(url).openConnection() as HttpURLConnection
+        conn.connectTimeout = 10_000
+        conn.readTimeout = 30_000
+        conn.instanceFollowRedirects = false
+        conn.setRequestProperty("Accept", accept)
+        conn.setRequestProperty("Authorization", "Bearer ${ghToken()}")
+        conn.setRequestProperty("X-GitHub-Api-Version", "2022-11-28")
+        conn.setRequestProperty("User-Agent", "thuisapp")
+        return conn
+    }
+
+    private fun setUpdateStatus(text: String) = runOnUiThread { updateStatus.text = text }
+
+    private fun checkForUpdate(manual: Boolean) {
+        if (ghToken().isEmpty()) {
+            if (manual) setUpdateStatus("Vul eerst het GitHub-token in.")
+            return
+        }
+        if (updateBusy) return
+        updateBusy = true
+        if (manual) setUpdateStatus("Controleren…")
+        thread {
+            try {
+                val conn = githubGet("https://api.github.com/repos/$UPDATE_REPO/releases/latest", "application/vnd.github+json")
+                val code = conn.responseCode
+                if (code != 200) {
+                    val msg = when (code) {
+                        401 -> "GitHub-token ongeldig of verlopen."
+                        403 -> "GitHub weigert toegang (rechten van het token?)."
+                        404 -> "Geen release gevonden, of het token heeft geen toegang tot $UPDATE_REPO."
+                        else -> "GitHub gaf fout $code."
+                    }
+                    if (manual) setUpdateStatus(msg)
+                    return@thread
+                }
+                val json = JSONObject(conn.inputStream.bufferedReader().use { it.readText() })
+                val tag = json.optString("tag_name")
+                val version = tag.removePrefix("v").substringBefore('-')
+                val assets = json.optJSONArray("assets") ?: JSONArray()
+                var apk: JSONObject? = null
+                for (i in 0 until assets.length()) {
+                    val a = assets.getJSONObject(i)
+                    if (a.optString("name").endsWith(".apk")) { apk = a; break }
+                }
+                if (!isNewer(version, BuildConfig.VERSION_NAME)) {
+                    pendingRelease = null
+                    runOnUiThread { updateBanner.visibility = View.GONE }
+                    if (manual) setUpdateStatus("Je hebt de nieuwste versie (${BuildConfig.VERSION_NAME}).")
+                    return@thread
+                }
+                if (apk == null) {
+                    if (manual) setUpdateStatus("Versie $version gevonden, maar zonder APK.")
+                    return@thread
+                }
+                val rel = Release(version, tag, apk.optString("url"), apk.optLong("size"))
+                pendingRelease = rel
+                runOnUiThread {
+                    updateBanner.text = "⬆  Versie $version beschikbaar – tik om bij te werken"
+                    updateBanner.visibility = View.VISIBLE
+                    updateStatus.text = "Versie $version beschikbaar."
+                    if (manual) startUpdate(rel)
+                }
+            } catch (e: Exception) {
+                if (manual) setUpdateStatus("Kan GitHub niet bereiken: ${e.message}")
+            } finally {
+                updateBusy = false
+            }
+        }
+    }
+
+    private fun startUpdate(rel: Release) {
+        // Android vraagt eenmalig toestemming om apps te installeren vanuit deze app
+        if (!packageManager.canRequestPackageInstalls()) {
+            AlertDialog.Builder(this)
+                .setTitle("Toestemming nodig")
+                .setMessage("Sta in het volgende scherm 'Deze bron toestaan' aan, ga terug en tik nogmaals op bijwerken.")
+                .setPositiveButton("Openen") { _, _ ->
+                    startActivity(
+                        Intent(Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES, Uri.parse("package:$packageName"))
+                    )
+                }
+                .setNegativeButton("Annuleren", null)
+                .show()
+            return
+        }
+        if (downloadBusy) return
+        downloadBusy = true
+        runOnUiThread {
+            updateBanner.text = "Versie ${rel.version} downloaden…"
+            updateStatus.text = "Versie ${rel.version} downloaden…"
+        }
+        thread {
+            try {
+                val file = downloadApk(rel)
+                runOnUiThread {
+                    updateBanner.text = "Versie ${rel.version} installeren…"
+                    updateStatus.text = "Installeren…"
+                }
+                installApk(file)
+            } catch (e: Exception) {
+                runOnUiThread {
+                    updateBanner.text = "⬆  Bijwerken mislukt – tik om opnieuw te proberen"
+                    updateStatus.text = "Bijwerken mislukt: ${e.message}"
+                }
+            } finally {
+                downloadBusy = false
+            }
+        }
+    }
+
+    /** Download via de GitHub-API; die verwijst door naar een tijdelijke link zonder token. */
+    private fun downloadApk(rel: Release): File {
+        var conn = githubGet(rel.apiUrl, "application/octet-stream")
+        var code = conn.responseCode
+        if (code in 300..399) {
+            val location = conn.getHeaderField("Location") ?: throw IOException("Geen downloadlink")
+            conn.disconnect()
+            conn = URL(location).openConnection() as HttpURLConnection
+            conn.connectTimeout = 10_000
+            conn.readTimeout = 60_000
+            conn.setRequestProperty("User-Agent", "thuisapp")
+            code = conn.responseCode
+        }
+        if (code != 200) throw IOException("download gaf fout $code")
+        val file = File(cacheDir, "update.apk")
+        var done = 0L
+        var lastShown = 0L
+        conn.inputStream.use { input ->
+            file.outputStream().use { out ->
+                val buf = ByteArray(64 * 1024)
+                while (true) {
+                    val n = input.read(buf)
+                    if (n < 0) break
+                    out.write(buf, 0, n)
+                    done += n
+                    if (rel.size > 0 && done - lastShown > 512 * 1024) {
+                        lastShown = done
+                        val pct = (done * 100 / rel.size).toInt()
+                        runOnUiThread { updateBanner.text = "Versie ${rel.version} downloaden… $pct%" }
+                    }
+                }
+            }
+        }
+        if (rel.size > 0 && file.length() != rel.size) throw IOException("download onvolledig")
+        return file
+    }
+
+    private fun installApk(file: File) {
+        val installer = packageManager.packageInstaller
+        val params = PackageInstaller.SessionParams(PackageInstaller.SessionParams.MODE_FULL_INSTALL)
+        params.setAppPackageName(packageName)
+        val sessionId = installer.createSession(params)
+        installer.openSession(sessionId).use { session ->
+            file.inputStream().use { input ->
+                session.openWrite("thuisapp.apk", 0, file.length()).use { out ->
+                    input.copyTo(out)
+                    session.fsync(out)
+                }
+            }
+            registerInstallReceiver()
+            val intent = Intent(ACTION_INSTALL_DONE).setPackage(packageName)
+            val flags = PendingIntent.FLAG_UPDATE_CURRENT or
+                (if (Build.VERSION.SDK_INT >= 31) PendingIntent.FLAG_MUTABLE else 0)
+            val pi = PendingIntent.getBroadcast(this, sessionId, intent, flags)
+            session.commit(pi.intentSender)
+        }
+    }
+
+    private fun registerInstallReceiver() {
+        if (installReceiver != null) return
+        val receiver = object : BroadcastReceiver() {
+            override fun onReceive(context: Context, intent: Intent) {
+                when (intent.getIntExtra(PackageInstaller.EXTRA_STATUS, PackageInstaller.STATUS_FAILURE)) {
+                    PackageInstaller.STATUS_PENDING_USER_ACTION -> {
+                        @Suppress("DEPRECATION")
+                        val confirm = intent.getParcelableExtra<Intent>(Intent.EXTRA_INTENT)
+                        confirm?.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                        if (confirm != null) startActivity(confirm)
+                    }
+                    PackageInstaller.STATUS_SUCCESS -> {
+                        updateStatus.text = "Bijgewerkt."
+                    }
+                    else -> {
+                        val msg = intent.getStringExtra(PackageInstaller.EXTRA_STATUS_MESSAGE) ?: "onbekende fout"
+                        updateBanner.text = "⬆  Installeren mislukt – tik om opnieuw te proberen"
+                        updateStatus.text = "Installeren mislukt: $msg"
+                    }
+                }
+            }
+        }
+        val filter = IntentFilter(ACTION_INSTALL_DONE)
+        if (Build.VERSION.SDK_INT >= 33) {
+            registerReceiver(receiver, filter, Context.RECEIVER_NOT_EXPORTED)
+        } else {
+            @Suppress("UnspecifiedRegisterReceiverFlag")
+            registerReceiver(receiver, filter)
+        }
+        installReceiver = receiver
     }
 
     // ================= Home Assistant: schakelaars per ruimte =================

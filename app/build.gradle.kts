@@ -20,8 +20,8 @@ android {
         applicationId = "nl.ejvegt.hawerkplek"
         minSdk = 26
         targetSdk = 35
-        versionCode = 15
-        versionName = "1.14"
+        versionCode = 16
+        versionName = "1.15"
 
         buildConfigField("String", "HA_URL", "\"${localProp("HA_URL")}\"")
         buildConfigField("String", "HA_URL_LOCAL", "\"${localProp("HA_URL_LOCAL")}\"")
@@ -32,6 +32,7 @@ android {
         buildConfigField("String", "FRITZ_URL", "\"${localProp("FRITZ_URL")}\"")
         buildConfigField("String", "FRITZ_USER", "\"${localProp("FRITZ_USER")}\"")
         buildConfigField("String", "FRITZ_PASS", "\"${localProp("FRITZ_PASS")}\"")
+        buildConfigField("String", "GH_UPDATE_TOKEN", "\"${localProp("GH_UPDATE_TOKEN")}\"")
     }
 
     buildFeatures {
