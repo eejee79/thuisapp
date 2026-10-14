@@ -67,6 +67,8 @@ class MainActivity : Activity() {
         val scheme: String? = null,
         /** Eigen logo voor de tegel (drawable); zonder logo toont de tegel de naam. */
         val logo: Int? = null,
+        /** Extra links om te proberen (bijv. de website, die de app soms zelf opent). */
+        val alt: List<String> = emptyList(),
     )
 
     companion object {
@@ -133,8 +135,8 @@ class MainActivity : Activity() {
             MediaApp("Prime Video", "com.amazon.amazonvideo.livingroom", 0xFF0F79AF.toInt(), "https://app.primevideo.com"),
             MediaApp("YouTube", "com.google.android.youtube.tv", 0xFFC4302B.toInt(), "https://www.youtube.com"),
             MediaApp("NLziet", "nl.nlziet", 0xFFE65100.toInt(), scheme = "nlziet://"),
-            MediaApp("Viaplay", "com.viaplay.android", 0xFF6A1B9A.toInt(), scheme = "viaplay://"),
-            MediaApp("F1 TV", "com.formulaone.production", 0xFFCE2C1D.toInt(), scheme = "f1tv://", logo = R.drawable.logo_f1tv),
+            MediaApp("Viaplay", "com.viaplay.android", 0xFF6A1B9A.toInt(), scheme = "viaplay://", alt = listOf("https://viaplay.nl/", "https://viaplay.com/")),
+            MediaApp("F1 TV", "com.formulaone.production", 0xFFCE2C1D.toInt(), scheme = "f1tv://", logo = R.drawable.logo_f1tv, alt = listOf("https://f1tv.formula1.com/")),
         )
 
         /** De Proxmox VM's/containers (VMID) die op het Proxmox-tabblad staan. */
@@ -2407,6 +2409,15 @@ class MainActivity : Activity() {
             )
             add(Triple("pkg", "remote/turn_on", remote(app.pkg)))
             app.scheme?.let { add(Triple("scheme", "remote/turn_on", remote(it))) }
+            // Start via een Android-intent: het startscherm-item van de app (TV of gewoon)
+            add(Triple("appuri", "remote/turn_on", remote("android-app://${app.pkg}")))
+            add(Triple("leanback", "remote/turn_on", remote(
+                "intent:#Intent;action=android.intent.action.MAIN;category=android.intent.category.LEANBACK_LAUNCHER;package=${app.pkg};end"
+            )))
+            add(Triple("launcher", "remote/turn_on", remote(
+                "intent:#Intent;action=android.intent.action.MAIN;category=android.intent.category.LAUNCHER;package=${app.pkg};end"
+            )))
+            app.alt.forEachIndexed { n, url -> add(Triple("alt$n", "remote/turn_on", remote(url))) }
         }
         val prefKey = "launch_${app.pkg}"
         val known = prefs().getString(prefKey, null)
@@ -2422,8 +2433,13 @@ class MainActivity : Activity() {
                 val (kind, service, data) = attempt
                 if (i > 0) runOnUiThread { mediaStatus.text = "${app.name} openen… (andere manier, ${i + 1}/${attempts.size})" }
                 runCatching { haRequest("POST", "/api/services/$service", data.toString()) }
-                Thread.sleep(3_500)
-                if (currentAppId() == app.pkg) {
+                // Tot 6 s wachten: sommige apps starten traag
+                var opened = false
+                for (t in 0 until 6) {
+                    Thread.sleep(1_000)
+                    if (currentAppId() == app.pkg) { opened = true; break }
+                }
+                if (opened) {
                     prefs().edit().putString(prefKey, kind).apply()
                     runOnUiThread {
                         mediaStatus.text = "${app.name} geopend"
