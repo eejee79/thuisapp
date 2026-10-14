@@ -12,9 +12,9 @@ jobs:
   build:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
-      - uses: actions/setup-java@v4
+      - uses: actions/setup-java@v5
         with:
           distribution: temurin
           java-version: 17
@@ -47,6 +47,24 @@ jobs:
             echo "FRITZ_PASS=$FRITZ_PASS"
           } > local.properties
           if [ -n "$KEYSTORE_B64" ]; then echo "$KEYSTORE_B64" | base64 -d > thuisapp.jks; fi
+
+      # Controleert de secrets op veelgemaakte kopieerfouten, zonder ze te tonen
+      - name: Secrets controleren
+        run: |
+          ok=1
+          check() {  # naam, waarde
+            if [ -z "$2" ]; then echo "::warning::$1 is leeg"; ok=0; return; fi
+            case "$2" in "$1="*) echo "::error::$1 begint met '$1=' - plak alleen het deel na het eerste =-teken"; ok=0;; esac
+            case "$2" in *" "*) echo "::warning::$1 bevat een spatie";; esac
+          }
+          while IFS='=' read -r k v; do [ -n "$k" ] && check "$k" "$v"; done < local.properties
+          T=$(grep '^HA_TOKEN=' local.properties | cut -d= -f2-)
+          DOTS=$(printf '%s' "$T" | tr -cd '.' | wc -c)
+          echo "HA_TOKEN: lengte ${#T} (verwacht 183), punten $DOTS (verwacht 2), begint met eyJ: $(case "$T" in eyJ*) echo ja;; *) echo NEE;; esac)"
+          case "$T" in eyJ*) ;; *) echo "::error::HA_TOKEN begint niet met eyJ"; ok=0;; esac
+          [ "$DOTS" = "2" ] || { echo "::error::HA_TOKEN heeft geen 2 punten - waarschijnlijk niet volledig gekopieerd"; ok=0; }
+          [ "$ok" = "1" ] && echo "Secrets zien er goed uit."
+          [ "$ok" = "1" ]
 
       - name: APK bouwen
         env:
