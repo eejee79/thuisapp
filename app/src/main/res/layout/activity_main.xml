@@ -556,7 +556,7 @@
                         android:layout_width="match_parent"
                         android:layout_height="wrap_content"
                         android:layout_marginTop="12dp"
-                        android:text="Automatisch controleren (elke minuut zolang de app open is)"
+                        android:text="Automatisch controleren (elke minuut in de app, en elk kwartier op de achtergrond met een melding)"
                         android:textColor="#FFFFFF"
                         android:textSize="16sp" />
 

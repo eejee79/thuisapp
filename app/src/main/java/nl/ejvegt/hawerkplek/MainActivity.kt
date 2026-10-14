@@ -333,6 +333,30 @@ class MainActivity : Activity() {
         buildMedia()
         buildGroupCards()
         selectTab(prefs().getInt(KEY_TAB, 0))
+
+        // Meldingen voor nieuwe versies (achtergrond) + toestemming voor meldingen (Android 13+)
+        UpdateCheckJob.ensureChannel(this)
+        UpdateCheckJob.schedule(this)
+        if (Build.VERSION.SDK_INT >= 33 &&
+            checkSelfPermission(android.Manifest.permission.POST_NOTIFICATIONS) != android.content.pm.PackageManager.PERMISSION_GRANTED
+        ) {
+            requestPermissions(arrayOf(android.Manifest.permission.POST_NOTIFICATIONS), 1)
+        }
+        handleInstallIntent(intent)
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        handleInstallIntent(intent)
+    }
+
+    /** Geopend via de update-melding: meteen controleren en bijwerken. */
+    private fun handleInstallIntent(intent: Intent?) {
+        if (intent?.getBooleanExtra(UpdateCheckJob.EXTRA_INSTALL, false) == true) {
+            intent.removeExtra(UpdateCheckJob.EXTRA_INSTALL)
+            installWhenFound = true
+            checkForUpdate(manual = false)
+        }
     }
 
     override fun onDestroy() {
@@ -513,6 +537,7 @@ class MainActivity : Activity() {
     @Volatile private var pendingRelease: Release? = null
     @Volatile private var updateBusy = false
     @Volatile private var downloadBusy = false
+    @Volatile private var installWhenFound = false
     private var installReceiver: BroadcastReceiver? = null
 
     /** "1.15" > "1.9": per onderdeel numeriek vergelijken. */
@@ -574,6 +599,7 @@ class MainActivity : Activity() {
                 }
                 if (!isNewer(version, BuildConfig.VERSION_NAME)) {
                     pendingRelease = null
+                    installWhenFound = false
                     runOnUiThread { updateBanner.visibility = View.GONE }
                     if (manual) setUpdateStatus("Je hebt de nieuwste versie (${BuildConfig.VERSION_NAME}).")
                     return@thread
@@ -588,7 +614,10 @@ class MainActivity : Activity() {
                     updateBanner.text = "⬆  Versie $version beschikbaar – tik om bij te werken"
                     updateBanner.visibility = View.VISIBLE
                     updateStatus.text = "Versie $version beschikbaar."
-                    if (manual) startUpdate(rel)
+                    if (manual || installWhenFound) {
+                        installWhenFound = false
+                        startUpdate(rel)
+                    }
                 }
             } catch (e: Exception) {
                 if (manual) setUpdateStatus("Kan GitHub niet bereiken: ${e.message}")
