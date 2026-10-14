@@ -253,12 +253,46 @@
                     android:textSize="24sp"
                     android:textStyle="bold" />
 
-                <!-- Menu: één item per onderdeel -->
+                <!-- Hoofdmenu: API's en Updates -->
                 <LinearLayout
                     android:id="@+id/settingsMenu"
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
                     android:orientation="vertical">
+
+                    <TextView
+                        android:id="@+id/menuApi"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:layout_marginBottom="12dp"
+                        android:background="#1E1E1E"
+                        android:drawablePadding="16dp"
+                        android:gravity="center_vertical"
+                        android:padding="18dp"
+                        android:text="API's"
+                        android:textColor="#FFFFFF"
+                        android:textSize="17sp" />
+
+                    <TextView
+                        android:id="@+id/menuUpdate"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:background="#1E1E1E"
+                        android:drawablePadding="16dp"
+                        android:gravity="center_vertical"
+                        android:padding="18dp"
+                        android:text="Updates"
+                        android:textColor="#FFFFFF"
+                        android:textSize="17sp" />
+                </LinearLayout>
+
+                <!-- Submenu API's: één item per API -->
+                <LinearLayout
+                    android:id="@+id/apiMenu"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:orientation="vertical"
+                    android:visibility="gone">
 
                     <TextView
                         android:id="@+id/menuHa"
@@ -299,17 +333,6 @@
                         android:textColor="#FFFFFF"
                         android:textSize="17sp" />
 
-                    <TextView
-                        android:id="@+id/menuUpdate"
-                        android:layout_width="match_parent"
-                        android:layout_height="wrap_content"
-                        android:background="#1E1E1E"
-                        android:drawablePadding="16dp"
-                        android:gravity="center_vertical"
-                        android:padding="18dp"
-                        android:text="Updates"
-                        android:textColor="#FFFFFF"
-                        android:textSize="17sp" />
                 </LinearLayout>
 
                 <!-- Onderdeel: Home Assistant -->
@@ -533,7 +556,7 @@
                         android:layout_width="match_parent"
                         android:layout_height="wrap_content"
                         android:layout_marginTop="12dp"
-                        android:text="Automatisch controleren bij openen"
+                        android:text="Automatisch controleren (elke minuut zolang de app open is)"
                         android:textColor="#FFFFFF"
                         android:textSize="16sp" />
 

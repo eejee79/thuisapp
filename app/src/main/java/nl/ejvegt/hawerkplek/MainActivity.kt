@@ -202,6 +202,7 @@ class MainActivity : Activity() {
     private lateinit var mediaStatus: TextView
     private lateinit var settingsTitle: TextView
     private lateinit var settingsMenu: View
+    private lateinit var apiMenu: View
     private lateinit var haSection: View
     private lateinit var pveSection: View
     private lateinit var fritzSection: View
@@ -217,6 +218,16 @@ class MainActivity : Activity() {
 
     @Volatile private var haBusy = false
     @Volatile private var pveBusy = false
+
+    /** Elke minuut kijken of er een nieuwe versie op GitHub staat (alleen als de app open is). */
+    private val updatePoller = object : Runnable {
+        override fun run() {
+            if (prefs().getBoolean(KEY_AUTO_UPDATE, true) && ghToken().isNotEmpty() && !downloadBusy) {
+                checkForUpdate(manual = false)
+            }
+            handler.postDelayed(this, 60_000L)
+        }
+    }
 
     private val poller = object : Runnable {
         override fun run() {
@@ -261,6 +272,7 @@ class MainActivity : Activity() {
         mediaStatus = findViewById(R.id.mediaStatus)
         settingsTitle = findViewById(R.id.settingsTitle)
         settingsMenu = findViewById(R.id.settingsMenu)
+        apiMenu = findViewById(R.id.apiMenu)
         haSection = findViewById(R.id.haSection)
         pveSection = findViewById(R.id.pveSection)
         fritzSection = findViewById(R.id.fritzSection)
@@ -292,6 +304,7 @@ class MainActivity : Activity() {
         listOf(R.id.saveHa, R.id.savePve, R.id.saveFritz).forEach { id ->
             findViewById<Button>(id).setOnClickListener { saveSettings() }
         }
+        menuItem(R.id.menuApi, R.drawable.ic_key, PAGE_API)
         menuItem(R.id.menuHa, R.drawable.ic_tab_ha, PAGE_HA)
         menuItem(R.id.menuPve, R.drawable.ic_tab_pve, PAGE_PVE)
         menuItem(R.id.menuFritz, R.drawable.ic_tab_fritz, PAGE_FRITZ)
@@ -308,10 +321,6 @@ class MainActivity : Activity() {
         buildMedia()
         buildGroupCards()
         selectTab(prefs().getInt(KEY_TAB, 0))
-
-        if (prefs().getBoolean(KEY_AUTO_UPDATE, true) && ghToken().isNotEmpty()) {
-            checkForUpdate(manual = false)
-        }
     }
 
     override fun onDestroy() {
@@ -322,17 +331,23 @@ class MainActivity : Activity() {
     override fun onResume() {
         super.onResume()
         handler.post(poller)
+        handler.post(updatePoller)
     }
 
     override fun onPause() {
         super.onPause()
         handler.removeCallbacks(poller)
+        handler.removeCallbacks(updatePoller)
     }
 
     @Deprecated("Deprecated in Java")
     override fun onBackPressed() {
         if (settingsPanel.visibility == View.VISIBLE) {
-            if (settingsPage != PAGE_MENU) showSettingsPage(PAGE_MENU) else showSettings(false)
+            when (settingsPage) {
+                PAGE_MENU -> showSettings(false)
+                PAGE_HA, PAGE_PVE, PAGE_FRITZ -> showSettingsPage(PAGE_API)
+                else -> showSettingsPage(PAGE_MENU)
+            }
         } else {
             @Suppress("DEPRECATION")
             super.onBackPressed()
@@ -389,17 +404,20 @@ class MainActivity : Activity() {
     private val PAGE_PVE = 2
     private val PAGE_FRITZ = 3
     private val PAGE_UPDATE = 4
+    private val PAGE_API = 5
     private var settingsPage = PAGE_MENU
 
     /** Instellingen: menu, of één van de twee onderdelen. */
     private fun showSettingsPage(page: Int) {
         settingsPage = page
         settingsMenu.visibility = if (page == PAGE_MENU) View.VISIBLE else View.GONE
+        apiMenu.visibility = if (page == PAGE_API) View.VISIBLE else View.GONE
         haSection.visibility = if (page == PAGE_HA) View.VISIBLE else View.GONE
         pveSection.visibility = if (page == PAGE_PVE) View.VISIBLE else View.GONE
         fritzSection.visibility = if (page == PAGE_FRITZ) View.VISIBLE else View.GONE
         updateSection.visibility = if (page == PAGE_UPDATE) View.VISIBLE else View.GONE
         settingsTitle.text = when (page) {
+            PAGE_API -> "API's"
             PAGE_HA -> "Home Assistant"
             PAGE_PVE -> "Proxmox"
             PAGE_FRITZ -> "Fritzbox"
@@ -471,7 +489,7 @@ class MainActivity : Activity() {
         pveNodes.clear()
         haActiveUntil = 0L
         fritzPossibleChannels.clear()
-        showSettingsPage(PAGE_MENU)
+        showSettingsPage(PAGE_API)
         refreshCurrentTab(force = true)
     }
 
