@@ -45,8 +45,11 @@ import kotlin.concurrent.thread
 
 class MainActivity : Activity() {
 
-    /** Een app op de Google TV-box. */
-    class MediaApp(val name: String, val pkg: String, val color: Int)
+    /**
+     * Een app op de Google TV-box. [link] = deeplink (betrouwbaarst volgens Home Assistant);
+     * zonder link wordt de app via zijn pakketnaam gestart.
+     */
+    class MediaApp(val name: String, val pkg: String, val color: Int, val link: String? = null)
 
     companion object {
         /** De schakelaars op het Home Assistant-tabblad, met de exacte lampen (entity-ID's) per groep. */
@@ -108,9 +111,9 @@ class MainActivity : Activity() {
 
         /** App-tegels: naam, pakketnaam op de Google TV, kleur van de tegel. */
         val MEDIA_APPS = listOf(
-            MediaApp("Netflix", "com.netflix.ninja", 0xFFB20710.toInt()),
-            MediaApp("Prime Video", "com.amazon.amazonvideo.livingroom", 0xFF0F79AF.toInt()),
-            MediaApp("YouTube", "com.google.android.youtube.tv", 0xFFC4302B.toInt()),
+            MediaApp("Netflix", "com.netflix.ninja", 0xFFB20710.toInt(), "netflix://"),
+            MediaApp("Prime Video", "com.amazon.amazonvideo.livingroom", 0xFF0F79AF.toInt(), "https://app.primevideo.com"),
+            MediaApp("YouTube", "com.google.android.youtube.tv", 0xFFC4302B.toInt(), "https://www.youtube.com"),
             MediaApp("NLziet", "nl.nlziet", 0xFFE65100.toInt()),
             MediaApp("Viaplay", "com.viaplay.android", 0xFF6A1B9A.toInt()),
             MediaApp("F1 TV", "com.formulaone.production", 0xFF263238.toInt()),
@@ -2001,7 +2004,7 @@ class MainActivity : Activity() {
         setOnLongClickListener {
             AlertDialog.Builder(this@MainActivity)
                 .setTitle(app.name)
-                .setMessage("Pakketnaam: ${app.pkg}")
+                .setMessage("Pakketnaam: ${app.pkg}" + (app.link?.let { "\nDeeplink: $it" } ?: ""))
                 .setPositiveButton("OK", null)
                 .show()
             true
@@ -2010,10 +2013,29 @@ class MainActivity : Activity() {
 
     private fun launchApp(app: MediaApp) {
         mediaStatus.text = "${app.name} openen…"
-        haService(
-            "remote", "turn_on",
-            JSONObject().put("entity_id", MEDIA_REMOTE).put("activity", app.pkg)
-        )
+        if (app.link != null) {
+            // Deeplink via de remote (zet de box ook aan)
+            haService("remote", "turn_on", JSONObject().put("entity_id", MEDIA_REMOTE).put("activity", app.link))
+            return
+        }
+        // Geen deeplink bekend: box aanzetten en de app via de mediaspeler op pakketnaam starten
+        thread {
+            val err = runCatching {
+                haRequest("POST", "/api/services/remote/turn_on", JSONObject().put("entity_id", MEDIA_REMOTE).toString())
+                Thread.sleep(1_500)
+                haRequest(
+                    "POST", "/api/services/media_player/play_media",
+                    JSONObject().put("entity_id", MEDIA_PLAYER)
+                        .put("media_content_type", "app")
+                        .put("media_content_id", app.pkg)
+                        .toString()
+                )
+            }.exceptionOrNull()
+            runOnUiThread {
+                if (err != null) mediaStatus.text = "Mislukt: ${err.message ?: err.javaClass.simpleName}"
+                handler.postDelayed({ if (currentTab == TAB_MEDIA) refreshMedia() }, 2_000)
+            }
+        }
     }
 
     private fun refreshMedia() {
