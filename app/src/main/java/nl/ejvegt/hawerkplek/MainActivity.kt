@@ -24,6 +24,7 @@ import android.view.ViewGroup
 import android.view.WindowInsets
 import android.widget.Button
 import android.widget.EditText
+import android.widget.ImageView
 import android.widget.LinearLayout
 import android.widget.ProgressBar
 import android.widget.SeekBar
@@ -64,6 +65,8 @@ class MainActivity : Activity() {
         val color: Int,
         val link: String? = null,
         val scheme: String? = null,
+        /** Eigen logo voor de tegel (drawable); zonder logo toont de tegel de naam. */
+        val logo: Int? = null,
     )
 
     companion object {
@@ -131,7 +134,7 @@ class MainActivity : Activity() {
             MediaApp("YouTube", "com.google.android.youtube.tv", 0xFFC4302B.toInt(), "https://www.youtube.com"),
             MediaApp("NLziet", "nl.nlziet", 0xFFE65100.toInt(), scheme = "nlziet://"),
             MediaApp("Viaplay", "com.viaplay.android", 0xFF6A1B9A.toInt(), scheme = "viaplay://"),
-            MediaApp("F1 TV", "com.formulaone.production", 0xFF263238.toInt(), scheme = "f1tv://"),
+            MediaApp("F1 TV", "com.formulaone.production", 0xFFCE2C1D.toInt(), scheme = "f1tv://", logo = R.drawable.logo_f1tv),
         )
 
         /** De Proxmox VM's/containers (VMID) die op het Proxmox-tabblad staan. */
@@ -2342,12 +2345,27 @@ class MainActivity : Activity() {
         }
     }
 
-    private fun appTile(app: MediaApp, second: Boolean): View = TextView(this).apply {
-        text = app.name
-        textSize = 19f
-        setTextColor(Color.WHITE)
-        setTypeface(typeface, Typeface.BOLD)
-        gravity = Gravity.CENTER
+    private fun appTile(app: MediaApp, second: Boolean): View {
+        val tile: View = if (app.logo != null) {
+            ImageView(this).apply {
+                setImageResource(app.logo)
+                scaleType = ImageView.ScaleType.CENTER_CROP
+                contentDescription = app.name
+                clipToOutline = true  // ronde hoeken van de achtergrond ook voor het logo
+            }
+        } else {
+            TextView(this).apply {
+                text = app.name
+                textSize = 19f
+                setTextColor(Color.WHITE)
+                setTypeface(typeface, Typeface.BOLD)
+                gravity = Gravity.CENTER
+            }
+        }
+        return tile.apply { setupTile(app, second) }
+    }
+
+    private fun View.setupTile(app: MediaApp, second: Boolean) {
         background = GradientDrawable().apply {
             setColor(app.color)
             cornerRadius = dp(16).toFloat()
