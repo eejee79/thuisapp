@@ -49,7 +49,13 @@ class MainActivity : Activity() {
      * Een app op de Google TV-box. [link] = deeplink (betrouwbaarst volgens Home Assistant);
      * zonder link wordt de app via zijn pakketnaam gestart.
      */
-    class MediaApp(val name: String, val pkg: String, val color: Int, val link: String? = null)
+    class MediaApp(
+        val name: String,
+        val pkg: String,
+        val color: Int,
+        val link: String? = null,
+        val scheme: String? = null,
+    )
 
     companion object {
         /** De schakelaars op het Home Assistant-tabblad, met de exacte lampen (entity-ID's) per groep. */
@@ -114,9 +120,9 @@ class MainActivity : Activity() {
             MediaApp("Netflix", "com.netflix.ninja", 0xFFB20710.toInt(), "netflix://"),
             MediaApp("Prime Video", "com.amazon.amazonvideo.livingroom", 0xFF0F79AF.toInt(), "https://app.primevideo.com"),
             MediaApp("YouTube", "com.google.android.youtube.tv", 0xFFC4302B.toInt(), "https://www.youtube.com"),
-            MediaApp("NLziet", "nl.nlziet", 0xFFE65100.toInt()),
-            MediaApp("Viaplay", "com.viaplay.android", 0xFF6A1B9A.toInt()),
-            MediaApp("F1 TV", "com.formulaone.production", 0xFF263238.toInt()),
+            MediaApp("NLziet", "nl.nlziet", 0xFFE65100.toInt(), scheme = "nlziet://"),
+            MediaApp("Viaplay", "com.viaplay.android", 0xFF6A1B9A.toInt(), scheme = "viaplay://"),
+            MediaApp("F1 TV", "com.formulaone.production", 0xFF263238.toInt(), scheme = "f1tv://"),
         )
 
         /** De Proxmox VM's/containers (VMID) die op het Proxmox-tabblad staan. */
@@ -2011,31 +2017,66 @@ class MainActivity : Activity() {
         }
     }
 
+    /**
+     * Start een app en controleert of hij echt opent. Werkt een methode niet, dan probeert hij de
+     * volgende; de methode die werkt wordt per app onthouden en de volgende keer meteen gebruikt.
+     */
     private fun launchApp(app: MediaApp) {
         mediaStatus.text = "${app.name} openen…"
-        if (app.link != null) {
-            // Deeplink via de remote (zet de box ook aan)
-            haService("remote", "turn_on", JSONObject().put("entity_id", MEDIA_REMOTE).put("activity", app.link))
-            return
-        }
-        // Geen deeplink bekend: box aanzetten en de app via de mediaspeler op pakketnaam starten
-        thread {
-            val err = runCatching {
-                haRequest("POST", "/api/services/remote/turn_on", JSONObject().put("entity_id", MEDIA_REMOTE).toString())
-                Thread.sleep(1_500)
-                haRequest(
-                    "POST", "/api/services/media_player/play_media",
+        val remote = { activity: String -> JSONObject().put("entity_id", MEDIA_REMOTE).put("activity", activity) }
+        val all = buildList {
+            app.link?.let { add(Triple("link", "remote/turn_on", remote(it))) }
+            add(Triple("market", "remote/turn_on", remote("market://launch?id=${app.pkg}")))
+            add(
+                Triple(
+                    "play", "media_player/play_media",
                     JSONObject().put("entity_id", MEDIA_PLAYER)
-                        .put("media_content_type", "app")
-                        .put("media_content_id", app.pkg)
-                        .toString()
+                        .put("media_content_type", "app").put("media_content_id", app.pkg)
                 )
-            }.exceptionOrNull()
+            )
+            add(Triple("pkg", "remote/turn_on", remote(app.pkg)))
+            app.scheme?.let { add(Triple("scheme", "remote/turn_on", remote(it))) }
+        }
+        val prefKey = "launch_${app.pkg}"
+        val known = prefs().getString(prefKey, null)
+        val attempts = all.sortedBy { if (it.first == known) 0 else 1 }
+
+        thread {
+            // Box eerst aan (nodig voor de mediaspeler-methode)
+            if (currentMediaState() != "on") {
+                runCatching { haRequest("POST", "/api/services/remote/turn_on", JSONObject().put("entity_id", MEDIA_REMOTE).toString()) }
+                Thread.sleep(2_500)
+            }
+            for ((i, attempt) in attempts.withIndex()) {
+                val (kind, service, data) = attempt
+                if (i > 0) runOnUiThread { mediaStatus.text = "${app.name} openen… (andere manier, ${i + 1}/${attempts.size})" }
+                runCatching { haRequest("POST", "/api/services/$service", data.toString()) }
+                Thread.sleep(3_500)
+                if (currentAppId() == app.pkg) {
+                    prefs().edit().putString(prefKey, kind).apply()
+                    runOnUiThread {
+                        mediaStatus.text = "${app.name} geopend"
+                        refreshMedia()
+                    }
+                    return@thread
+                }
+            }
             runOnUiThread {
-                if (err != null) mediaStatus.text = "Mislukt: ${err.message ?: err.javaClass.simpleName}"
-                handler.postDelayed({ if (currentTab == TAB_MEDIA) refreshMedia() }, 2_000)
+                mediaStatus.text = "${app.name} kon niet worden gestart. Open hem één keer handmatig en probeer het opnieuw."
+                refreshMedia()
             }
         }
+    }
+
+    private fun currentMediaState(): String? =
+        runCatching { JSONObject(haRequest("GET", "/api/states/$MEDIA_REMOTE", null)).optString("state") }.getOrNull()
+
+    /** Welke app er nu op de box openstaat (pakketnaam). */
+    private fun currentAppId(): String? {
+        val p = runCatching { JSONObject(haRequest("GET", "/api/states/$MEDIA_PLAYER", null)) }.getOrNull()
+        p?.optJSONObject("attributes")?.optString("app_id")?.takeIf { it.isNotEmpty() }?.let { return it }
+        val r = runCatching { JSONObject(haRequest("GET", "/api/states/$MEDIA_REMOTE", null)) }.getOrNull()
+        return r?.optJSONObject("attributes")?.optString("current_activity")?.takeIf { it.isNotEmpty() }
     }
 
     private fun refreshMedia() {
@@ -2085,7 +2126,7 @@ class MainActivity : Activity() {
             else -> "Aan"
         }
         mediaNowCard.sub.text = if (on && title != null) title else if (on) "Tik op een app om hem te openen" else "Tik op een app: de box gaat vanzelf aan"
-        if (mediaStatus.text.endsWith("openen…") || mediaStatus.text.startsWith("Kan ")) mediaStatus.text = ""
+        if (mediaStatus.text.startsWith("Kan ")) mediaStatus.text = ""
         if (mediaStatus.text.isEmpty()) mediaStatus.text = haRouteLabel()
     }
 
