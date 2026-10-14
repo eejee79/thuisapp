@@ -82,6 +82,16 @@ class MainActivity : Activity() {
         const val DASH_CHARGE_LIMIT = "number.skoda_elroq_charge_limit"
         const val DASH_CAR_BATTERY = "sensor.skoda_elroq_battery_percentage"
 
+        /** Bronnen van de receiver die de app toont: naam in de Denon → naam in de app (in deze volgorde). */
+        val RECEIVER_SOURCES = listOf(
+            "AUX1" to "Chromecast Audio",
+            "GoogleTV Box" to "GoogleTV Box",
+            "KPN Hangplek" to "TV+ woonkamer",
+            "TV Audio" to "TV Audio",
+            "Xbox" to "Xbox",
+            "HEOS Music" to "HEOS Music",
+        )
+
         /** Eigen bitcoinsaldo voor de cryptokaart. */
         const val BTC_AMOUNT = 0.00945966
 
@@ -1681,7 +1691,7 @@ class MainActivity : Activity() {
         receiverSwitch.isEnabled = state != "unavailable"
         receiverSwitch.isChecked = on
         val source = a.optString("source", "")
-        sourceButton.text = (if (on && source.isNotEmpty()) source else "Bron") + " ▾"
+        sourceButton.text = (if (on && source.isNotEmpty()) sourceLabel(source) else "Bron") + " ▾"
         sourceButton.isEnabled = on
         volumeSlider.seek.isEnabled = on
         val vol = a.optDouble("volume_level", Double.NaN)
@@ -1694,22 +1704,29 @@ class MainActivity : Activity() {
         }
     }
 
+    /** Naam zoals de app hem toont (bijv. "AUX1" → "Chromecast Audio"). */
+    private fun sourceLabel(source: String) =
+        RECEIVER_SOURCES.firstOrNull { it.first == source }?.second ?: source
+
     private fun chooseSource() {
-        val list = dashAttrs[DASH_RECEIVER]?.optJSONArray("source_list")
-        if (list == null || list.length() == 0) {
-            dashStatus.text = "De receiver geeft geen bronnenlijst door."
+        // Alleen de gekozen bronnen, en alleen als de receiver ze ook echt kent
+        val known = dashAttrs[DASH_RECEIVER]?.optJSONArray("source_list")
+            ?.let { arr -> (0 until arr.length()).map { arr.optString(it) }.toSet() }
+        val options = RECEIVER_SOURCES.filter { known == null || it.first in known }
+        if (options.isEmpty()) {
+            dashStatus.text = "Geen van de ingestelde bronnen gevonden op de receiver."
             return
         }
-        val sources = (0 until list.length()).map { list.optString(it) }
-        val current = sources.indexOf(dashAttrs[DASH_RECEIVER]?.optString("source"))
+        val current = options.indexOfFirst { it.first == dashAttrs[DASH_RECEIVER]?.optString("source") }
         AlertDialog.Builder(this)
             .setTitle("Bron kiezen")
-            .setSingleChoiceItems(sources.toTypedArray(), current) { d, which ->
+            .setSingleChoiceItems(options.map { it.second }.toTypedArray(), current) { d, which ->
                 d.dismiss()
-                sourceButton.text = sources[which] + " ▾"
+                val (denonName, label) = options[which]
+                sourceButton.text = "$label ▾"
                 haService(
                     "media_player", "select_source",
-                    JSONObject().put("entity_id", DASH_RECEIVER).put("source", sources[which])
+                    JSONObject().put("entity_id", DASH_RECEIVER).put("source", denonName)
                 )
             }
             .setNegativeButton("Annuleren", null)
