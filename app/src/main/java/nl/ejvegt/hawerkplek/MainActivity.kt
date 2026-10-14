@@ -135,6 +135,8 @@ class MainActivity : Activity() {
         /** Ingangen van de Denon (interne namen): apps via de Google TV-box, tv kijken via TV+. */
         const val SOURCE_APPS = "GoogleTV Box"
         const val SOURCE_TV = "KPN Hangplek"
+        /** De TV+-box achter die Denon-ingang ("KPN Hangplek" in HA). */
+        const val TVPLUS_REMOTE = "remote.kpn_diw7022"
 
         /** App-tegels: naam, pakketnaam op de Google TV, kleur van de tegel. */
         val MEDIA_APPS = listOf(
@@ -2455,7 +2457,7 @@ class MainActivity : Activity() {
     private fun confirmAllOff() {
         AlertDialog.Builder(this)
             .setTitle("Alles uit?")
-            .setMessage("Alle lampen, de tv, de receiver en de GoogleTV-box gaan uit.")
+            .setMessage("Alle lampen, de tv, de receiver, de GoogleTV-box en TV+ woonkamer gaan uit.")
             .setPositiveButton("Alles uit") { _, _ -> allOff() }
             .setNegativeButton("Annuleren", null)
             .show()
@@ -2477,6 +2479,7 @@ class MainActivity : Activity() {
                 "media_player/turn_off" to JSONObject().put("entity_id", MEDIA_TV),
                 "media_player/turn_off" to JSONObject().put("entity_id", DASH_RECEIVER),
                 "remote/turn_off" to JSONObject().put("entity_id", MEDIA_REMOTE),
+                "remote/turn_off" to JSONObject().put("entity_id", TVPLUS_REMOTE),
             )
             val failed = calls.count { (service, data) ->
                 runCatching { haRequest("POST", "/api/services/$service", data.toString()) }.isFailure
@@ -2523,6 +2526,10 @@ class MainActivity : Activity() {
     private fun watchTv() {
         mediaStatus.text = "TV kijken: tv en receiver aanzetten…"
         thread {
+            // TV+-box aan (alleen als hij uit staat; aan/uit is bij deze box een schakelknop)
+            if (stateOf(TVPLUS_REMOTE)?.optString("state") != "on") {
+                quietService("remote/turn_on", JSONObject().put("entity_id", TVPLUS_REMOTE))
+            }
             prepareWatching(SOURCE_TV)
             runOnUiThread {
                 mediaStatus.text = "TV kijken: receiver staat op TV+ woonkamer"
