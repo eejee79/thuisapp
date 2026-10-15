@@ -2205,22 +2205,36 @@ class MainActivity : Activity() {
         }
     }
 
-    /** Start de HEOS-favoriet met [HEOS_RADIO] in de naam (JOE Nederland). */
+    /**
+     * Start de HEOS-favoriet met [HEOS_RADIO] in de naam (JOE Nederland). HEOS hervat bij het
+     * omschakelen eerst de vorige bron (bijv. Spotify), dus even wachten, starten en controleren.
+     */
     private fun playHeosRadio() {
+        runOnUiThread { dashStatus.text = "JOE starten…" }
         thread {
-            Thread.sleep(1_500)  // receiver eerst laten omschakelen
+            Thread.sleep(4_000)  // receiver laten omschakelen en HEOS laten hervatten
             val list = stateOf(DASH_HEOS)?.optJSONObject("attributes")?.optJSONArray("source_list")
-            val fav = list?.let { arr ->
-                (0 until arr.length()).map { arr.optString(it) }.firstOrNull { it.contains(HEOS_RADIO, ignoreCase = true) }
-            }
+            val names = list?.let { arr -> (0 until arr.length()).map { arr.optString(it) } } ?: emptyList()
+            val fav = names.firstOrNull { it.contains(HEOS_RADIO, ignoreCase = true) }
             if (fav == null) {
                 runOnUiThread {
-                    dashStatus.text = "JOE niet gevonden: zet JOE Nederland in je HEOS-favorieten (HEOS-app → ster)."
+                    dashStatus.text = if (names.isEmpty()) "Geen HEOS-favorieten gevonden op $DASH_HEOS."
+                    else "JOE niet in je HEOS-favorieten. Wel: " + names.take(6).joinToString(", ")
                 }
                 return@thread
             }
-            quietService("media_player/select_source", JSONObject().put("entity_id", DASH_HEOS).put("source", fav))
-            runOnUiThread { dashStatus.text = "$fav wordt afgespeeld" }
+            var ok = false
+            for (attempt in 0 until 3) {
+                quietService("media_player/select_source", JSONObject().put("entity_id", DASH_HEOS).put("source", fav))
+                Thread.sleep(3_000)
+                val a = stateOf(DASH_HEOS)?.optJSONObject("attributes")
+                val now = listOf("source", "media_title", "media_artist", "media_album_name", "media_station")
+                    .joinToString(" ") { a?.optString(it).orEmpty() }
+                if (now.contains(HEOS_RADIO, ignoreCase = true)) { ok = true; break }
+            }
+            runOnUiThread {
+                dashStatus.text = if (ok) "$fav wordt afgespeeld" else "JOE kon niet worden gestart (HEOS speelt iets anders)"
+            }
         }
     }
 
