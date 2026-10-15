@@ -2,6 +2,8 @@ package nl.ejvegt.hawerkplek
 
 import android.app.Activity
 import android.app.AlertDialog
+import android.app.Dialog
+import android.text.InputType
 import android.app.PendingIntent
 import android.content.BroadcastReceiver
 import android.content.Intent
@@ -29,6 +31,7 @@ import android.widget.EditText
 import android.widget.ImageView
 import android.widget.LinearLayout
 import android.widget.ProgressBar
+import android.widget.ScrollView
 import android.widget.SeekBar
 import android.widget.Switch
 import android.widget.TextView
@@ -72,6 +75,9 @@ class MainActivity : Activity() {
         /** Extra links om te proberen (bijv. de website, die de app soms zelf opent). */
         val alt: List<String> = emptyList(),
     )
+
+    /** Een zender op KPN TV+: kanaalnummer, naam, kleur van het nummerblokje. */
+    class TvChannel(val num: Int, val name: String, val color: Int)
 
     companion object {
         /** De schakelaars op het Home Assistant-tabblad, met de exacte lampen (entity-ID's) per groep. */
@@ -155,6 +161,57 @@ class MainActivity : Activity() {
         const val TVPLUS_REMOTE = "remote.kpn_diw7022"
         const val TVPLUS_PLAYER = "media_player.kpn_diw7022"
         const val CHROMECAST_AUDIO = "media_player.chromecastaudio8913"
+
+        private val C_NPO = 0xFFE65100.toInt()
+        private val C_RTL = 0xFFC62828.toInt()
+        private val C_TALPA = 0xFF283593.toInt()
+        private val C_SPORT = 0xFF2E7D32.toInt()
+        private val C_ETC = 0xFF455A64.toInt()
+
+        /** Favorieten bovenaan (sport). Kanaalnummers volgens de KPN-zenderindeling (sep 2026). */
+        val TV_FAVORITES = listOf(
+            TvChannel(14, "ESPN", C_SPORT),
+            TvChannel(222, "ESPN 2", C_SPORT),
+            TvChannel(223, "ESPN 3", C_SPORT),
+            TvChannel(224, "ESPN 4", C_SPORT),
+            TvChannel(233, "Ziggo Sport", C_SPORT),
+            TvChannel(234, "Ziggo Sport 2", C_SPORT),
+            TvChannel(235, "Ziggo Sport 3", C_SPORT),
+            TvChannel(236, "Ziggo Sport 4", C_SPORT),
+            TvChannel(237, "Ziggo Sport 5", C_SPORT),
+            TvChannel(238, "Ziggo Sport 6", C_SPORT),
+        )
+
+        /** Gangbare Nederlandse zenders. */
+        val TV_CHANNELS = listOf(
+            TvChannel(1, "NPO 1", C_NPO),
+            TvChannel(2, "NPO 2", C_NPO),
+            TvChannel(3, "NPO 3", C_NPO),
+            TvChannel(4, "RTL 4", C_RTL),
+            TvChannel(5, "RTL 5", C_RTL),
+            TvChannel(6, "SBS6", C_TALPA),
+            TvChannel(7, "RTL 7", C_RTL),
+            TvChannel(8, "NET5", C_TALPA),
+            TvChannel(9, "Veronica", C_TALPA),
+            TvChannel(10, "RTL 8", C_RTL),
+            TvChannel(11, "RTL Z", C_RTL),
+            TvChannel(12, "Comedy Central", C_ETC),
+            TvChannel(13, "Paramount", C_ETC),
+            TvChannel(15, "Discovery", C_ETC),
+            TvChannel(16, "STAR Channel", C_ETC),
+            TvChannel(17, "TLC", C_ETC),
+            TvChannel(18, "National Geographic", C_ETC),
+            TvChannel(20, "MTV", C_ETC),
+            TvChannel(21, "ID", C_ETC),
+            TvChannel(24, "24Kitchen", C_ETC),
+            TvChannel(28, "Disney Channel", C_ETC),
+            TvChannel(33, "Nickelodeon", C_ETC),
+            TvChannel(35, "Eurosport 1", C_SPORT),
+            TvChannel(36, "Eurosport 2", C_SPORT),
+            TvChannel(43, "HGTV", C_ETC),
+            TvChannel(51, "Viaplay TV", C_ETC),
+        )
+        private const val KEY_LAST_CHANNEL = "last_tv_channel"
 
         /** App-tegels: naam, pakketnaam op de Google TV, kleur van de tegel. */
         val MEDIA_APPS = listOf(
@@ -2468,12 +2525,13 @@ class MainActivity : Activity() {
     private lateinit var nowSub: TextView
     private lateinit var nowPlayPause: Button
     @Volatile private var nowEntity: String? = null
+    private lateinit var nowChannelBtn: TextView
     @Volatile private var mediaBusy = false
 
     /** Wat de balk toont. [entity] = mediaspeler voor de pauzeknop (null = geen knop). */
     private class NowInfo(
         val title: String, val sub: String, val icon: Int?, val iconBg: Int,
-        val entity: String?, val playing: Boolean,
+        val entity: String?, val playing: Boolean, val tv: Boolean = false,
     )
 
     private fun buildMedia() {
@@ -2528,6 +2586,20 @@ class MainActivity : Activity() {
         }
         nowBar.addView(nowIcon)
         nowBar.addView(texts)
+        nowChannelBtn = TextView(this).apply {
+            text = "Zender ▾"
+            textSize = 14f
+            setTextColor(Color.WHITE)
+            setTypeface(typeface, Typeface.BOLD)
+            setPadding(dp(12), dp(7), dp(12), dp(7))
+            background = GradientDrawable().apply {
+                setColor(0xFF2E7D32.toInt())
+                cornerRadius = dp(16).toFloat()
+            }
+            visibility = View.GONE
+            setOnClickListener { showChannelSheet() }
+        }
+        nowBar.addView(nowChannelBtn)
         nowBar.addView(nowPlayPause)
         mediaList.addView(nowBar)
 
@@ -2595,7 +2667,7 @@ class MainActivity : Activity() {
             setTypeface(typeface, Typeface.BOLD)
             gravity = Gravity.CENTER
         })
-        setupTile(0xFF1565C0.toInt(), second) { watchTv() }
+        setupTile(0xFF1565C0.toInt(), second) { showChannelSheet() }
     }
 
     /** Tegel "HEOS radio": kies een zender; receiver gaat aan op HEOS Music en speelt hem af. */
@@ -2714,6 +2786,176 @@ class MainActivity : Activity() {
             if (current == source) break
             quietService("media_player/select_source", JSONObject().put("entity_id", DASH_RECEIVER).put("source", source))
             Thread.sleep(2_000)
+        }
+    }
+
+    // ---------- Zenders kiezen (KPN TV+) ----------
+
+    private fun lastChannel(): TvChannel? {
+        val n = prefs().getInt(KEY_LAST_CHANNEL, -1)
+        return (TV_FAVORITES + TV_CHANNELS).firstOrNull { it.num == n }
+    }
+
+    /** Keuzescherm dat van onderen omhoog komt: favorieten, alle zenders, zappen en nummer. */
+    private fun showChannelSheet() {
+        val dialog = Dialog(this)
+        val content = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(16), dp(10), dp(16), dp(18))
+        }
+        content.addView(View(this).apply {
+            background = GradientDrawable().apply { setColor(0xFF555555.toInt()); cornerRadius = dp(2).toFloat() }
+            layoutParams = LinearLayout.LayoutParams(dp(40), dp(4)).apply {
+                gravity = Gravity.CENTER_HORIZONTAL; bottomMargin = dp(12)
+            }
+        })
+        content.addView(TextView(this).apply {
+            text = "Zender kiezen"
+            textSize = 19f
+            setTextColor(Color.WHITE)
+            setTypeface(typeface, Typeface.BOLD)
+        })
+
+        fun section(title: String) = TextView(this).apply {
+            text = title.uppercase(NL)
+            textSize = 12f
+            letterSpacing = 0.05f
+            setTextColor(0xFFAAAAAA.toInt())
+            setPadding(0, dp(14), 0, dp(8))
+        }
+
+        fun grid(list: List<TvChannel>) {
+            list.chunked(3).forEach { rowList ->
+                val row = LinearLayout(this).apply {
+                    orientation = LinearLayout.HORIZONTAL
+                    layoutParams = LinearLayout.LayoutParams(
+                        ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT
+                    ).apply { bottomMargin = dp(8) }
+                }
+                for (i in 0 until 3) {
+                    val ch = rowList.getOrNull(i)
+                    val cell = LinearLayout(this).apply {
+                        orientation = LinearLayout.HORIZONTAL
+                        gravity = Gravity.CENTER_VERTICAL
+                        setPadding(dp(8), dp(9), dp(6), dp(9))
+                        layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
+                            .apply { if (i > 0) marginStart = dp(8) }
+                    }
+                    if (ch != null) {
+                        cell.background = GradientDrawable().apply {
+                            setColor(0xFF2A2A2A.toInt())
+                            cornerRadius = dp(12).toFloat()
+                            if (ch.num == prefs().getInt(KEY_LAST_CHANNEL, -1)) setStroke(dp(2), 0xFF18BCF2.toInt())
+                        }
+                        cell.addView(TextView(this).apply {
+                            text = ch.num.toString()
+                            textSize = 12f
+                            setTextColor(Color.WHITE)
+                            setTypeface(typeface, Typeface.BOLD)
+                            gravity = Gravity.CENTER
+                            minWidth = dp(28)
+                            setPadding(dp(4), dp(3), dp(4), dp(3))
+                            background = GradientDrawable().apply { setColor(ch.color); cornerRadius = dp(7).toFloat() }
+                        })
+                        cell.addView(TextView(this).apply {
+                            text = ch.name
+                            textSize = 13f
+                            setTextColor(Color.WHITE)
+                            setTypeface(typeface, Typeface.BOLD)
+                            maxLines = 2
+                            setPadding(dp(7), 0, 0, 0)
+                        })
+                        cell.isClickable = true
+                        cell.setOnClickListener { dialog.dismiss(); tuneChannel(ch.num, ch.name) }
+                    }
+                    row.addView(cell)
+                }
+                content.addView(row)
+            }
+        }
+
+        content.addView(section("Favorieten"))
+        grid(TV_FAVORITES)
+        content.addView(section("Alle zenders"))
+        grid(TV_CHANNELS)
+
+        // Onderaan: aanzetten, zappen, nummer intikken
+        val keys = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            setPadding(0, dp(10), 0, 0)
+        }
+        fun key(label: String, action: () -> Unit) = TextView(this).apply {
+            text = label
+            textSize = 14f
+            setTextColor(Color.WHITE)
+            setTypeface(typeface, Typeface.BOLD)
+            gravity = Gravity.CENTER
+            setPadding(dp(4), dp(11), dp(4), dp(11))
+            background = GradientDrawable().apply { setColor(0xFF2A2A2A.toInt()); cornerRadius = dp(12).toFloat() }
+            layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
+                .apply { if (keys.childCount > 0) marginStart = dp(8) }
+            setOnClickListener { action() }
+        }
+        keys.addView(key("Aan") { dialog.dismiss(); watchTv() })
+        keys.addView(key("▲ CH+") { sendTvKeys(listOf("CHANNEL_UP"), "Volgende zender") })
+        keys.addView(key("▼ CH−") { sendTvKeys(listOf("CHANNEL_DOWN"), "Vorige zender") })
+        keys.addView(key("⌨ Nummer") { dialog.dismiss(); askChannelNumber() })
+        content.addView(keys)
+
+        dialog.setContentView(ScrollView(this).apply { addView(content) })
+        dialog.window?.apply {
+            setBackgroundDrawable(GradientDrawable().apply {
+                setColor(0xFF1E1E1E.toInt())
+                cornerRadii = floatArrayOf(dp(22).toFloat(), dp(22).toFloat(), dp(22).toFloat(), dp(22).toFloat(), 0f, 0f, 0f, 0f)
+            })
+            setGravity(Gravity.BOTTOM)
+            setLayout(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
+        }
+        dialog.show()
+    }
+
+    private fun askChannelNumber() {
+        val input = EditText(this).apply {
+            inputType = InputType.TYPE_CLASS_NUMBER
+            hint = "Kanaalnummer"
+        }
+        AlertDialog.Builder(this)
+            .setTitle("Kanaal kiezen")
+            .setView(input)
+            .setPositiveButton("Kijken") { _, _ ->
+                val n = input.text.toString().toIntOrNull() ?: return@setPositiveButton
+                val name = (TV_FAVORITES + TV_CHANNELS).firstOrNull { it.num == n }?.name ?: "Kanaal $n"
+                tuneChannel(n, name)
+            }
+            .setNegativeButton("Annuleren", null)
+            .show()
+    }
+
+    /** Alles aan (indien nodig) en het kanaalnummer als cijfertoetsen naar de TV+-box sturen. */
+    private fun tuneChannel(num: Int, name: String) {
+        prefs().edit().putInt(KEY_LAST_CHANNEL, num).apply()
+        mediaStatus.text = "$name kiezen…"
+        thread {
+            val boxWasOff = stateOf(TVPLUS_REMOTE)?.optString("state") != "on"
+            if (boxWasOff) quietService("remote/turn_on", JSONObject().put("entity_id", TVPLUS_REMOTE))
+            prepareWatching(SOURCE_TV)
+            if (boxWasOff) Thread.sleep(6_000)  // box laten opstarten
+            val digits = num.toString().map { it.toString() }
+            quietService(
+                "remote/send_command",
+                JSONObject().put("entity_id", TVPLUS_REMOTE).put("command", JSONArray(digits)).put("delay_secs", 0.3)
+            )
+            runOnUiThread {
+                mediaStatus.text = "$name (kanaal $num)"
+                refreshMedia()
+            }
+        }
+    }
+
+    private fun sendTvKeys(keys: List<String>, label: String) {
+        mediaStatus.text = label
+        thread {
+            quietService("remote/send_command", JSONObject().put("entity_id", TVPLUS_REMOTE).put("command", JSONArray(keys)))
         }
     }
 
@@ -2855,15 +3097,12 @@ class MainActivity : Activity() {
         return when (source) {
             SOURCE_TV -> {
                 val p = stateOf(TVPLUS_PLAYER)
+                val last = lastChannel()
                 NowInfo(
                     title = "TV+ woonkamer",
-                    sub = joinNonEmpty(
-                        "KPN",
-                        attr(p, "media_channel", "media_series_title"),
-                        attr(p, "media_title"),
-                    ).ifEmpty { "KPN" },
+                    sub = last?.let { "${it.name} · kanaal ${it.num}" } ?: "KPN",
                     icon = R.drawable.ic_tv_watch, iconBg = 0xFF1565C0.toInt(),
-                    entity = if (p != null) TVPLUS_PLAYER else null, playing = isPlaying(p),
+                    entity = null, playing = isPlaying(p), tv = true,
                 )
             }
             "HEOS Music" -> {
@@ -2921,6 +3160,7 @@ class MainActivity : Activity() {
         }
         nowEntity = info.entity
         nowPlayPause.visibility = if (info.entity != null) View.VISIBLE else View.GONE
+        nowChannelBtn.visibility = if (info.tv) View.VISIBLE else View.GONE
         nowPlayPause.text = if (info.playing) "⏸" else "▶"
     }
 
