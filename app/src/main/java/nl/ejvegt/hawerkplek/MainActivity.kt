@@ -2946,11 +2946,7 @@ class MainActivity : Activity() {
             setPadding(0, 0, 0, dp(12))
         })
 
-        fun send(key: String) {
-            thread {
-                quietService("remote/send_command", JSONObject().put("entity_id", remote).put("command", key))
-            }
-        }
+        fun send(key: String) = sendRemoteKey(remote, key)
 
         fun btn(label: String, key: String?, color: Int = 0xFF2A2A2A.toInt(), round: Boolean = false, size: Float = 16f) =
             TextView(this).apply {
@@ -3134,9 +3130,28 @@ class MainActivity : Activity() {
 
     private fun sendTvKeys(keys: List<String>, label: String) {
         mediaStatus.text = label
-        thread {
-            quietService("remote/send_command", JSONObject().put("entity_id", TVPLUS_REMOTE).put("command", JSONArray(keys)))
+        keys.forEach { sendRemoteKey(TVPLUS_REMOTE, it) }
+    }
+
+    /**
+     * Toetsen gaan één voor één in volgorde naar de box (niet allemaal tegelijk), zodat snel
+     * achter elkaar drukken de box niet overspoelt. Loopt de wachtrij te ver achter, dan vervallen
+     * de oudste toetsen in plaats van dat de box nog seconden blijft doorschuiven.
+     */
+    private val keyQueue = java.util.concurrent.LinkedBlockingDeque<Pair<String, String>>()
+    private val keyWorker = thread(isDaemon = true, name = "toetsen") {
+        while (true) {
+            val (remote, key) = keyQueue.take()
+            quietService(
+                "remote/send_command",
+                JSONObject().put("entity_id", remote).put("command", key).put("delay_secs", 0)
+            )
         }
+    }
+
+    private fun sendRemoteKey(remote: String, key: String) {
+        while (keyQueue.size >= 4) keyQueue.pollFirst()
+        keyQueue.offerLast(remote to key)
     }
 
     private fun watchTv() {
