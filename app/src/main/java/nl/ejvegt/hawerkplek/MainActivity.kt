@@ -2878,8 +2878,8 @@ class MainActivity : Activity() {
             "AUX1" -> {
                 val c = stateOf(CHROMECAST_AUDIO)
                 NowInfo(
-                    title = attr(c, "app_name") ?: "Chromecast Audio",
-                    sub = joinNonEmpty("Chromecast Audio", attr(c, "media_artist"), attr(c, "media_title")),
+                    title = "Chromecast Audio",
+                    sub = joinNonEmpty(attr(c, "media_artist"), attr(c, "media_title")).ifEmpty { "Klaar om te casten" },
                     icon = null, iconBg = 0xFF455A64.toInt(),
                     entity = if (isOn(c)) CHROMECAST_AUDIO else null, playing = isPlaying(c),
                 )
