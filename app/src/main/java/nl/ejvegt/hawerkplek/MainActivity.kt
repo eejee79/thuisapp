@@ -3146,15 +3146,19 @@ class MainActivity : Activity() {
         }
     }
 
+    /** In Kodi deze toetsen via ADB sturen (Android-keycodes): OK, Terug, Pauze. */
+    private val KODI_ADB_KEYS = mapOf("DPAD_CENTER" to 23, "BACK" to 4, "MEDIA_PLAY_PAUSE" to 85)
+
     /** App die nu op de GoogleTV-box openstaat (bijgewerkt door de infobalk). */
     @Volatile private var boxApp: String? = null
 
     private fun sendRemoteKey(remote: String, key: String) {
         while (keyQueue.size >= 4) keyQueue.pollFirst()
-        val item = if (remote == MEDIA_REMOTE && key == "DPAD_CENTER" && boxApp == "org.xbmc.kodi") {
-            // Kodi reageert op OK via de Remote-integratie anders dan op de echte afstandsbediening
-            // (alleen een balk bovenin). Via ADB komt OK binnen zoals een fysieke toets.
-            "androidtv/adb_command" to JSONObject().put("entity_id", MEDIA_ADB).put("command", "input keyevent 23")
+        val kodiCode = KODI_ADB_KEYS[key]
+        val item = if (remote == MEDIA_REMOTE && kodiCode != null && boxApp == "org.xbmc.kodi") {
+            // Kodi reageert op OK/Terug via de Remote-integratie anders dan op de echte afstandsbediening.
+            // Via ADB komen ze binnen zoals een fysieke toets.
+            "androidtv/adb_command" to JSONObject().put("entity_id", MEDIA_ADB).put("command", "input keyevent $kodiCode")
         } else {
             "remote/send_command" to JSONObject().put("entity_id", remote).put("command", key).put("delay_secs", 0)
         }
