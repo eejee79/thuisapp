@@ -161,6 +161,8 @@ class MainActivity : Activity() {
         const val TVPLUS_REMOTE = "remote.kpn_diw7022"
         const val TVPLUS_PLAYER = "media_player.kpn_diw7022"
         const val CHROMECAST_AUDIO = "media_player.chromecastaudio8913"
+        /** Spotify-integratie: weet altijd welk nummer er speelt (de cast-bridge geeft dat niet door). */
+        const val SPOTIFY = "media_player.spotify_ejvegt"
 
         private val C_NPO = 0xFFE65100.toInt()
         private val C_RTL = 0xFFC62828.toInt()
@@ -3295,7 +3297,15 @@ class MainActivity : Activity() {
             }
             "AUX1" -> {
                 val c = stateOf(CHROMECAST_AUDIO)
-                NowInfo(
+                val sp = stateOf(SPOTIFY)
+                // Speelt Spotify? Dan die gegevens gebruiken; anders wat de Chromecast zelf meldt
+                val spActive = sp?.optString("state") in listOf("playing", "paused")
+                if (spActive) NowInfo(
+                    title = "Chromecast Audio",
+                    sub = joinNonEmpty(attr(sp, "media_artist"), attr(sp, "media_title")).ifEmpty { "Spotify" },
+                    icon = null, iconBg = 0xFF455A64.toInt(),
+                    entity = SPOTIFY, playing = isPlaying(sp),
+                ) else NowInfo(
                     title = "Chromecast Audio",
                     sub = joinNonEmpty(attr(c, "media_artist"), attr(c, "media_title")).ifEmpty { "Klaar om te casten" },
                     icon = null, iconBg = 0xFF455A64.toInt(),
