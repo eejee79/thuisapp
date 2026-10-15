@@ -2545,21 +2545,12 @@ class MainActivity : Activity() {
     }
 
     /** Tegel "HEOS radio": kies een zender; receiver gaat aan op HEOS Music en speelt hem af. */
-    private fun heosTile(second: Boolean): View = LinearLayout(this).apply {
-        orientation = LinearLayout.VERTICAL
-        gravity = Gravity.CENTER
-        addView(ImageView(this@MainActivity).apply {
-            setImageResource(R.drawable.ic_radio)
-            layoutParams = LinearLayout.LayoutParams(dp(40), dp(40))
-        })
-        addView(TextView(this@MainActivity).apply {
-            text = "HEOS radio"
-            textSize = 17f
-            setTextColor(Color.WHITE)
-            setTypeface(typeface, Typeface.BOLD)
-            gravity = Gravity.CENTER
-        })
-        setupTile(0xFFC62828.toInt(), second) { chooseStation() }
+    private fun heosTile(second: Boolean): View = ImageView(this).apply {
+        setImageResource(R.drawable.logo_heos)
+        scaleType = ImageView.ScaleType.CENTER_CROP
+        contentDescription = "HEOS radio"
+        clipToOutline = true
+        setupTile(0xFF000000.toInt(), second) { chooseStation() }
     }
 
     private fun chooseStation() {
