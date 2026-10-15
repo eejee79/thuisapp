@@ -19,6 +19,8 @@ import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
 import android.view.Gravity
+import android.view.KeyEvent
+import android.widget.Toast
 import android.view.View
 import android.view.ViewGroup
 import android.view.WindowInsets
@@ -372,12 +374,68 @@ class MainActivity : Activity() {
         super.onResume()
         handler.post(poller)
         handler.post(updatePoller)
+        handler.post(receiverPoller)
+    }
+
+    // ================= Volumetoetsen → receiver =================
+    // Zolang de app open is regelen de volumetoetsen van de telefoon de Denon (als die aan staat).
+
+    @Volatile private var recOn: Boolean? = null
+    @Volatile private var recVol: Double? = null
+    private var volPendingUntil = 0L
+    private var volToast: Toast? = null
+
+    /** Stand van de receiver bijhouden (niet overschrijven vlak na een eigen wijziging). */
+    private fun noteReceiver(on: Boolean, vol: Double) {
+        recOn = on
+        if (!vol.isNaN() && System.currentTimeMillis() > volPendingUntil) recVol = vol
+    }
+
+    private val receiverPoller = object : Runnable {
+        override fun run() {
+            thread {
+                val o = runCatching { JSONObject(haRequest("GET", "/api/states/$DASH_RECEIVER", null)) }.getOrNull()
+                if (o != null) {
+                    val st = o.optString("state")
+                    val on = st != "off" && st != "standby" && st != "unavailable"
+                    noteReceiver(on, o.optJSONObject("attributes")?.optDouble("volume_level", Double.NaN) ?: Double.NaN)
+                }
+            }
+            handler.postDelayed(this, 15_000L)
+        }
+    }
+
+    private val sendVolume = Runnable {
+        val v = recVol ?: return@Runnable
+        thread {
+            quietService("media_player/volume_set", JSONObject().put("entity_id", DASH_RECEIVER).put("volume_level", v))
+        }
+    }
+
+    override fun dispatchKeyEvent(event: KeyEvent): Boolean {
+        val up = event.keyCode == KeyEvent.KEYCODE_VOLUME_UP
+        val down = event.keyCode == KeyEvent.KEYCODE_VOLUME_DOWN
+        if ((up || down) && settingsPanel.visibility != View.VISIBLE && recOn == true && recVol != null) {
+            if (event.action == KeyEvent.ACTION_DOWN) {
+                val v = ((recVol ?: 0.0) + if (up) 0.02 else -0.02).coerceIn(0.0, 1.0)
+                recVol = v
+                volPendingUntil = System.currentTimeMillis() + 4_000
+                volToast?.cancel()
+                volToast = Toast.makeText(this, "Receiver: ${Math.round(v * 100)}%", Toast.LENGTH_SHORT).also { it.show() }
+                // Even wachten zodat ingedrukt houden niet tientallen opdrachten stuurt
+                handler.removeCallbacks(sendVolume)
+                handler.postDelayed(sendVolume, 250)
+            }
+            return true
+        }
+        return super.dispatchKeyEvent(event)
     }
 
     override fun onPause() {
         super.onPause()
         handler.removeCallbacks(poller)
         handler.removeCallbacks(updatePoller)
+        handler.removeCallbacks(receiverPoller)
     }
 
     @Deprecated("Deprecated in Java")
@@ -2131,6 +2189,7 @@ class MainActivity : Activity() {
         sourceButton.isEnabled = on
         volumeSlider.seek.isEnabled = on
         val vol = a.optDouble("volume_level", Double.NaN)
+        noteReceiver(on, vol)
         if (on && !vol.isNaN()) {
             volumeSlider.show(vol * 100)
             if (a.optBoolean("is_volume_muted", false)) receiverCard.sub.append("  ·  gedempt")
