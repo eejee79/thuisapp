@@ -132,8 +132,10 @@ class MainActivity : Activity() {
         const val MEDIA_PLAYER = "media_player.googletv_box"
         /** Dezelfde box via de Android Debug Bridge-integratie: start elke app betrouwbaar. */
         const val MEDIA_ADB = "media_player.android_tv_192_168_50_140"
-        /** De LG-tv in de woonkamer (webOS). */
-        const val MEDIA_TV = "media_player.lg_webos_tv_oled55b46la"
+        /** De LG-tv in de woonkamer (via HomeKit) en zijn MAC-adres voor Wake on LAN. */
+        const val MEDIA_TV = "media_player.lg_webos_tv_5581"
+        const val TV_MAC = "44:27:45:29:30:14"
+        const val TV_BROADCAST = "192.168.50.255"
         /** Ingangen van de Denon (interne namen): apps via de Google TV-box, tv kijken via TV+. */
         const val SOURCE_APPS = "GoogleTV Box"
         const val SOURCE_TV = "KPN Hangplek"
@@ -2566,6 +2568,11 @@ class MainActivity : Activity() {
     private fun prepareWatching(source: String) {
         // LG-tv aan (staat hij uit, dan is hij in HA vaak 'unavailable')
         if (stateOf(MEDIA_TV)?.optString("state") != "on") {
+            // Wekpakket rechtstreeks (werkt ook als de tv helemaal slaapt) + aan via HomeKit
+            quietService(
+                "wake_on_lan/send_magic_packet",
+                JSONObject().put("mac", TV_MAC).put("broadcast_address", TV_BROADCAST)
+            )
             quietService("media_player/turn_on", JSONObject().put("entity_id", MEDIA_TV))
         }
         // Receiver aan en op de juiste bron
