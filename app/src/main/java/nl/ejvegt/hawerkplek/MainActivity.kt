@@ -2103,7 +2103,7 @@ class MainActivity : Activity() {
             )
         }
         volumeSlider.setRange(0.0, 100.0, 1.0)
-        dashList.addView(receiverCard.root)
+        // Receiver-blok staat niet meer op het Dashboard: bron via Multimedia, volume via de volumeknoppen
 
         // Stroom nu + crypto naast elkaar
         val row = LinearLayout(this).apply {
