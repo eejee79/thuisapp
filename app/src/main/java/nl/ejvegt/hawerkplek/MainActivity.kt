@@ -2526,12 +2526,16 @@ class MainActivity : Activity() {
     private lateinit var nowPlayPause: Button
     @Volatile private var nowEntity: String? = null
     private lateinit var nowChannelBtn: TextView
+    private lateinit var nowRemoteBtn: ImageView
+    @Volatile private var nowRemote: String? = null
     @Volatile private var mediaBusy = false
 
     /** Wat de balk toont. [entity] = mediaspeler voor de pauzeknop (null = geen knop). */
     private class NowInfo(
         val title: String, val sub: String, val icon: Int?, val iconBg: Int,
         val entity: String?, val playing: Boolean, val tv: Boolean = false,
+        /** Remote-entiteit voor de afstandsbediening (null = geen knop). */
+        val remote: String? = null,
     )
 
     private fun buildMedia() {
@@ -2599,7 +2603,16 @@ class MainActivity : Activity() {
             visibility = View.GONE
             setOnClickListener { showChannelSheet() }
         }
+        nowRemoteBtn = ImageView(this).apply {
+            setImageResource(R.drawable.ic_remote)
+            contentDescription = "Afstandsbediening"
+            setPadding(dp(10), dp(6), dp(6), dp(6))
+            visibility = View.GONE
+            isClickable = true
+            setOnClickListener { nowRemote?.let { showRemoteSheet(it, it == TVPLUS_REMOTE) } }
+        }
         nowBar.addView(nowChannelBtn)
+        nowBar.addView(nowRemoteBtn)
         nowBar.addView(nowPlayPause)
         mediaList.addView(nowBar)
 
@@ -2914,6 +2927,119 @@ class MainActivity : Activity() {
         dialog.show()
     }
 
+    /** Afstandsbediening voor de GoogleTV-box of de TV+-box (via remote.send_command). */
+    private fun showRemoteSheet(remote: String, kpn: Boolean) {
+        val dialog = Dialog(this)
+        val content = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(20), dp(10), dp(20), dp(22))
+        }
+        content.addView(View(this).apply {
+            background = GradientDrawable().apply { setColor(0xFF555555.toInt()); cornerRadius = dp(2).toFloat() }
+            layoutParams = LinearLayout.LayoutParams(dp(40), dp(4)).apply {
+                gravity = Gravity.CENTER_HORIZONTAL; bottomMargin = dp(12)
+            }
+        })
+        content.addView(TextView(this).apply {
+            text = if (kpn) "TV+ woonkamer" else "GoogleTV Box"
+            textSize = 19f
+            setTextColor(Color.WHITE)
+            setTypeface(typeface, Typeface.BOLD)
+            setPadding(0, 0, 0, dp(12))
+        })
+
+        fun send(key: String) {
+            thread {
+                quietService("remote/send_command", JSONObject().put("entity_id", remote).put("command", key))
+            }
+        }
+
+        fun btn(label: String, key: String?, color: Int = 0xFF2A2A2A.toInt(), round: Boolean = false, size: Float = 16f) =
+            TextView(this).apply {
+                text = label
+                textSize = size
+                setTextColor(Color.WHITE)
+                setTypeface(typeface, Typeface.BOLD)
+                gravity = Gravity.CENTER
+                if (key != null) {
+                    background = GradientDrawable().apply {
+                        setColor(color)
+                        if (round) shape = GradientDrawable.OVAL else cornerRadius = dp(14).toFloat()
+                    }
+                    isClickable = true
+                    setOnClickListener {
+                        alpha = 0.5f
+                        postDelayed({ alpha = 1f }, 150)
+                        send(key)
+                    }
+                }
+            }
+
+        fun row(vararg views: View, height: Int = 52) = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(height))
+                .apply { bottomMargin = dp(10) }
+            views.forEachIndexed { i, v ->
+                v.layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.MATCH_PARENT, 1f)
+                    .apply { if (i > 0) marginStart = dp(10) }
+                addView(v)
+            }
+        }
+
+        // Bovenste rij: terug, home, en bij KPN de gids (anders menu)
+        content.addView(row(
+            btn("↩ Terug", "BACK"),
+            btn("⌂ Home", "HOME"),
+            if (kpn) btn("Gids", "GUIDE", 0xFF1565C0.toInt()) else btn("☰ Menu", "MENU"),
+        ))
+        // Pijltjes met OK in het midden
+        val dark = 0xFF333333.toInt()
+        content.addView(row(btn("", null), btn("▲", "DPAD_UP", dark, size = 22f), btn("", null), height = 64))
+        content.addView(row(
+            btn("◀", "DPAD_LEFT", dark, size = 22f),
+            btn("OK", "DPAD_CENTER", 0xFF18BCF2.toInt(), round = true, size = 18f),
+            btn("▶", "DPAD_RIGHT", dark, size = 22f),
+            height = 64,
+        ))
+        content.addView(row(btn("", null), btn("▼", "DPAD_DOWN", dark, size = 22f), btn("", null), height = 64))
+        // Afspelen
+        content.addView(row(
+            btn("⏪", "MEDIA_REWIND"),
+            btn("⏯", "MEDIA_PLAY_PAUSE"),
+            btn("⏩", "MEDIA_FAST_FORWARD"),
+        ))
+        if (kpn) {
+            content.addView(row(
+                btn("▼ CH−", "CHANNEL_DOWN"),
+                btn("ℹ Info", "INFO"),
+                btn("▲ CH+", "CHANNEL_UP"),
+            ))
+        }
+        content.addView(TextView(this).apply {
+            text = "Volume: met de volumeknoppen van je telefoon"
+            textSize = 12f
+            setTextColor(0xFF888888.toInt())
+            gravity = Gravity.CENTER
+        })
+
+        dialog.setContentView(ScrollView(this).apply { addView(content) })
+        // Volumeknoppen blijven de receiver regelen terwijl de afstandsbediening open is
+        dialog.setOnKeyListener { _, _, event ->
+            if (event.keyCode == KeyEvent.KEYCODE_VOLUME_UP || event.keyCode == KeyEvent.KEYCODE_VOLUME_DOWN) {
+                dispatchKeyEvent(event)
+            } else false
+        }
+        dialog.window?.apply {
+            setBackgroundDrawable(GradientDrawable().apply {
+                setColor(0xFF1E1E1E.toInt())
+                cornerRadii = floatArrayOf(dp(22).toFloat(), dp(22).toFloat(), dp(22).toFloat(), dp(22).toFloat(), 0f, 0f, 0f, 0f)
+            })
+            setGravity(Gravity.BOTTOM)
+            setLayout(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
+        }
+        dialog.show()
+    }
+
     private fun askChannelNumber() {
         val input = EditText(this).apply {
             inputType = InputType.TYPE_CLASS_NUMBER
@@ -3090,7 +3216,7 @@ class MainActivity : Activity() {
                 title = appName ?: "GoogleTV Box",
                 sub = joinNonEmpty("GoogleTV Box", attr(p, "media_title"), attr(p, "media_artist")),
                 icon = app?.logo ?: R.drawable.ic_tv_watch, iconBg = app?.color ?: 0xFF1565C0.toInt(),
-                entity = MEDIA_PLAYER, playing = isPlaying(p),
+                entity = MEDIA_PLAYER, playing = isPlaying(p), remote = MEDIA_REMOTE,
             )
         }
         if (!recOn) return null
@@ -3102,7 +3228,7 @@ class MainActivity : Activity() {
                     title = "TV+ woonkamer",
                     sub = last?.let { "${it.name} · kanaal ${it.num}" } ?: "KPN",
                     icon = R.drawable.ic_tv_watch, iconBg = 0xFF1565C0.toInt(),
-                    entity = null, playing = isPlaying(p), tv = true,
+                    entity = null, playing = isPlaying(p), tv = true, remote = TVPLUS_REMOTE,
                 )
             }
             "HEOS Music" -> {
@@ -3161,6 +3287,8 @@ class MainActivity : Activity() {
         nowEntity = info.entity
         nowPlayPause.visibility = if (info.entity != null) View.VISIBLE else View.GONE
         nowChannelBtn.visibility = if (info.tv) View.VISIBLE else View.GONE
+        nowRemote = info.remote
+        nowRemoteBtn.visibility = if (info.remote != null) View.VISIBLE else View.GONE
         nowPlayPause.text = if (info.playing) "⏸" else "▶"
     }
 
