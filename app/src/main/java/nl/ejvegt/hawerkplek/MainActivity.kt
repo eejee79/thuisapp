@@ -109,6 +109,14 @@ class MainActivity : Activity() {
         const val DASH_HEOS = "media_player.denon_avc_x3800h_2"
         /** Bij bron "HEOS Music" automatisch deze HEOS-favoriet starten (deel van de naam). */
         const val HEOS_RADIO = "joe"
+        /** Zenders op de HEOS-tegel: naam in de lijst → (deel van) de naam van de HEOS-favoriet. */
+        val HEOS_STATIONS = listOf(
+            "Absolut relax" to "absolut",
+            "Sky Radio 90's Hits" to "90",
+            "Sky Radio 101 FM" to "101",
+            "Qmusic" to "qmusic",
+            "JOE Nederland" to "joe",
+        )
         const val DASH_POWER = "sensor.p1_meter_3c39e72f3c6a_active_power"
         const val DASH_PRICE = "sensor.zonneplan_current_electricity_tariff"
         const val DASH_CHARGE_LIMIT = "number.skoda_elroq_charge_limit"
@@ -2209,17 +2217,17 @@ class MainActivity : Activity() {
      * Start de HEOS-favoriet met [HEOS_RADIO] in de naam (JOE Nederland). HEOS hervat bij het
      * omschakelen eerst de vorige bron (bijv. Spotify), dus even wachten, starten en controleren.
      */
-    private fun playHeosRadio() {
-        runOnUiThread { dashStatus.text = "JOE starten…" }
+    private fun playHeosRadio(match: String = HEOS_RADIO, label: String = "JOE", status: TextView = dashStatus) {
+        runOnUiThread { status.text = "$label starten…" }
         thread {
             Thread.sleep(4_000)  // receiver laten omschakelen en HEOS laten hervatten
             val list = stateOf(DASH_HEOS)?.optJSONObject("attributes")?.optJSONArray("source_list")
             val names = list?.let { arr -> (0 until arr.length()).map { arr.optString(it) } } ?: emptyList()
-            val fav = names.firstOrNull { it.contains(HEOS_RADIO, ignoreCase = true) }
+            val fav = names.firstOrNull { it.contains(match, ignoreCase = true) }
             if (fav == null) {
                 runOnUiThread {
-                    dashStatus.text = if (names.isEmpty()) "Geen HEOS-favorieten gevonden op $DASH_HEOS."
-                    else "JOE niet in je HEOS-favorieten. Wel: " + names.take(6).joinToString(", ")
+                    status.text = if (names.isEmpty()) "Geen HEOS-favorieten gevonden op $DASH_HEOS."
+                    else "$label niet in je HEOS-favorieten (herlaad de HEOS-integratie). Wel: " + names.take(6).joinToString(", ")
                 }
                 return@thread
             }
@@ -2230,10 +2238,10 @@ class MainActivity : Activity() {
                 val a = stateOf(DASH_HEOS)?.optJSONObject("attributes")
                 val now = listOf("source", "media_title", "media_artist", "media_album_name", "media_station")
                     .joinToString(" ") { a?.optString(it).orEmpty() }
-                if (now.contains(HEOS_RADIO, ignoreCase = true)) { ok = true; break }
+                if (now.contains(match, ignoreCase = true)) { ok = true; break }
             }
             runOnUiThread {
-                dashStatus.text = if (ok) "$fav wordt afgespeeld" else "JOE kon niet worden gestart (HEOS speelt iets anders)"
+                status.text = if (ok) "$fav wordt afgespeeld" else "$label kon niet worden gestart (HEOS speelt iets anders)"
             }
         }
     }
@@ -2469,7 +2477,7 @@ class MainActivity : Activity() {
         mediaNowCard.header.addView(mediaPowerSwitch)
         mediaList.addView(mediaNowCard.root)
 
-        val tiles = listOf<(Boolean) -> View>({ second -> watchTvTile(second) }) +
+        val tiles = listOf<(Boolean) -> View>({ second -> watchTvTile(second) }, { second -> heosTile(second) }) +
             MEDIA_APPS.map { app -> { second: Boolean -> appTile(app, second) } }
         tiles.chunked(2).forEach { pair ->
             val row = LinearLayout(this).apply {
@@ -2534,6 +2542,39 @@ class MainActivity : Activity() {
             gravity = Gravity.CENTER
         })
         setupTile(0xFF1565C0.toInt(), second) { watchTv() }
+    }
+
+    /** Tegel "HEOS radio": kies een zender; receiver gaat aan op HEOS Music en speelt hem af. */
+    private fun heosTile(second: Boolean): View = LinearLayout(this).apply {
+        orientation = LinearLayout.VERTICAL
+        gravity = Gravity.CENTER
+        addView(ImageView(this@MainActivity).apply {
+            setImageResource(R.drawable.ic_radio)
+            layoutParams = LinearLayout.LayoutParams(dp(40), dp(40))
+        })
+        addView(TextView(this@MainActivity).apply {
+            text = "HEOS radio"
+            textSize = 17f
+            setTextColor(Color.WHITE)
+            setTypeface(typeface, Typeface.BOLD)
+            gravity = Gravity.CENTER
+        })
+        setupTile(0xFFC62828.toInt(), second) { chooseStation() }
+    }
+
+    private fun chooseStation() {
+        AlertDialog.Builder(this)
+            .setTitle("Zender kiezen")
+            .setItems(HEOS_STATIONS.map { it.first }.toTypedArray()) { _, which ->
+                val (name, match) = HEOS_STATIONS[which]
+                mediaStatus.text = "$name: receiver aanzetten…"
+                thread {
+                    prepareReceiver("HEOS Music")
+                    playHeosRadio(match, name, mediaStatus)
+                }
+            }
+            .setNegativeButton("Annuleren", null)
+            .show()
     }
 
     private fun View.setupTile(color: Int, second: Boolean, onTap: () -> Unit) {
@@ -2613,7 +2654,11 @@ class MainActivity : Activity() {
             )
             quietService("media_player/turn_on", JSONObject().put("entity_id", MEDIA_TV))
         }
-        // Receiver aan en op de juiste bron
+        prepareReceiver(source)
+    }
+
+    /** Receiver aan en op de juiste bron. */
+    private fun prepareReceiver(source: String) {
         val rec = stateOf(DASH_RECEIVER)
         if (rec?.optString("state") in listOf(null, "off", "standby", "unavailable")) {
             quietService("media_player/turn_on", JSONObject().put("entity_id", DASH_RECEIVER))
