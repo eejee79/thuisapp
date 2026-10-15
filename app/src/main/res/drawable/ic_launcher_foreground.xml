@@ -1,0 +1,23 @@
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <!-- Thuisbasis: dak + vier tegels (kleuren van de tabbladen), binnen de veilige zone -->
+    <group
+        android:scaleX="0.43"
+        android:scaleY="0.43"
+        android:translateX="11"
+        android:translateY="10.5">
+        <path
+            android:fillColor="#18BCF2"
+            android:strokeColor="#18BCF2"
+            android:strokeWidth="10"
+            android:strokeLineJoin="round"
+            android:pathData="M100,30 L170,86 L30,86 Z" />
+        <path android:fillColor="#E57000" android:pathData="M53,98h34a9,9 0 0 1 9,9v16a9,9 0 0 1 -9,9h-34a9,9 0 0 1 -9,-9v-16a9,9 0 0 1 9,-9z" />
+        <path android:fillColor="#E2001A" android:pathData="M113,98h34a9,9 0 0 1 9,9v16a9,9 0 0 1 -9,9h-34a9,9 0 0 1 -9,-9v-16a9,9 0 0 1 9,-9z" />
+        <path android:fillColor="#26A69A" android:pathData="M53,138h34a9,9 0 0 1 9,9v16a9,9 0 0 1 -9,9h-34a9,9 0 0 1 -9,-9v-16a9,9 0 0 1 9,-9z" />
+        <path android:fillColor="#AB47BC" android:pathData="M113,138h34a9,9 0 0 1 9,9v16a9,9 0 0 1 -9,9h-34a9,9 0 0 1 -9,-9v-16a9,9 0 0 1 9,-9z" />
+    </group>
+</vector>

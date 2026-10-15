@@ -111,7 +111,7 @@ class UpdateCheckJob : JobService() {
         )
         val n = Notification.Builder(this, CHANNEL_ID)
             .setSmallIcon(R.drawable.ic_update)
-            .setContentTitle("Thuisapp $version beschikbaar")
+            .setContentTitle("Thuisbasis $version beschikbaar")
             .setContentText("Tik om bij te werken")
             .setContentIntent(pi)
             .setAutoCancel(true)
