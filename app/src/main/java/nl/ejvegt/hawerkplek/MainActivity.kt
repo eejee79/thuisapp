@@ -105,6 +105,10 @@ class MainActivity : Activity() {
         const val DASH_THERMOSTAT = "climate.tstat_d4b26c_t6_thermostat"
         const val DASH_HEATER = "climate.hombli_smart_convection_heater"
         const val DASH_RECEIVER = "media_player.denon_avc_x3800h"
+        /** Dezelfde Denon via de HEOS-integratie: speelt HEOS-favorieten (radio) af. */
+        const val DASH_HEOS = "media_player.denon_avc_x3800h_2"
+        /** Bij bron "HEOS Music" automatisch deze HEOS-favoriet starten (deel van de naam). */
+        const val HEOS_RADIO = "joe"
         const val DASH_POWER = "sensor.p1_meter_3c39e72f3c6a_active_power"
         const val DASH_PRICE = "sensor.zonneplan_current_electricity_tariff"
         const val DASH_CHARGE_LIMIT = "number.skoda_elroq_charge_limit"
@@ -2201,6 +2205,25 @@ class MainActivity : Activity() {
         }
     }
 
+    /** Start de HEOS-favoriet met [HEOS_RADIO] in de naam (JOE Nederland). */
+    private fun playHeosRadio() {
+        thread {
+            Thread.sleep(1_500)  // receiver eerst laten omschakelen
+            val list = stateOf(DASH_HEOS)?.optJSONObject("attributes")?.optJSONArray("source_list")
+            val fav = list?.let { arr ->
+                (0 until arr.length()).map { arr.optString(it) }.firstOrNull { it.contains(HEOS_RADIO, ignoreCase = true) }
+            }
+            if (fav == null) {
+                runOnUiThread {
+                    dashStatus.text = "JOE niet gevonden: zet JOE Nederland in je HEOS-favorieten (HEOS-app → ster)."
+                }
+                return@thread
+            }
+            quietService("media_player/select_source", JSONObject().put("entity_id", DASH_HEOS).put("source", fav))
+            runOnUiThread { dashStatus.text = "$fav wordt afgespeeld" }
+        }
+    }
+
     /** Naam zoals de app hem toont (bijv. "AUX1" → "Chromecast Audio"). */
     private fun sourceLabel(source: String) =
         RECEIVER_SOURCES.firstOrNull { it.first == source }?.second ?: source
@@ -2225,6 +2248,7 @@ class MainActivity : Activity() {
                     "media_player", "select_source",
                     JSONObject().put("entity_id", DASH_RECEIVER).put("source", denonName)
                 )
+                if (denonName == "HEOS Music") playHeosRadio()
             }
             .setNegativeButton("Annuleren", null)
             .show()
