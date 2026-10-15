@@ -2047,7 +2047,6 @@ class MainActivity : Activity() {
     private lateinit var heaterSwitch: Switch
     private lateinit var receiverCard: DashCard
     private lateinit var receiverSwitch: Switch
-    private lateinit var sourceButton: Button
     private lateinit var volumeSlider: DashSlider
     private lateinit var powerCard: DashCard
     private lateinit var cryptoCard: DashCard
@@ -2093,27 +2092,9 @@ class MainActivity : Activity() {
         // Receiver: aan/uit, bronknop en volume
         receiverCard = DashCard("🔊  Receiver")
         receiverCard.big.textSize = 18f
-        sourceButton = Button(this).apply {
-            text = "Bron ▾"
-            isAllCaps = false
-            setTextColor(Color.WHITE)
-            textSize = 13f
-            minHeight = 0
-            minimumHeight = 0
-            setPadding(dp(14), dp(6), dp(14), dp(6))
-            background = GradientDrawable().apply {
-                setColor(0xFF2E2E2E.toInt())
-                cornerRadius = dp(18).toFloat()
-            }
-            layoutParams = LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT
-            ).apply { marginEnd = dp(8) }
-            setOnClickListener { chooseSource() }
-        }
         receiverSwitch = smallSwitch { on ->
             haService("media_player", if (on) "turn_on" else "turn_off", JSONObject().put("entity_id", DASH_RECEIVER))
         }
-        receiverCard.header.addView(sourceButton)
         receiverCard.header.addView(receiverSwitch)
         volumeSlider = DashSlider(receiverCard.addSeek(), receiverCard.sub, { "Volume ${it.toInt()}%" }) { v ->
             haService(
@@ -2247,19 +2228,16 @@ class MainActivity : Activity() {
         if (o == null) {
             receiverCard.big.text = "Niet bereikbaar"
             receiverSwitch.isEnabled = false
-            sourceButton.isEnabled = false
             volumeSlider.seek.isEnabled = false
             return
         }
         val a = o.optJSONObject("attributes") ?: JSONObject()
         val state = o.optString("state")
         val on = state != "off" && state != "standby" && state != "unavailable"
-        receiverCard.big.text = a.optString("friendly_name", "Receiver")
+        val src = a.optString("source", "")
+        receiverCard.big.text = if (on && src.isNotEmpty()) sourceLabel(src) else a.optString("friendly_name", "Receiver")
         receiverSwitch.isEnabled = state != "unavailable"
         receiverSwitch.isChecked = on
-        val source = a.optString("source", "")
-        sourceButton.text = (if (on && source.isNotEmpty()) sourceLabel(source) else "Bron") + " ▾"
-        sourceButton.isEnabled = on
         volumeSlider.seek.isEnabled = on
         val vol = a.optDouble("volume_level", Double.NaN)
         noteReceiver(on, vol)
@@ -2311,25 +2289,27 @@ class MainActivity : Activity() {
 
     private fun chooseSource() {
         // Alleen de gekozen bronnen, en alleen als de receiver ze ook echt kent
-        val known = dashAttrs[DASH_RECEIVER]?.optJSONArray("source_list")
+        val attrs = recState?.optJSONObject("attributes") ?: dashAttrs[DASH_RECEIVER]
+        val known = attrs?.optJSONArray("source_list")
             ?.let { arr -> (0 until arr.length()).map { arr.optString(it) }.toSet() }
         val options = RECEIVER_SOURCES.filter { known == null || it.first in known }
         if (options.isEmpty()) {
-            dashStatus.text = "Geen van de ingestelde bronnen gevonden op de receiver."
+            mediaStatus.text = "Geen van de ingestelde bronnen gevonden op de receiver."
             return
         }
-        val current = options.indexOfFirst { it.first == dashAttrs[DASH_RECEIVER]?.optString("source") }
+        val current = options.indexOfFirst { it.first == attrs?.optString("source") }
         AlertDialog.Builder(this)
             .setTitle("Bron kiezen")
             .setSingleChoiceItems(options.map { it.second }.toTypedArray(), current) { d, which ->
                 d.dismiss()
                 val (denonName, label) = options[which]
-                sourceButton.text = "$label ▾"
+                nowTitle.text = "$label ▾"
+                mediaStatus.text = "Bron: $label"
                 haService(
                     "media_player", "select_source",
                     JSONObject().put("entity_id", DASH_RECEIVER).put("source", denonName)
                 )
-                if (denonName == "HEOS Music") playHeosRadio()
+                if (denonName == "HEOS Music") playHeosRadio(status = mediaStatus)
             }
             .setNegativeButton("Annuleren", null)
             .show()
@@ -2525,6 +2505,8 @@ class MainActivity : Activity() {
     private lateinit var nowSub: TextView
     private lateinit var nowPlayPause: Button
     @Volatile private var nowEntity: String? = null
+    /** Laatst opgehaalde stand van de receiver (voor de bronkeuze). */
+    @Volatile private var recState: JSONObject? = null
     private lateinit var nowChannelBtn: TextView
     private lateinit var nowRemoteBtn: ImageView
     private lateinit var nowKeyboardBtn: ImageView
@@ -2577,6 +2559,10 @@ class MainActivity : Activity() {
         }
         texts.addView(nowTitle)
         texts.addView(nowSub)
+        // Tik op de naam of het logo: bron van de receiver kiezen
+        texts.isClickable = true
+        texts.setOnClickListener { chooseSource() }
+        nowIcon.setOnClickListener { chooseSource() }
         nowPlayPause = Button(this, null, android.R.attr.borderlessButtonStyle).apply {
             textSize = 22f
             setTextColor(Color.WHITE)
@@ -3268,6 +3254,7 @@ class MainActivity : Activity() {
     /** Bepaalt via de bron van de Denon welk apparaat speelt, en wat. */
     private fun nowPlaying(): NowInfo? {
         val rec = stateOf(DASH_RECEIVER)
+        recState = rec
         val recOn = isOn(rec)
         val source = if (recOn) attr(rec, "source") else null
         val box = stateOf(MEDIA_REMOTE)
@@ -3335,7 +3322,7 @@ class MainActivity : Activity() {
             return
         }
         nowBar.visibility = View.VISIBLE
-        nowTitle.text = info.title
+        nowTitle.text = "${info.title} ▾"
         nowSub.text = info.sub
         nowIcon.background = GradientDrawable().apply {
             setColor(info.iconBg)
