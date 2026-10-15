@@ -2527,6 +2527,7 @@ class MainActivity : Activity() {
     @Volatile private var nowEntity: String? = null
     private lateinit var nowChannelBtn: TextView
     private lateinit var nowRemoteBtn: ImageView
+    private lateinit var nowKeyboardBtn: ImageView
     @Volatile private var nowRemote: String? = null
     @Volatile private var mediaBusy = false
 
@@ -2611,7 +2612,16 @@ class MainActivity : Activity() {
             isClickable = true
             setOnClickListener { nowRemote?.let { showRemoteSheet(it, it == TVPLUS_REMOTE) } }
         }
+        nowKeyboardBtn = ImageView(this).apply {
+            setImageResource(R.drawable.ic_keyboard)
+            contentDescription = "Tekst typen"
+            setPadding(dp(10), dp(6), dp(6), dp(6))
+            visibility = View.GONE
+            isClickable = true
+            setOnClickListener { typeOnTv() }
+        }
         nowBar.addView(nowChannelBtn)
+        nowBar.addView(nowKeyboardBtn)
         nowBar.addView(nowRemoteBtn)
         nowBar.addView(nowPlayPause)
         mediaList.addView(nowBar)
@@ -2990,7 +3000,12 @@ class MainActivity : Activity() {
         content.addView(row(
             btn("↩ Terug", "BACK"),
             btn("⌂ Home", "HOME"),
-            if (kpn) btn("Gids", "GUIDE", 0xFF1565C0.toInt()) else btn("☰ Menu", "MENU"),
+            if (kpn) btn("Gids", "GUIDE", 0xFF1565C0.toInt())
+            else btn("⌨ Typen", null).apply {
+                background = GradientDrawable().apply { setColor(0xFF1565C0.toInt()); cornerRadius = dp(14).toFloat() }
+                isClickable = true
+                setOnClickListener { typeOnTv() }
+            },
         ))
         // Pijltjes met OK in het midden
         val dark = 0xFF333333.toInt()
@@ -3038,6 +3053,57 @@ class MainActivity : Activity() {
             setLayout(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
         }
         dialog.show()
+    }
+
+    /**
+     * Tekst typen op de GoogleTV-box met het toetsenbord van de telefoon. De tekst gaat via ADB
+     * ("input text") naar het zoekveld dat op de tv openstaat.
+     */
+    private fun typeOnTv() {
+        val input = EditText(this).apply {
+            hint = "Bijv. Yellowstone"
+            inputType = InputType.TYPE_CLASS_TEXT
+            imeOptions = android.view.inputmethod.EditorInfo.IME_ACTION_SEARCH
+            setSingleLine()
+        }
+        val box = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(20), dp(8), dp(20), 0)
+            addView(input)
+            addView(TextView(this@MainActivity).apply {
+                text = "Zet op de tv eerst de cursor in het zoekveld."
+                textSize = 12f
+                setTextColor(0xFF888888.toInt())
+                setPadding(0, dp(6), 0, 0)
+            })
+        }
+        val dialog = AlertDialog.Builder(this)
+            .setTitle("Typen op de tv")
+            .setView(box)
+            .setPositiveButton("Zoeken") { _, _ -> sendTextToTv(input.text.toString(), enter = true) }
+            .setNeutralButton("Alleen typen") { _, _ -> sendTextToTv(input.text.toString(), enter = false) }
+            .setNegativeButton("Annuleren", null)
+            .create()
+        input.setOnEditorActionListener { _, _, _ ->
+            sendTextToTv(input.text.toString(), enter = true)
+            dialog.dismiss()
+            true
+        }
+        dialog.window?.setSoftInputMode(android.view.WindowManager.LayoutParams.SOFT_INPUT_STATE_VISIBLE)
+        dialog.show()
+        input.requestFocus()
+    }
+
+    private fun sendTextToTv(text: String, enter: Boolean) {
+        if (text.isBlank()) return
+        // "input text" kent geen spaties (→ %s) en de tekst moet veilig tussen enkele aanhalingstekens
+        val escaped = text.replace("%", "\\%").replace(" ", "%s").replace("'", "'\\''")
+        var cmd = "input text '$escaped'"
+        if (enter) cmd += " && input keyevent 66"
+        mediaStatus.text = "Typen: $text"
+        thread {
+            quietService("androidtv/adb_command", JSONObject().put("entity_id", MEDIA_ADB).put("command", cmd))
+        }
     }
 
     private fun askChannelNumber() {
@@ -3289,6 +3355,8 @@ class MainActivity : Activity() {
         nowChannelBtn.visibility = if (info.tv) View.VISIBLE else View.GONE
         nowRemote = info.remote
         nowRemoteBtn.visibility = if (info.remote != null) View.VISIBLE else View.GONE
+        // Typen kan alleen op de GoogleTV-box (via ADB)
+        nowKeyboardBtn.visibility = if (info.remote == MEDIA_REMOTE) View.VISIBLE else View.GONE
         nowPlayPause.text = if (info.playing) "⏸" else "▶"
     }
 
