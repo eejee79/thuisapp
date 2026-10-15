@@ -3138,20 +3138,27 @@ class MainActivity : Activity() {
      * achter elkaar drukken de box niet overspoelt. Loopt de wachtrij te ver achter, dan vervallen
      * de oudste toetsen in plaats van dat de box nog seconden blijft doorschuiven.
      */
-    private val keyQueue = java.util.concurrent.LinkedBlockingDeque<Pair<String, String>>()
+    private val keyQueue = java.util.concurrent.LinkedBlockingDeque<Pair<String, JSONObject>>()
     private val keyWorker = thread(isDaemon = true, name = "toetsen") {
         while (true) {
-            val (remote, key) = keyQueue.take()
-            quietService(
-                "remote/send_command",
-                JSONObject().put("entity_id", remote).put("command", key).put("delay_secs", 0)
-            )
+            val (service, data) = keyQueue.take()
+            quietService(service, data)
         }
     }
 
+    /** App die nu op de GoogleTV-box openstaat (bijgewerkt door de infobalk). */
+    @Volatile private var boxApp: String? = null
+
     private fun sendRemoteKey(remote: String, key: String) {
         while (keyQueue.size >= 4) keyQueue.pollFirst()
-        keyQueue.offerLast(remote to key)
+        val item = if (remote == MEDIA_REMOTE && key == "DPAD_CENTER" && boxApp == "org.xbmc.kodi") {
+            // Kodi reageert op OK via de Remote-integratie anders dan op de echte afstandsbediening
+            // (alleen een balk bovenin). Via ADB komt OK binnen zoals een fysieke toets.
+            "androidtv/adb_command" to JSONObject().put("entity_id", MEDIA_ADB).put("command", "input keyevent 23")
+        } else {
+            "remote/send_command" to JSONObject().put("entity_id", remote).put("command", key).put("delay_secs", 0)
+        }
+        keyQueue.offerLast(item)
     }
 
     private fun watchTv() {
@@ -3280,6 +3287,7 @@ class MainActivity : Activity() {
         if (source == SOURCE_APPS || (!recOn && isOn(box))) {
             val p = stateOf(MEDIA_PLAYER)
             val appId = attr(p, "app_id") ?: attr(box, "current_activity")
+            boxApp = appId
             val app = MEDIA_APPS.firstOrNull { it.pkg == appId }
             val appName = app?.name ?: attr(p, "app_name") ?: appId
             return NowInfo(
