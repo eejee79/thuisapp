@@ -153,6 +153,8 @@ class MainActivity : Activity() {
         const val SOURCE_TV = "KPN Hangplek"
         /** De TV+-box achter die Denon-ingang ("KPN Hangplek" in HA). */
         const val TVPLUS_REMOTE = "remote.kpn_diw7022"
+        const val TVPLUS_PLAYER = "media_player.kpn_diw7022"
+        const val CHROMECAST_AUDIO = "media_player.chromecastaudio8913"
 
         /** App-tegels: naam, pakketnaam op de Google TV, kleur van de tegel. */
         val MEDIA_APPS = listOf(
@@ -2459,23 +2461,75 @@ class MainActivity : Activity() {
     // Apps starten via de Android TV Remote-integratie: remote.turn_on met activity = pakketnaam.
     // De box gaat daarbij vanzelf aan.
 
-    private lateinit var mediaNowCard: DashCard
-    private lateinit var mediaPowerSwitch: Switch
+    // Informatiebalk bovenaan: welk apparaat er via de Denon speelt en wat er te zien/horen is
+    private lateinit var nowBar: LinearLayout
+    private lateinit var nowIcon: ImageView
+    private lateinit var nowTitle: TextView
+    private lateinit var nowSub: TextView
+    private lateinit var nowPlayPause: Button
+    @Volatile private var nowEntity: String? = null
     @Volatile private var mediaBusy = false
-    private var updatingMedia = false
+
+    /** Wat de balk toont. [entity] = mediaspeler voor de pauzeknop (null = geen knop). */
+    private class NowInfo(
+        val title: String, val sub: String, val icon: Int?, val iconBg: Int,
+        val entity: String?, val playing: Boolean,
+    )
 
     private fun buildMedia() {
-        mediaNowCard = DashCard("📺  GoogleTV Box")
-        mediaNowCard.big.textSize = 20f
-        mediaPowerSwitch = Switch(this).apply {
-            setOnCheckedChangeListener { _, on ->
-                if (!updatingMedia) {
-                    haService("remote", if (on) "turn_on" else "turn_off", JSONObject().put("entity_id", MEDIA_REMOTE))
-                }
+        nowBar = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            setPadding(dp(12), dp(10), dp(8), dp(10))
+            background = GradientDrawable().apply {
+                setColor(0xFF1E1E1E.toInt())
+                cornerRadius = dp(14).toFloat()
+            }
+            layoutParams = LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT
+            ).apply { bottomMargin = dp(12) }
+            visibility = View.GONE
+        }
+        nowIcon = ImageView(this).apply {
+            scaleType = ImageView.ScaleType.CENTER_CROP
+            clipToOutline = true
+            layoutParams = LinearLayout.LayoutParams(dp(56), dp(35)).apply { marginEnd = dp(12) }
+        }
+        val texts = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
+        }
+        nowTitle = TextView(this).apply {
+            textSize = 17f
+            setTextColor(Color.WHITE)
+            setTypeface(typeface, Typeface.BOLD)
+            maxLines = 1
+            ellipsize = android.text.TextUtils.TruncateAt.END
+        }
+        nowSub = TextView(this).apply {
+            textSize = 13f
+            setTextColor(0xFFB0B0B0.toInt())
+            maxLines = 2
+            ellipsize = android.text.TextUtils.TruncateAt.END
+        }
+        texts.addView(nowTitle)
+        texts.addView(nowSub)
+        nowPlayPause = Button(this, null, android.R.attr.borderlessButtonStyle).apply {
+            textSize = 22f
+            setTextColor(Color.WHITE)
+            minWidth = 0
+            minimumWidth = 0
+            setPadding(dp(12), 0, dp(12), 0)
+            setOnClickListener {
+                val e = nowEntity ?: return@setOnClickListener
+                text = if (text.toString() == "⏸") "▶" else "⏸"
+                haService("media_player", "media_play_pause", JSONObject().put("entity_id", e))
             }
         }
-        mediaNowCard.header.addView(mediaPowerSwitch)
-        mediaList.addView(mediaNowCard.root)
+        nowBar.addView(nowIcon)
+        nowBar.addView(texts)
+        nowBar.addView(nowPlayPause)
+        mediaList.addView(nowBar)
 
         val tiles = listOf<(Boolean) -> View>({ second -> watchTvTile(second) }, { second -> heosTile(second) }) +
             MEDIA_APPS.map { app -> { second: Boolean -> appTile(app, second) } }
@@ -2760,46 +2814,114 @@ class MainActivity : Activity() {
         mediaBusy = true
         thread {
             try {
-                val remote = runCatching { JSONObject(haRequest("GET", "/api/states/$MEDIA_REMOTE", null)) }
-                val player = runCatching { JSONObject(haRequest("GET", "/api/states/$MEDIA_PLAYER", null)) }
-                runOnUiThread { showMedia(remote, player) }
+                val info = runCatching { nowPlaying() }
+                runOnUiThread { showNowBar(info) }
             } finally {
                 mediaBusy = false
             }
         }
     }
 
-    private fun showMedia(remote: Result<JSONObject>, player: Result<JSONObject>) {
-        val r = remote.getOrNull()
-        if (r == null) {
-            mediaNowCard.big.text = "Niet bereikbaar"
-            mediaNowCard.sub.text = ""
-            mediaStatus.text = "Kan $MEDIA_REMOTE niet vinden:\n${remote.exceptionOrNull()?.message}"
+    private fun attr(o: JSONObject?, vararg keys: String): String? {
+        val a = o?.optJSONObject("attributes") ?: return null
+        return keys.firstNotNullOfOrNull { k -> a.optString(k).takeIf { it.isNotEmpty() && it != "null" } }
+    }
+
+    private fun isOn(o: JSONObject?) = o != null && o.optString("state") !in listOf("off", "standby", "unavailable", "unknown", "")
+    private fun isPlaying(o: JSONObject?) = o?.optString("state") == "playing"
+    private fun joinNonEmpty(vararg parts: String?) = parts.filterNot { it.isNullOrEmpty() }.joinToString(" · ")
+
+    /** Bepaalt via de bron van de Denon welk apparaat speelt, en wat. */
+    private fun nowPlaying(): NowInfo? {
+        val rec = stateOf(DASH_RECEIVER)
+        val recOn = isOn(rec)
+        val source = if (recOn) attr(rec, "source") else null
+        val box = stateOf(MEDIA_REMOTE)
+
+        // GoogleTV Box (via de Denon, of de box staat aan terwijl de Denon uit is)
+        if (source == SOURCE_APPS || (!recOn && isOn(box))) {
+            val p = stateOf(MEDIA_PLAYER)
+            val appId = attr(p, "app_id") ?: attr(box, "current_activity")
+            val app = MEDIA_APPS.firstOrNull { it.pkg == appId }
+            val appName = app?.name ?: attr(p, "app_name") ?: appId
+            return NowInfo(
+                title = appName ?: "GoogleTV Box",
+                sub = joinNonEmpty("GoogleTV Box", attr(p, "media_title"), attr(p, "media_artist")),
+                icon = app?.logo ?: R.drawable.ic_tv_watch, iconBg = app?.color ?: 0xFF1565C0.toInt(),
+                entity = MEDIA_PLAYER, playing = isPlaying(p),
+            )
+        }
+        if (!recOn) return null
+        return when (source) {
+            SOURCE_TV -> {
+                val p = stateOf(TVPLUS_PLAYER)
+                NowInfo(
+                    title = "TV+ woonkamer",
+                    sub = joinNonEmpty(
+                        "KPN",
+                        attr(p, "media_channel", "media_series_title"),
+                        attr(p, "media_title"),
+                    ).ifEmpty { "KPN" },
+                    icon = R.drawable.ic_tv_watch, iconBg = 0xFF1565C0.toInt(),
+                    entity = if (p != null) TVPLUS_PLAYER else null, playing = isPlaying(p),
+                )
+            }
+            "HEOS Music" -> {
+                val h = stateOf(DASH_HEOS)
+                NowInfo(
+                    title = attr(h, "media_station", "media_album_name") ?: "HEOS",
+                    sub = joinNonEmpty(attr(h, "media_artist"), attr(h, "media_title")).ifEmpty { "HEOS" },
+                    icon = R.drawable.logo_heos, iconBg = 0xFF000000.toInt(),
+                    entity = DASH_HEOS, playing = isPlaying(h),
+                )
+            }
+            "AUX1" -> {
+                val c = stateOf(CHROMECAST_AUDIO)
+                NowInfo(
+                    title = attr(c, "app_name") ?: "Chromecast Audio",
+                    sub = joinNonEmpty("Chromecast Audio", attr(c, "media_artist"), attr(c, "media_title")),
+                    icon = null, iconBg = 0xFF455A64.toInt(),
+                    entity = if (isOn(c)) CHROMECAST_AUDIO else null, playing = isPlaying(c),
+                )
+            }
+            else -> NowInfo(
+                title = sourceLabel(source ?: ""), sub = "via de Denon",
+                icon = null, iconBg = 0xFF455A64.toInt(), entity = null, playing = false,
+            )
+        }
+    }
+
+    private fun showNowBar(result: Result<NowInfo?>) {
+        val info = result.getOrNull()
+        if (result.isFailure) {
+            mediaStatus.text = "Home Assistant niet bereikbaar: ${result.exceptionOrNull()?.message}"
+        } else if (mediaStatus.text.startsWith("Home Assistant niet") || mediaStatus.text.isEmpty()) {
+            mediaStatus.text = haRouteLabel()
+        }
+        if (info == null) {
+            nowBar.visibility = View.GONE
+            nowEntity = null
             return
         }
-        val on = r.optString("state") == "on"
-        updatingMedia = true
-        mediaPowerSwitch.isChecked = on
-        mediaPowerSwitch.isEnabled = r.optString("state") != "unavailable"
-        updatingMedia = false
-
-        val pAttrs = player.getOrNull()?.optJSONObject("attributes")
-        val rAttrs = r.optJSONObject("attributes")
-        val appId = pAttrs?.optString("app_id")?.takeIf { it.isNotEmpty() }
-            ?: rAttrs?.optString("current_activity")?.takeIf { it.isNotEmpty() }
-        val appName = MEDIA_APPS.firstOrNull { it.pkg == appId }?.name
-            ?: pAttrs?.optString("app_name")?.takeIf { it.isNotEmpty() }
-            ?: appId
-        val title = pAttrs?.optString("media_title")?.takeIf { it.isNotEmpty() }
-
-        mediaNowCard.big.text = when {
-            !on -> "Uit"
-            appName != null -> appName
-            else -> "Aan"
+        nowBar.visibility = View.VISIBLE
+        nowTitle.text = info.title
+        nowSub.text = info.sub
+        nowIcon.background = GradientDrawable().apply {
+            setColor(info.iconBg)
+            cornerRadius = dp(8).toFloat()
         }
-        mediaNowCard.sub.text = if (on && title != null) title else if (on) "Tik op een app om hem te openen" else "Tik op een app: de box gaat vanzelf aan"
-        if (mediaStatus.text.startsWith("Kan ")) mediaStatus.text = ""
-        if (mediaStatus.text.isEmpty()) mediaStatus.text = haRouteLabel()
+        if (info.icon != null) {
+            nowIcon.setImageResource(info.icon)
+            nowIcon.scaleType = if (info.icon == R.drawable.ic_tv_watch) ImageView.ScaleType.CENTER_INSIDE
+            else ImageView.ScaleType.CENTER_CROP
+            nowIcon.setPadding(if (info.icon == R.drawable.ic_tv_watch) dp(6) else 0, 0, 0, 0)
+            nowIcon.visibility = View.VISIBLE
+        } else {
+            nowIcon.visibility = View.GONE
+        }
+        nowEntity = info.entity
+        nowPlayPause.visibility = if (info.entity != null) View.VISIBLE else View.GONE
+        nowPlayPause.text = if (info.playing) "⏸" else "▶"
     }
 
     // ================= Hulpjes =================
