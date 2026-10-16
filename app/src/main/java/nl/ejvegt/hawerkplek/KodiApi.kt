@@ -53,12 +53,12 @@ class KodiApi(
     fun ping(): Boolean = runCatching { rpc("JSONRPC.Ping", timeoutMs = 2_000) == "pong" }.getOrDefault(false)
 
     /** Video-bronnen (de mappen die je in Kodi hebt toegevoegd). */
-    fun sources(): List<Entry> {
-        val r = rpc("Files.GetSources", JSONObject().put("media", "video")) as? JSONObject ?: return emptyList()
-        val arr = r.optJSONArray("sources") ?: JSONArray()
-        return (0 until arr.length()).map { arr.getJSONObject(it) }
+    fun sources(): List<Entry> = listOf("video", "files").flatMap { media ->
+        val r = runCatching { rpc("Files.GetSources", JSONObject().put("media", media)) as? JSONObject }.getOrNull()
+        val arr = r?.optJSONArray("sources") ?: JSONArray()
+        (0 until arr.length()).map { arr.getJSONObject(it) }
             .map { Entry(it.optString("label"), it.optString("file"), true, false, 0.0, 0.0) }
-    }
+    }.distinctBy { it.file.trimEnd('/') }
 
     fun list(dir: String): List<Entry> {
         val params = JSONObject().put("directory", dir).put("media", "video")

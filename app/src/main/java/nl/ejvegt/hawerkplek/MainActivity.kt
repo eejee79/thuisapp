@@ -2833,11 +2833,30 @@ class MainActivity : Activity() {
         }
     }
 
-    /** Alleen Series en Movies tonen (Series 2 niet). */
-    private fun kodiRootFilter(all: List<KodiApi.Entry>): List<KodiApi.Entry> {
-        fun norm(l: String) = l.lowercase(NL).replace(Regex("[^a-z0-9]"), "")
-        val visible = all.filter { norm(it.label) in setOf("series", "movies", "films") }
-        return visible.ifEmpty { all.filter { !norm(it.label).startsWith("series2") } }
+    private fun kodiNorm(l: String) = l.lowercase(NL).replace(Regex("[^a-z0-9]"), "")
+    private fun kodiWanted(l: String) = kodiNorm(l) in setOf("series", "movies", "films")
+
+    /**
+     * Alleen Series en Movies tonen (Series 2 niet). Staan ze niet als bron in Kodi, dan zoeken we
+     * ze één en twee niveaus diep in de bronnen (bijv. Download/Series).
+     */
+    private fun kodiRoot(): List<KodiApi.Entry> {
+        val all = kodi.sources()
+        val direct = all.filter { kodiWanted(it.label) }
+        if (direct.isNotEmpty()) return direct
+        val found = ArrayList<KodiApi.Entry>()
+        var level = all
+        repeat(2) {
+            if (found.isNotEmpty()) return@repeat
+            val next = ArrayList<KodiApi.Entry>()
+            level.forEach { src ->
+                runCatching { kodi.list(src.file) }.getOrNull()?.filter { it.isDir }?.forEach { d ->
+                    if (kodiWanted(d.label)) found.add(d) else next.add(d)
+                }
+            }
+            level = next.take(40)
+        }
+        return found.distinctBy { it.file }.ifEmpty { all.filter { !kodiNorm(it.label).startsWith("series2") } }
     }
 
     /** Onderblad-dialoog in dezelfde stijl als Mijn muziek. */
@@ -2976,6 +2995,7 @@ class MainActivity : Activity() {
 
         // Pad als stapel (bestand, naam); leeg = de bronnen. Scrollpositie per map onthouden.
         val stack = ArrayList<Pair<String, String>>()
+        var showAll = false
         val scrollPos = HashMap<String, Int>()
         var seq = 0
         lateinit var load: () -> Unit
@@ -2993,7 +3013,7 @@ class MainActivity : Activity() {
             firstRow.clear()
             thread {
                 val r = runCatching {
-                    if (dir == null) kodiRootFilter(kodi.sources()) else kodi.list(dir.first)
+                    if (dir == null) (if (showAll) kodi.sources() else kodiRoot()) else kodi.list(dir.first)
                 }
                 val playing = if (dir == null) runCatching { kodi.state() }.getOrNull() else null
                 runOnUiThread {
@@ -3008,6 +3028,9 @@ class MainActivity : Activity() {
                         return@runOnUiThread
                     }
                     if (dir != null) list.addView(sheetRow("←   Terug") { go(null) })
+                    if (dir == null) list.addView(sheetRow(if (showAll) "↺   Alleen Series en Movies" else "☰   Alle bronnen in Kodi tonen") {
+                        showAll = !showAll; load()
+                    })
                     playing?.let { st ->
                         list.addView(sheetRow("💬   Ondertitels & audio · ${st.title}", 0xFF17B2E7.toInt(), dark = true) {
                             showKodiSubsSheet()
