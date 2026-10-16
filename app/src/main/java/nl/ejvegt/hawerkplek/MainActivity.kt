@@ -174,6 +174,7 @@ class MainActivity : Activity() {
         const val KODI_PKG = "org.xbmc.kodi"
         private const val KEY_TILE_ORDER = "tile_order"
         private const val KEY_ZONE_UP = "zone_up"
+        private const val KEY_TMDB = "tmdb_key"
         const val KODI_DEFAULT_HOST = "192.168.50.140"
         private const val KEY_KODI_HOST = "kodi_host"
         private const val KEY_KODI_PORT = "kodi_port"
@@ -340,6 +341,10 @@ class MainActivity : Activity() {
     private lateinit var kodiPassInput: EditText
     private lateinit var kodiStatus: TextView
     private lateinit var osKeyInput: EditText
+    private lateinit var tmdbSection: View
+    private lateinit var tmdbKeyInput: EditText
+    private lateinit var tmdbStatus: TextView
+    private val tmdb by lazy { TmdbApi { prefs().getString(KEY_TMDB, "") ?: "" } }
     private lateinit var osUserInput: EditText
     private lateinit var osPassInput: EditText
     private lateinit var osLangInput: EditText
@@ -444,6 +449,9 @@ class MainActivity : Activity() {
         kodiPassInput = findViewById(R.id.kodiPassInput)
         kodiStatus = findViewById(R.id.kodiStatus)
         osKeyInput = findViewById(R.id.osKeyInput)
+        tmdbSection = findViewById(R.id.tmdbSection)
+        tmdbKeyInput = findViewById(R.id.tmdbKeyInput)
+        tmdbStatus = findViewById(R.id.tmdbStatus)
         osUserInput = findViewById(R.id.osUserInput)
         osPassInput = findViewById(R.id.osPassInput)
         osLangInput = findViewById(R.id.osLangInput)
@@ -485,6 +493,8 @@ class MainActivity : Activity() {
         findViewById<Button>(R.id.saveMusic).setOnClickListener { saveMusicSettings() }
         menuItem(R.id.menuKodi, R.drawable.logo_kodi, PAGE_KODI)
         findViewById<Button>(R.id.saveKodi).setOnClickListener { saveKodiSettings() }
+        menuItem(R.id.menuTmdb, R.drawable.ic_search, PAGE_TMDB)
+        findViewById<Button>(R.id.saveTmdb).setOnClickListener { saveTmdbSettings() }
         findViewById<Button>(R.id.spLoginButton).setOnClickListener { spotifyLogin() }
         findViewById<Button>(R.id.spLogoutButton).setOnClickListener {
             spotify.logout()
@@ -609,7 +619,7 @@ class MainActivity : Activity() {
         if (settingsPanel.visibility == View.VISIBLE) {
             when (settingsPage) {
                 PAGE_MENU -> showSettings(false)
-                PAGE_HA, PAGE_PVE, PAGE_FRITZ, PAGE_SPOTIFY, PAGE_MUSIC, PAGE_KODI -> showSettingsPage(PAGE_API)
+                PAGE_HA, PAGE_PVE, PAGE_FRITZ, PAGE_SPOTIFY, PAGE_MUSIC, PAGE_KODI, PAGE_TMDB -> showSettingsPage(PAGE_API)
                 else -> showSettingsPage(PAGE_MENU)
             }
         } else {
@@ -672,6 +682,7 @@ class MainActivity : Activity() {
     private val PAGE_SPOTIFY = 6
     private val PAGE_MUSIC = 7
     private val PAGE_KODI = 8
+    private val PAGE_TMDB = 9
     private var settingsPage = PAGE_MENU
 
     /** Instellingen: menu, of één van de twee onderdelen. */
@@ -685,6 +696,7 @@ class MainActivity : Activity() {
         spotifySection.visibility = if (page == PAGE_SPOTIFY) View.VISIBLE else View.GONE
         musicSection.visibility = if (page == PAGE_MUSIC) View.VISIBLE else View.GONE
         kodiSection.visibility = if (page == PAGE_KODI) View.VISIBLE else View.GONE
+        tmdbSection.visibility = if (page == PAGE_TMDB) View.VISIBLE else View.GONE
         updateSection.visibility = if (page == PAGE_UPDATE) View.VISIBLE else View.GONE
         settingsTitle.text = when (page) {
             PAGE_API -> "API's"
@@ -694,8 +706,13 @@ class MainActivity : Activity() {
             PAGE_SPOTIFY -> "Spotify"
             PAGE_MUSIC -> "Muziek (netwerkmap)"
             PAGE_KODI -> "Kodi"
+            PAGE_TMDB -> "Films & series (TMDB)"
             PAGE_UPDATE -> "Updates"
             else -> "Instellingen"
+        }
+        if (page == PAGE_TMDB) {
+            tmdbKeyInput.setText(prefs().getString(KEY_TMDB, ""))
+            tmdbStatus.text = ""
         }
         if (page == PAGE_KODI) {
             kodiHostInput.setText(prefs().getString(KEY_KODI_HOST, KODI_DEFAULT_HOST))
@@ -2794,6 +2811,7 @@ class MainActivity : Activity() {
             "heos" to { second -> heosTile(second) },
             "spotify" to { second -> spotifyTile(second) },
             "music" to { second -> musicTile(second) },
+            "search" to { second -> searchTile(second) },
         ) + MEDIA_APPS.map { app -> app.pkg to { second: Boolean -> appTile(app, second) } }
 
     private fun tileOrder(): List<String> {
@@ -2930,6 +2948,293 @@ class MainActivity : Activity() {
             }
             .setNegativeButton("Annuleren", null)
             .show()
+    }
+
+    // ================= Films & series zoeken (TMDB) en op de tv openen =================
+
+    private fun saveTmdbSettings() {
+        prefs().edit().putString(KEY_TMDB, tmdbKeyInput.text.toString().trim()).apply()
+        tmdbStatus.text = "Testen…"
+        thread {
+            val r = runCatching { tmdb.trending().size }
+            runOnUiThread {
+                tmdbStatus.text = r.exceptionOrNull()?.let { "Lukt niet: ${it.message}" } ?: "Werkt ✓"
+            }
+        }
+    }
+
+    private fun searchTile(second: Boolean): View = LinearLayout(this).apply {
+        orientation = LinearLayout.VERTICAL
+        gravity = Gravity.CENTER
+        addView(ImageView(this@MainActivity).apply {
+            setImageResource(R.drawable.ic_search)
+            layoutParams = LinearLayout.LayoutParams(dp(28), dp(28))
+        })
+        addView(TextView(this@MainActivity).apply {
+            text = "Wat kijken?"
+            textSize = 13f
+            setTextColor(Color.WHITE)
+            setTypeface(typeface, Typeface.BOLD)
+            gravity = Gravity.CENTER
+        })
+        setupTile(0xFF01414F.toInt(), second) { showTitleSearch() }
+    }
+
+    private fun showTitleSearch() {
+        if (prefs().getString(KEY_TMDB, "").isNullOrBlank()) {
+            AlertDialog.Builder(this)
+                .setTitle("Wat kijken?")
+                .setMessage("Hiervoor is een gratis sleutel van TMDB (themoviedb.org) nodig. Vul die in via ⚙ → API's → Films & series.")
+                .setPositiveButton("Naar instellingen") { _, _ -> showSettings(true); showSettingsPage(PAGE_TMDB) }
+                .setNegativeButton("Annuleren", null)
+                .show()
+            return
+        }
+        val content = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(16), dp(12), dp(16), dp(16))
+        }
+        val dialog = sheetDialog(content)
+        val input = EditText(this).apply {
+            hint = "Zoek een film of serie"
+            setHintTextColor(0xFF777777.toInt())
+            setTextColor(Color.WHITE)
+            setSingleLine()
+            textSize = 17f
+        }
+        val status = TextView(this).apply {
+            textSize = 13f
+            setTextColor(0xFFAAAAAA.toInt())
+            setPadding(0, dp(4), 0, dp(8))
+        }
+        val list = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        content.addView(input)
+        content.addView(status)
+        content.addView(ScrollView(this).apply {
+            addView(list)
+            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(500))
+        })
+        var seq = 0
+        fun show(items: List<TmdbApi.Title>, header: String) {
+            list.removeAllViews()
+            status.text = header
+            items.forEach { t ->
+                val row = LinearLayout(this).apply {
+                    orientation = LinearLayout.HORIZONTAL
+                    setPadding(dp(8), dp(8), dp(8), dp(8))
+                    background = GradientDrawable().apply { setColor(0xFF2A2A2A.toInt()); cornerRadius = dp(10).toFloat() }
+                    layoutParams = LinearLayout.LayoutParams(
+                        ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT
+                    ).apply { bottomMargin = dp(6) }
+                    isClickable = true
+                    setOnClickListener { showTitleDetails(t) }
+                }
+                val img = ImageView(this).apply {
+                    scaleType = ImageView.ScaleType.CENTER_CROP
+                    clipToOutline = true
+                    background = GradientDrawable().apply { setColor(0xFF1A1A1A.toInt()); cornerRadius = dp(6).toFloat() }
+                    layoutParams = LinearLayout.LayoutParams(dp(54), dp(80)).apply { marginEnd = dp(12) }
+                }
+                t.poster?.let { loadImage(img, it) }
+                row.addView(img)
+                row.addView(LinearLayout(this).apply {
+                    orientation = LinearLayout.VERTICAL
+                    layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
+                    addView(TextView(this@MainActivity).apply {
+                        text = t.name + if (t.year.isNotEmpty()) " (${t.year})" else ""
+                        textSize = 15f
+                        setTextColor(Color.WHITE)
+                        setTypeface(typeface, Typeface.BOLD)
+                        maxLines = 2
+                        ellipsize = android.text.TextUtils.TruncateAt.END
+                    })
+                    addView(TextView(this@MainActivity).apply {
+                        text = (if (t.type == "tv") "Serie" else "Film") +
+                            (if (t.rating > 0) "  ·  ★ " + String.format(NL, "%.1f", t.rating) else "")
+                        textSize = 12f
+                        setTextColor(0xFF4FC3F7.toInt())
+                    })
+                    addView(TextView(this@MainActivity).apply {
+                        text = t.overview
+                        textSize = 12f
+                        setTextColor(0xFFAAAAAA.toInt())
+                        maxLines = 2
+                        ellipsize = android.text.TextUtils.TruncateAt.END
+                    })
+                })
+                list.addView(row)
+            }
+        }
+        fun load(q: String) {
+            val my = ++seq
+            status.text = "Zoeken…"
+            thread {
+                val r = runCatching { if (q.isBlank()) tmdb.trending() else tmdb.search(q) }
+                runOnUiThread {
+                    if (my != seq) return@runOnUiThread
+                    val items = r.getOrNull()
+                    if (items == null) { status.text = "Mislukt: ${r.exceptionOrNull()?.message}"; return@runOnUiThread }
+                    show(items, if (q.isBlank()) "Populair deze week" else if (items.isEmpty()) "Niets gevonden" else "${items.size} resultaten")
+                }
+            }
+        }
+        // Zoeken tijdens het typen (kort wachten tot je even stopt)
+        val typed = Runnable { load(input.text.toString().trim()) }
+        input.addTextChangedListener(object : android.text.TextWatcher {
+            override fun beforeTextChanged(s: CharSequence?, a: Int, b: Int, c: Int) {}
+            override fun onTextChanged(s: CharSequence?, a: Int, b: Int, c: Int) {}
+            override fun afterTextChanged(s: android.text.Editable?) {
+                handler.removeCallbacks(typed)
+                handler.postDelayed(typed, 400)
+            }
+        })
+        dialog.setOnDismissListener { handler.removeCallbacks(typed) }
+        dialog.show()
+        load("")
+    }
+
+    /** Welke van mijn app-tegels hoort bij deze aanbieder (Netflix, Prime, …)? */
+    private fun appForProvider(name: String): MediaApp? {
+        val n = name.lowercase(NL)
+        return MEDIA_APPS.firstOrNull { app ->
+            val a = app.name.lowercase(NL)
+            when {
+                "netflix" in n -> a == "netflix"
+                "prime" in n || "amazon" in n -> a.startsWith("prime")
+                "viaplay" in n -> a == "viaplay"
+                "nlziet" in n || "nl ziet" in n -> a == "nlziet"
+                "youtube" in n -> a == "youtube"
+                else -> false
+            }
+        }
+    }
+
+    private fun showTitleDetails(t: TmdbApi.Title) {
+        val content = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(18), dp(14), dp(18), dp(18))
+        }
+        val dialog = sheetDialog(content)
+        content.addView(LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            val img = ImageView(this@MainActivity).apply {
+                scaleType = ImageView.ScaleType.CENTER_CROP
+                clipToOutline = true
+                background = GradientDrawable().apply { setColor(0xFF1A1A1A.toInt()); cornerRadius = dp(8).toFloat() }
+                layoutParams = LinearLayout.LayoutParams(dp(100), dp(150)).apply { marginEnd = dp(14) }
+            }
+            t.poster?.let { loadImage(img, it) }
+            addView(img)
+            addView(LinearLayout(this@MainActivity).apply {
+                orientation = LinearLayout.VERTICAL
+                layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
+                addView(TextView(this@MainActivity).apply {
+                    text = t.name
+                    textSize = 19f
+                    setTextColor(Color.WHITE)
+                    setTypeface(typeface, Typeface.BOLD)
+                })
+                addView(TextView(this@MainActivity).apply {
+                    text = listOf(if (t.type == "tv") "Serie" else "Film", t.year,
+                        if (t.rating > 0) "★ " + String.format(NL, "%.1f", t.rating) else "").filter { it.isNotEmpty() }.joinToString("  ·  ")
+                    textSize = 13f
+                    setTextColor(0xFF4FC3F7.toInt())
+                    setPadding(0, dp(2), 0, dp(6))
+                })
+                addView(TextView(this@MainActivity).apply {
+                    text = t.overview.ifEmpty { "Geen beschrijving." }
+                    textSize = 13f
+                    setTextColor(0xFFCCCCCC.toInt())
+                    maxLines = 7
+                    ellipsize = android.text.TextUtils.TruncateAt.END
+                })
+            })
+        })
+        val provHeader = TextView(this).apply {
+            text = "Te zien op…"
+            textSize = 13f
+            setTextColor(0xFF4FC3F7.toInt())
+            setTypeface(typeface, Typeface.BOLD)
+            setPadding(dp(2), dp(16), 0, dp(8))
+        }
+        val provList = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        content.addView(provHeader)
+        content.addView(provList)
+        content.addView(sheetRow("🔍   Zoeken op de tv (Google TV)", 0xFF18BCF2.toInt(), dark = true) {
+            dialog.dismiss(); searchOnTv(t.name, null)
+        })
+        dialog.show()
+        thread {
+            val r = runCatching { tmdb.providers(t) }
+            runOnUiThread {
+                val ps = r.getOrNull()
+                if (ps == null) { provHeader.text = "Kon niet ophalen waar het te zien is"; return@runOnUiThread }
+                if (ps.isEmpty()) { provHeader.text = "Niet te zien bij een streamingdienst in Nederland"; return@runOnUiThread }
+                // Eerst wat je via je eigen apps kunt kijken
+                ps.sortedBy { if (appForProvider(it.name) != null) 0 else 1 }.forEach { p ->
+                    val app = appForProvider(p.name)
+                    val row = LinearLayout(this).apply {
+                        orientation = LinearLayout.HORIZONTAL
+                        gravity = Gravity.CENTER_VERTICAL
+                        setPadding(dp(10), dp(8), dp(12), dp(8))
+                        background = GradientDrawable().apply {
+                            setColor(if (app != null) 0xFF1F3A2A.toInt() else 0xFF2A2A2A.toInt()); cornerRadius = dp(10).toFloat()
+                        }
+                        layoutParams = LinearLayout.LayoutParams(
+                            ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT
+                        ).apply { bottomMargin = dp(6) }
+                    }
+                    val logo = ImageView(this).apply {
+                        clipToOutline = true
+                        background = GradientDrawable().apply { setColor(0xFF111111.toInt()); cornerRadius = dp(6).toFloat() }
+                        layoutParams = LinearLayout.LayoutParams(dp(34), dp(34)).apply { marginEnd = dp(12) }
+                    }
+                    p.logo?.let { loadImage(logo, it) }
+                    row.addView(logo)
+                    row.addView(TextView(this).apply {
+                        text = "${p.name}  ·  ${p.kind}"
+                        textSize = 14f
+                        setTextColor(Color.WHITE)
+                        layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
+                    })
+                    if (app != null) {
+                        row.addView(TextView(this).apply {
+                            text = "▶ Open"
+                            textSize = 14f
+                            setTextColor(0xFF7CFC9A.toInt())
+                            setTypeface(typeface, Typeface.BOLD)
+                        })
+                        row.isClickable = true
+                        row.setOnClickListener { dialog.dismiss(); searchOnTv(t.name, app) }
+                    }
+                    provList.addView(row)
+                }
+            }
+        }
+    }
+
+    /**
+     * Titel op de tv zoeken: tv, receiver en box aan; dan via ADB het zoeken van Google TV met de titel.
+     * Met [app]: eerst die app openen (zo zie je meteen de juiste dienst), daarna zoeken.
+     */
+    private fun searchOnTv(title: String, app: MediaApp?) {
+        val q = title.replace(Regex("[\\\\'\"`$;&|<>()]"), " ").replace(Regex("\\s+"), " ").trim()
+        mediaStatus.text = "\"$title\" zoeken op de tv…"
+        thread { prepareWatching(SOURCE_APPS) }
+        thread {
+            quietService("remote/turn_on", JSONObject().put("entity_id", MEDIA_REMOTE))
+            Thread.sleep(1_500)
+            val cmd = if (app?.pkg == "com.netflix.ninja")
+                // Netflix: rechtstreeks het zoekscherm van Netflix met de titel
+                "am start -a android.intent.action.VIEW -d 'https://www.netflix.com/search?q=${Uri.encode(q)}' com.netflix.ninja"
+            else
+                "am start -a android.search.action.GLOBAL_SEARCH --es query '$q'"
+            quietService("androidtv/adb_command", JSONObject().put("entity_id", MEDIA_ADB).put("command", cmd))
+            runOnUiThread {
+                mediaStatus.text = "\"$title\" staat klaar op de tv"
+                handler.postDelayed({ refreshMedia() }, 2_500)
+            }
+        }
     }
 
     // ================= Kodi: bibliotheek bladeren, afspelen, ondertitels =================
