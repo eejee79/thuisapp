@@ -17,6 +17,8 @@ class KodiApi(
     class Entry(
         val label: String, val file: String, val isDir: Boolean,
         val played: Boolean, val resumeSec: Double, val totalSec: Double,
+        /** false = Kodi gaf geen kijkstatus mee in de maplijst (dan los opvragen). */
+        val hasInfo: Boolean = true,
     )
 
     class Stream(val index: Int, val label: String)
@@ -71,8 +73,19 @@ class KodiApi(
             Entry(
                 it.optString("label"), it.optString("file"), it.optString("filetype") == "directory",
                 it.optInt("playcount") > 0, res?.optDouble("position") ?: 0.0, res?.optDouble("total") ?: 0.0,
+                it.has("playcount") || it.has("resume"),
             )
         }
+    }
+
+    /** Kijkstatus van één bestand (ook als het niet in de bibliotheek staat). */
+    fun details(e: Entry): Entry {
+        val r = rpc("Files.GetFileDetails", JSONObject().put("file", e.file).put("media", "video")
+            .put("properties", JSONArray().put("playcount").put("resume"))) as? JSONObject
+        val d = r?.optJSONObject("filedetails") ?: return e
+        val res = d.optJSONObject("resume")
+        return Entry(e.label, e.file, e.isDir, d.optInt("playcount") > 0,
+            res?.optDouble("position") ?: 0.0, res?.optDouble("total") ?: 0.0, true)
     }
 
     fun play(file: String, resume: Boolean) {

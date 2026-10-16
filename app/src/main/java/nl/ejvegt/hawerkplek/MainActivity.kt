@@ -3060,26 +3060,80 @@ class MainActivity : Activity() {
                             entries.count { it.isDir }.takeIf { it > 0 }?.let { "$it mappen" },
                             files.takeIf { it > 0 }?.let { "$it video's" },
                         ).joinToString(" · ").ifEmpty { "Lege map" }
+                    val toCheck = ArrayList<Pair<KodiApi.Entry, (KodiApi.Entry) -> Unit>>()
                     entries.forEach { e ->
-                        val mark = when {
-                            e.isDir -> "📁"
-                            e.played -> "✓"
-                            e.resumeSec > 0 -> "◐"
-                            else -> "🎬"
-                        }
-                        val extra = if (!e.isDir && e.resumeSec > 0 && !e.played) "  (${fmtSec(e.resumeSec)})" else ""
                         val label = if (e.isDir) e.label else e.label.substringBeforeLast('.').ifEmpty { e.label }
                         val pathHint = if (dir == null) "\n" + e.file.replace(Regex("//[^/@]*@"), "//") else ""
-                        val v = sheetRow("$mark   $label$extra$pathHint", if (e.played) 0xFF242424.toInt() else 0xFF2A2A2A.toInt()) {
-                            if (e.isDir) go(e.file to e.label) else kodiPlay(e) { dialog.dismiss() }
+                        var cur = e
+                        val labelView = TextView(this).apply {
+                            textSize = 15f
+                            setTextColor(Color.WHITE)
+                            maxLines = 2
+                            ellipsize = android.text.TextUtils.TruncateAt.END
+                            layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
                         }
-                        if (e.played) (v as TextView).setTextColor(0xFF9E9E9E.toInt())
+                        val badge = TextView(this).apply {
+                            textSize = 12f
+                            setTypeface(typeface, Typeface.BOLD)
+                            setPadding(dp(8), dp(3), dp(8), dp(3))
+                            visibility = View.GONE
+                            layoutParams = LinearLayout.LayoutParams(
+                                ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT
+                            ).apply { marginStart = dp(8) }
+                        }
+                        val bg = GradientDrawable().apply { setColor(0xFF2A2A2A.toInt()); cornerRadius = dp(10).toFloat() }
+                        val v = LinearLayout(this).apply {
+                            orientation = LinearLayout.HORIZONTAL
+                            gravity = Gravity.CENTER_VERTICAL
+                            setPadding(dp(12), dp(14), dp(12), dp(14))
+                            background = bg
+                            layoutParams = LinearLayout.LayoutParams(
+                                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT
+                            ).apply { bottomMargin = dp(6) }
+                            isClickable = true
+                            addView(labelView)
+                            addView(badge)
+                            setOnClickListener { if (cur.isDir) go(cur.file to cur.label) else kodiPlay(cur) { dialog.dismiss() } }
+                        }
+                        fun show(x: KodiApi.Entry) {
+                            cur = x
+                            labelView.text = "${if (x.isDir) "📁" else "🎬"}   $label$pathHint"
+                            labelView.setTextColor(if (x.played) 0xFF9E9E9E.toInt() else Color.WHITE)
+                            bg.setColor(if (x.played) 0xFF232323.toInt() else 0xFF2A2A2A.toInt())
+                            when {
+                                x.isDir -> badge.visibility = View.GONE
+                                x.played -> {
+                                    badge.text = "✓ Bekeken"
+                                    badge.setTextColor(Color.BLACK)
+                                    badge.background = GradientDrawable().apply { setColor(0xFF4CAF50.toInt()); cornerRadius = dp(10).toFloat() }
+                                    badge.visibility = View.VISIBLE
+                                }
+                                x.resumeSec > 0 -> {
+                                    val pct = if (x.totalSec > 0) " · ${(x.resumeSec * 100 / x.totalSec).toInt()}%" else ""
+                                    badge.text = "◐ ${fmtSec(x.resumeSec)}$pct"
+                                    badge.setTextColor(Color.BLACK)
+                                    badge.background = GradientDrawable().apply { setColor(0xFFFFB300.toInt()); cornerRadius = dp(10).toFloat() }
+                                    badge.visibility = View.VISIBLE
+                                }
+                                else -> badge.visibility = View.GONE
+                            }
+                        }
+                        show(e)
+                        if (!e.isDir && !e.hasInfo) toCheck.add(e to { x: KodiApi.Entry -> show(x) })
                         list.addView(v)
                         val c = label.firstOrNull()?.uppercaseChar()
                         firstRow.putIfAbsent(if (c != null && c in 'A'..'Z') c.toString() else "#", v)
                     }
                     val y = scrollPos[dir?.first ?: ""] ?: 0
                     scroll.post { scroll.scrollTo(0, y) }
+                    // Kijkstatus los ophalen als Kodi die niet in de maplijst meegaf
+                    if (toCheck.isNotEmpty()) thread {
+                        for ((entry, update) in toCheck.take(150)) {
+                            if (my != seq || !dialog.isShowing) break
+                            val d = runCatching { kodi.details(entry) }.getOrNull() ?: continue
+                            if (d.played || d.resumeSec > 0) runOnUiThread { if (my == seq) update(d) }
+                        }
+                    }
                 }
             }
         }
