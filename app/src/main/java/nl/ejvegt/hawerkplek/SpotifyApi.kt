@@ -31,7 +31,10 @@ class SpotifyApi(private val context: Context) {
             "user-read-currently-playing playlist-read-private user-library-read user-read-private"
     }
 
-    class Item(val name: String, val sub: String, val uri: String, val type: String, val date: String = "")
+    class Item(
+        val name: String, val sub: String, val uri: String, val type: String,
+        val date: String = "", val image: String? = null,
+    )
     class Device(val id: String, val name: String, val type: String, val active: Boolean)
     class ApiException(val code: Int, message: String) : IOException(message)
 
@@ -138,6 +141,19 @@ class SpotifyApi(private val context: Context) {
         return text
     }
 
+    /** Kleinste afbeelding van minstens 64 px (lijstjes hebben geen grote nodig). */
+    private fun img(o: JSONObject?): String? {
+        val arr = o?.optJSONArray("images") ?: return null
+        var best: String? = null
+        var bestW = Int.MAX_VALUE
+        for (i in 0 until arr.length()) {
+            val im = arr.optJSONObject(i) ?: continue
+            val w = im.optInt("width", 300).let { if (it == 0) 300 else it }
+            if (w >= 64 && w < bestW) { bestW = w; best = im.optString("url") }
+        }
+        return best ?: arr.optJSONObject(0)?.optString("url")
+    }
+
     private fun names(arr: JSONArray?): String =
         (0 until (arr?.length() ?: 0)).joinToString(", ") { arr!!.getJSONObject(it).optString("name") }
 
@@ -153,18 +169,20 @@ class SpotifyApi(private val context: Context) {
                 f(o)?.let { out.add(it) }
             }
         }
-        each("artists") { Item(it.optString("name"), "Artiest", it.optString("uri"), "artist") }
+        each("artists") { Item(it.optString("name"), "Artiest", it.optString("uri"), "artist", image = img(it)) }
         each("tracks") {
-            Item(it.optString("name"), names(it.optJSONArray("artists")), it.optString("uri"), "track")
+            Item(it.optString("name"), names(it.optJSONArray("artists")), it.optString("uri"), "track",
+                image = img(it.optJSONObject("album")))
         }
         each("albums") {
-            Item(it.optString("name"), "Album · " + names(it.optJSONArray("artists")), it.optString("uri"), "album")
+            Item(it.optString("name"), "Album · " + names(it.optJSONArray("artists")), it.optString("uri"), "album",
+                image = img(it))
         }
         each("playlists") {
             Item(
                 it.optString("name"),
                 "Playlist · " + (it.optJSONObject("owner")?.optString("display_name") ?: ""),
-                it.optString("uri"), "playlist",
+                it.optString("uri"), "playlist", image = img(it),
             )
         }
         return out
@@ -188,7 +206,7 @@ class SpotifyApi(private val context: Context) {
                 val kind = o.optString("album_group").ifEmpty { o.optString("album_type") }
                 val type = if (kind == "album") "album" else "single"
                 val label = if (type == "album") "Album" else if (o.optInt("total_tracks") > 3) "EP" else "Single"
-                out.add(Item(o.optString("name"), "${date.take(4)} · $label", o.optString("uri"), type, date))
+                out.add(Item(o.optString("name"), "${date.take(4)} · $label", o.optString("uri"), type, date, img(o)))
             }
             path = json.optString("next").takeIf { it.startsWith("https://api.spotify.com/v1") }
                 ?.removePrefix("https://api.spotify.com/v1")
@@ -208,7 +226,7 @@ class SpotifyApi(private val context: Context) {
             Item(
                 o.optString("name"),
                 "Playlist · " + (o.optJSONObject("owner")?.optString("display_name") ?: ""),
-                o.optString("uri"), "playlist",
+                o.optString("uri"), "playlist", image = img(o),
             )
         }
     }

@@ -2780,6 +2780,28 @@ class MainActivity : Activity() {
         setupTile(0xFF1DB954.toInt(), second) { showSpotifySheet() }
     }
 
+    // Hoesjes laden zonder extra bibliotheek: eenvoudige cache in het geheugen
+    private val imageCache = object : android.util.LruCache<String, android.graphics.Bitmap>(8 * 1024 * 1024) {
+        override fun sizeOf(key: String, value: android.graphics.Bitmap) = value.byteCount
+    }
+    private val imagePool = java.util.concurrent.Executors.newFixedThreadPool(4)
+
+    private fun loadImage(view: ImageView, url: String) {
+        view.tag = url
+        imageCache.get(url)?.let { view.setImageBitmap(it); return }
+        imagePool.execute {
+            val bmp = runCatching {
+                (URL(url).openConnection() as HttpURLConnection).run {
+                    connectTimeout = 8_000
+                    readTimeout = 10_000
+                    inputStream.use { android.graphics.BitmapFactory.decodeStream(it) }
+                }
+            }.getOrNull() ?: return@execute
+            imageCache.put(url, bmp)
+            runOnUiThread { if (view.tag == url) view.setImageBitmap(bmp) }
+        }
+    }
+
     /** Zoekscherm: typ een artiest, nummer, album of playlist en kies wat je wilt horen. */
     private fun showSpotifySheet() {
         if (!spotify.isLoggedIn()) {
@@ -2827,30 +2849,47 @@ class MainActivity : Activity() {
         var searchSeq = 0
         lateinit var showArtist: (SpotifyApi.Item) -> Unit
 
-        fun row(title: String, sub: String?, accent: Boolean = false, onClick: () -> Unit) =
+        fun row(title: String, sub: String?, accent: Boolean = false, image: String? = null, round: Boolean = false,
+                 art: Boolean = false, onClick: () -> Unit) =
             LinearLayout(this).apply {
-                orientation = LinearLayout.VERTICAL
-                setPadding(dp(10), dp(9), dp(10), dp(9))
+                orientation = LinearLayout.HORIZONTAL
+                gravity = Gravity.CENTER_VERTICAL
+                setPadding(dp(8), dp(8), dp(10), dp(8))
+                minimumHeight = if (art) dp(72) else dp(52)
                 background = GradientDrawable().apply {
-                    setColor(if (accent) 0xFF1DB954.toInt() else 0xFF2A2A2A.toInt()); cornerRadius = dp(10).toFloat()
+                    setColor(if (accent) 0xFF1DB954.toInt() else 0xFF2A2A2A.toInt()); cornerRadius = dp(12).toFloat()
                 }
                 layoutParams = LinearLayout.LayoutParams(
                     ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT
                 ).apply { bottomMargin = dp(6) }
-                addView(TextView(this@MainActivity).apply {
-                    text = title
-                    textSize = 15f
-                    setTextColor(if (accent) Color.BLACK else Color.WHITE)
-                    setTypeface(typeface, Typeface.BOLD)
-                    maxLines = 1
-                    ellipsize = android.text.TextUtils.TruncateAt.END
+                if (art) addView(ImageView(this@MainActivity).apply {
+                    scaleType = ImageView.ScaleType.CENTER_CROP
+                    background = GradientDrawable().apply {
+                        setColor(0xFF3A3A3A.toInt())
+                        if (round) shape = GradientDrawable.OVAL else cornerRadius = dp(6).toFloat()
+                    }
+                    clipToOutline = true
+                    layoutParams = LinearLayout.LayoutParams(dp(56), dp(56)).apply { marginEnd = dp(12) }
+                    if (image != null) loadImage(this, image)
                 })
-                if (!sub.isNullOrEmpty()) addView(TextView(this@MainActivity).apply {
-                    text = sub
-                    textSize = 12f
-                    setTextColor(0xFFAAAAAA.toInt())
-                    maxLines = 1
-                    ellipsize = android.text.TextUtils.TruncateAt.END
+                addView(LinearLayout(this@MainActivity).apply {
+                    orientation = LinearLayout.VERTICAL
+                    layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
+                    addView(TextView(this@MainActivity).apply {
+                        text = title
+                        textSize = 16f
+                        setTextColor(if (accent) Color.BLACK else Color.WHITE)
+                        setTypeface(typeface, Typeface.BOLD)
+                        maxLines = 1
+                        ellipsize = android.text.TextUtils.TruncateAt.END
+                    })
+                    if (!sub.isNullOrEmpty()) addView(TextView(this@MainActivity).apply {
+                        text = sub
+                        textSize = 13f
+                        setTextColor(0xFFAAAAAA.toInt())
+                        maxLines = 1
+                        ellipsize = android.text.TextUtils.TruncateAt.END
+                    })
                 })
                 isClickable = true
                 setOnClickListener { onClick() }
@@ -2870,7 +2909,10 @@ class MainActivity : Activity() {
                         setPadding(0, dp(12), 0, dp(4))
                     })
                 }
-                results.addView(row(item.name, if (item.type == "artist") null else item.sub) {
+                results.addView(row(
+                    item.name, if (item.type == "artist") "Artiest" else item.sub,
+                    image = item.image, round = item.type == "artist", art = true,
+                ) {
                     if (item.type == "artist") showArtist(item)
                     else { dialog.dismiss(); chooseSpotifyDevice(item) }
                 })
