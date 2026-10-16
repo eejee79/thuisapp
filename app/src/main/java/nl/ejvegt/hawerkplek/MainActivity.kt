@@ -3450,6 +3450,9 @@ class MainActivity : Activity() {
                     }
                     list.addView(sheetRow("🔍   Online ondertitels zoeken…", 0xFF17B2E7.toInt(), dark = true) {
                         if (prefs().getString(KEY_OS_KEY, "").isNullOrBlank() || prefs().getString(KEY_OS_USER, "").isNullOrBlank()) {
+                            // Zoeken in de app staat voorlopig uit: gewoon op de tv zoeken
+                            dialog.dismiss(); kodiSearchOnTv()
+                        } else if (false) {
                             AlertDialog.Builder(this)
                                 .setTitle("Ondertitels zoeken")
                                 .setMessage("Om in de app te zoeken heb je een (gratis) OpenSubtitles.com-account en API-sleutel nodig. Vul die in via ⚙ → API's → Kodi.\n\nOf zoek nu op de tv met de afstandsbediening.")
@@ -4526,7 +4529,7 @@ class MainActivity : Activity() {
     private fun confirmAllOff() {
         AlertDialog.Builder(this)
             .setTitle("Alles uit?")
-            .setMessage("Alle lampen, de tv, de receiver, de GoogleTV-box en TV+ woonkamer gaan uit.")
+            .setMessage("Alle lampen, de tv en de receiver gaan uit. De GoogleTV-box en TV+ blijven aan.")
             .setPositiveButton("Alles uit") { _, _ -> allOff() }
             .setNegativeButton("Annuleren", null)
             .show()
@@ -4548,9 +4551,10 @@ class MainActivity : Activity() {
                 "light/turn_off" to JSONObject().put("entity_id", lights),
                 "media_player/turn_off" to JSONObject().put("entity_id", MEDIA_TV),
                 "media_player/turn_off" to JSONObject().put("entity_id", DASH_RECEIVER),
-                "remote/turn_off" to JSONObject().put("entity_id", MEDIA_REMOTE),
-                "remote/turn_off" to JSONObject().put("entity_id", TVPLUS_REMOTE),
+                // GoogleTV-box en TV+ blijven aan (uit = standby, en dan reageren ze traag/niet)
             )
+            // Wel stoppen met afspelen op de box, zodat Kodi e.d. niet doorspelen
+            quietService("media_player/media_stop", JSONObject().put("entity_id", MEDIA_PLAYER))
             val failed = calls.count { (service, data) ->
                 runCatching { haRequest("POST", "/api/services/$service", data.toString()) }.isFailure
             }
