@@ -494,6 +494,7 @@ class MainActivity : Activity() {
         menuItem(R.id.menuKodi, R.drawable.logo_kodi, PAGE_KODI)
         findViewById<Button>(R.id.saveKodi).setOnClickListener { saveKodiSettings() }
         menuItem(R.id.menuTmdb, R.drawable.ic_search, PAGE_TMDB)
+        findViewById<View>(R.id.menuTmdb).visibility = View.GONE   // "Wat kijken?" voorlopig uit
         findViewById<Button>(R.id.saveTmdb).setOnClickListener { saveTmdbSettings() }
         findViewById<Button>(R.id.spLoginButton).setOnClickListener { spotifyLogin() }
         findViewById<Button>(R.id.spLogoutButton).setOnClickListener {
@@ -2811,7 +2812,6 @@ class MainActivity : Activity() {
             "heos" to { second -> heosTile(second) },
             "spotify" to { second -> spotifyTile(second) },
             "music" to { second -> musicTile(second) },
-            "search" to { second -> searchTile(second) },
         ) + MEDIA_APPS.map { app -> app.pkg to { second: Boolean -> appTile(app, second) } }
 
     private fun tileOrder(): List<String> {
