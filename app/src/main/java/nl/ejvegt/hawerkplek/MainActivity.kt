@@ -2632,6 +2632,7 @@ class MainActivity : Activity() {
     private lateinit var nowRemoteBtn: ImageView
     private lateinit var nowKeyboardBtn: ImageView
     private lateinit var nowSubsBtn: ImageView
+    private lateinit var nowGuideBtn: TextView
     @Volatile private var nowRemote: String? = null
     @Volatile private var mediaBusy = false
 
@@ -2737,7 +2738,28 @@ class MainActivity : Activity() {
             isClickable = true
             setOnClickListener { showKodiSubsSheet() }
         }
+        nowGuideBtn = TextView(this).apply {
+            text = "Gids"
+            textSize = 14f
+            setTextColor(Color.WHITE)
+            setTypeface(typeface, Typeface.BOLD)
+            setPadding(dp(12), dp(7), dp(12), dp(7))
+            background = GradientDrawable().apply {
+                setColor(0xFF1565C0.toInt())
+                cornerRadius = dp(16).toFloat()
+            }
+            layoutParams = LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT
+            ).apply { marginStart = dp(6) }
+            visibility = View.GONE
+            // Gids openen op TV+ en meteen de afstandsbediening erbij
+            setOnClickListener {
+                sendRemoteKey(TVPLUS_REMOTE, "GUIDE")
+                showRemoteSheet(TVPLUS_REMOTE, true)
+            }
+        }
         nowBar.addView(nowChannelBtn)
+        nowBar.addView(nowGuideBtn)
         nowBar.addView(nowSubsBtn)
         nowBar.addView(nowKeyboardBtn)
         nowBar.addView(nowRemoteBtn)
@@ -4820,6 +4842,14 @@ class MainActivity : Activity() {
             btn("⏩", "MEDIA_FAST_FORWARD"),
         ))
         if (kpn) {
+            // Gekleurde knoppen (rood, groen, geel, blauw)
+            content.addView(row(
+                btn("", "PROG_RED", 0xFFD32F2F.toInt()),
+                btn("", "PROG_GREEN", 0xFF388E3C.toInt()),
+                btn("", "PROG_YELLOW", 0xFFFBC02D.toInt()),
+                btn("", "PROG_BLUE", 0xFF1976D2.toInt()),
+                height = 40,
+            ))
             content.addView(row(
                 btn("▼ CH−", "CHANNEL_DOWN"),
                 btn("ℹ Info", "INFO"),
@@ -5216,6 +5246,7 @@ class MainActivity : Activity() {
         nowEntity = info.entity
         nowPlayPause.visibility = if (info.entity != null) View.VISIBLE else View.GONE
         nowChannelBtn.visibility = if (info.tv) View.VISIBLE else View.GONE
+        nowGuideBtn.visibility = if (info.tv) View.VISIBLE else View.GONE
         nowRemote = info.remote
         nowRemoteBtn.visibility = if (info.remote != null) View.VISIBLE else View.GONE
         // Typen kan alleen op de GoogleTV-box (via ADB)
