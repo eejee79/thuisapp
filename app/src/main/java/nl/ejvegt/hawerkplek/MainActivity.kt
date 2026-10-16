@@ -2824,14 +2824,17 @@ class MainActivity : Activity() {
         }
         content.addView(scroll)
 
+        var searchSeq = 0
         fun doSearch() {
             val q = input.text.toString().trim()
             if (q.isEmpty()) return
+            val seq = ++searchSeq
             status.text = "Zoeken…"
-            results.removeAllViews()
             thread {
                 val r = runCatching { spotify.search(q) }
                 runOnUiThread {
+                    if (seq != searchSeq) return@runOnUiThread  // er is intussen verder getypt
+                    results.removeAllViews()
                     val items = r.getOrNull()
                     if (items == null) {
                         status.text = "Zoeken mislukt: ${r.exceptionOrNull()?.message}"
@@ -2883,6 +2886,17 @@ class MainActivity : Activity() {
             }
         }
         input.setOnEditorActionListener { _, _, _ -> doSearch(); true }
+        // Zoeken tijdens het typen: kort wachten tot je even stopt, vanaf 2 tekens
+        val typed = Runnable { doSearch() }
+        input.addTextChangedListener(object : android.text.TextWatcher {
+            override fun beforeTextChanged(t: CharSequence?, a: Int, b: Int, c: Int) {}
+            override fun onTextChanged(t: CharSequence?, a: Int, b: Int, c: Int) {}
+            override fun afterTextChanged(e: android.text.Editable?) {
+                handler.removeCallbacks(typed)
+                if ((e?.trim()?.length ?: 0) >= 2) handler.postDelayed(typed, 350)
+            }
+        })
+        dialog.setOnDismissListener { handler.removeCallbacks(typed) }
 
         dialog.setContentView(content)
         dialog.window?.apply {
