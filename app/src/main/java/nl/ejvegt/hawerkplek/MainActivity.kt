@@ -2844,22 +2844,37 @@ class MainActivity : Activity() {
      * ze één en twee niveaus diep in de bronnen (bijv. Download/Series).
      */
     private fun kodiRoot(): List<KodiApi.Entry> {
+        fun seg(f: String) = f.trimEnd('/').substringAfterLast('/')
+        // Mooie naam uit de map zelf: "series (2)" in Kodi wordt gewoon "Series"
+        fun nice(e: KodiApi.Entry) = KodiApi.Entry(
+            seg(e.file).replaceFirstChar { it.uppercase() }, e.file, true, false, 0.0, 0.0,
+        )
+        fun wanted(e: KodiApi.Entry) = kodiWanted(seg(e.file)) || kodiWanted(e.label)
         val all = kodi.sources().filter { kodiRealPath(it.file) }
-        val direct = all.filter { kodiWanted(it.label) }
-        if (direct.isNotEmpty()) return direct
-        val found = ArrayList<KodiApi.Entry>()
+        val found = LinkedHashMap<String, KodiApi.Entry>()
+        all.filter { wanted(it) }.forEach { found[it.file.trimEnd('/')] = nice(it) }
+        // Ook naast de bronnen kijken: …/NextcloudFiles/movies naast …/NextcloudFiles/series
+        all.map { it.file.trimEnd('/').substringBeforeLast('/') + "/" }.distinct()
+            .filter { it.count { c -> c == '/' } > 3 }
+            .forEach { parent ->
+                runCatching { kodi.list(parent) }.getOrNull()
+                    ?.filter { it.isDir && kodiRealPath(it.file) && wanted(it) }
+                    ?.forEach { found.putIfAbsent(it.file.trimEnd('/'), nice(it)) }
+            }
+        if (found.isNotEmpty()) return found.values.sortedBy { if (kodiNorm(it.label) == "series") 0 else 1 }
+        // Anders één en twee niveaus diep in de bronnen zoeken
         var level = all
         repeat(2) {
             if (found.isNotEmpty()) return@repeat
             val next = ArrayList<KodiApi.Entry>()
             level.forEach { src ->
                 runCatching { kodi.list(src.file) }.getOrNull()?.filter { it.isDir && kodiRealPath(it.file) }?.forEach { d ->
-                    if (kodiWanted(d.label)) found.add(d) else next.add(d)
+                    if (wanted(d)) found.putIfAbsent(d.file.trimEnd('/'), nice(d)) else next.add(d)
                 }
             }
             level = next.take(40)
         }
-        return found.distinctBy { it.file }.ifEmpty { all.filter { !kodiNorm(it.label).startsWith("series2") } }
+        return found.values.toList().ifEmpty { all }
     }
 
     /** Onderblad-dialoog in dezelfde stijl als Mijn muziek. */
