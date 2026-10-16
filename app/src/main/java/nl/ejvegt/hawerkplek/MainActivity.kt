@@ -2630,7 +2630,8 @@ class MainActivity : Activity() {
             setOnClickListener {
                 val e = nowEntity ?: return@setOnClickListener
                 text = if (text.toString() == "⏸") "▶" else "⏸"
-                haService("media_player", "media_play_pause", JSONObject().put("entity_id", e))
+                if (e == "local") toggleLocal()
+                else haService("media_player", "media_play_pause", JSONObject().put("entity_id", e))
             }
         }
         nowBar.addView(nowIcon)
@@ -3001,10 +3002,13 @@ class MainActivity : Activity() {
     private fun chooseMusicTarget(tracks: List<SmbMusic.Entry>, startAt: Int) {
         val label = if (startAt == 0) tracks.firstOrNull()?.path?.substringBeforeLast('\\')?.substringAfterLast('\\') ?: "Map"
         else tracks[startAt].name.substringBeforeLast('.')
-        chooseMaPlayer(label) { entity, name -> playFolderOnMa(tracks.drop(startAt), entity, name) }
+        chooseMaPlayer(label, phone = { playLocal(tracks, startAt) }) { entity, name ->
+            playFolderOnMa(tracks.drop(startAt), entity, name)
+        }
     }
 
     private fun playFolderOnMa(tracks: List<SmbMusic.Entry>, entity: String, name: String) {
+        stopLocal()
         musicRun++   // oude wachtrij via de telefoon stoppen
         mediaStatus.text = "${tracks.size} nummers op $name…"
         thread {
@@ -3229,7 +3233,7 @@ class MainActivity : Activity() {
     private fun chooseMaPlayer(item: SpotifyApi.Item) =
         chooseMaPlayer(item.name) { entity, name -> playOnMa(item, entity, name) }
 
-    private fun chooseMaPlayer(label: String, onChosen: (String, String) -> Unit) {
+    private fun chooseMaPlayer(label: String, phone: (() -> Unit)? = null, onChosen: (String, String) -> Unit) {
         mediaStatus.text = "Spelers zoeken…"
         thread {
             val r = runCatching {
@@ -3242,8 +3246,8 @@ class MainActivity : Activity() {
                     .map { Triple(it[0], it[1], it.getOrNull(2) ?: "") }
             }
             runOnUiThread {
-                val players = r.getOrNull()
-                if (players.isNullOrEmpty()) {
+                val players = r.getOrNull().orEmpty()
+                if (players.isEmpty() && phone == null) {
                     mediaStatus.text = "Geen Music Assistant-spelers gevonden" +
                         (r.exceptionOrNull()?.message?.let { ": $it" } ?: "")
                     return@runOnUiThread
@@ -3251,11 +3255,16 @@ class MainActivity : Activity() {
                 mediaStatus.text = ""
                 val last = prefs().getString(KEY_MA_LAST_PLAYER, null)
                 val sorted = players.sortedBy { if (it.first == last) 0 else 1 }
+                val labels = (if (phone != null) listOf("📱  Deze telefoon") else emptyList()) +
+                    sorted.map { it.second + if (it.third == "playing") "  (speelt nu)" else "" }
+                val off = if (phone != null) 1 else 0
                 AlertDialog.Builder(this)
                     .setTitle("$label afspelen op")
-                    .setItems(sorted.map { it.second + if (it.third == "playing") "  (speelt nu)" else "" }.toTypedArray()) { _, i ->
-                        prefs().edit().putString(KEY_MA_LAST_PLAYER, sorted[i].first).apply()
-                        onChosen(sorted[i].first, sorted[i].second)
+                    .setItems(labels.toTypedArray()) { _, i ->
+                        if (phone != null && i == 0) { phone(); return@setItems }
+                        val p = sorted[i - off]
+                        prefs().edit().putString(KEY_MA_LAST_PLAYER, p.first).apply()
+                        onChosen(p.first, p.second)
                     }
                     .setNegativeButton("Annuleren", null)
                     .show()
@@ -3264,6 +3273,7 @@ class MainActivity : Activity() {
     }
 
     private fun playOnMa(item: SpotifyApi.Item, entity: String, name: String) {
+        stopLocal()
         prefs().edit().putString(KEY_MA_LAST_PLAYER, entity).apply()
         musicRun++   // eventuele oude wachtrij van de netwerkmap stoppen
         mediaStatus.text = "${item.name} op $name…"
@@ -3630,24 +3640,15 @@ class MainActivity : Activity() {
                     mediaStatus.text = "Spotify: ${r.exceptionOrNull()?.message}"
                     return@runOnUiThread
                 }
-                if (devices.isEmpty()) {
-                    mediaStatus.text = ""
-                    AlertDialog.Builder(this)
-                        .setTitle("Geen apparaten gevonden")
-                        .setMessage(
-                            "Spotify ziet nu geen speakers of tv's. Open Spotify één keer op je telefoon en tik " +
-                                "op het apparaat-icoontje; daarna verschijnen ze hier meestal wel."
-                        )
-                        .setPositiveButton("OK", null)
-                        .show()
-                    return@runOnUiThread
-                }
                 val last = prefs().getString(SpotifyApi.KEY_LAST_DEVICE, null)
-                val sorted = devices.sortedBy { if (it.id == last) 0 else if (it.active) 1 else 2 }
+                // Deze telefoon staat apart bovenaan; die zelf dus niet nog eens in de lijst
+                val sorted = devices.filterNot { isThisPhone(it) }
+                    .sortedBy { if (it.id == last) 0 else if (it.active) 1 else 2 }
+                val labels = listOf("📱  Deze telefoon") + sorted.map { it.name + if (it.active) "  (speelt nu)" else "" }
                 AlertDialog.Builder(this)
                     .setTitle("${item.name} afspelen op")
-                    .setItems(sorted.map { it.name + if (it.active) "  (speelt nu)" else "" }.toTypedArray()) { _, i ->
-                        playSpotify(item, sorted[i])
+                    .setItems(labels.toTypedArray()) { _, i ->
+                        if (i == 0) playSpotifyHere(item) else playSpotify(item, sorted[i - 1])
                     }
                     .setNegativeButton("Annuleren", null)
                     .show()
@@ -3656,7 +3657,102 @@ class MainActivity : Activity() {
         }
     }
 
+    private fun isThisPhone(d: SpotifyApi.Device) = d.type.equals("Smartphone", true) &&
+        (d.name.equals(Build.MODEL, true) || d.name.contains(Build.MODEL, true) ||
+            d.name.equals(Settings.Global.getString(contentResolver, Settings.Global.DEVICE_NAME) ?: "-", true))
+
+    /** Afspelen in Spotify op deze telefoon; staat Spotify nog niet klaar, dan eerst de app openen. */
+    private fun playSpotifyHere(item: SpotifyApi.Item) {
+        stopLocal()
+        mediaStatus.text = "${item.name} op deze telefoon…"
+        thread {
+            fun findPhone() = runCatching { spotify.devices() }.getOrDefault(emptyList()).let { list ->
+                list.firstOrNull { isThisPhone(it) } ?: list.firstOrNull { it.type.equals("Smartphone", true) }
+            }
+            var phone = findPhone()
+            if (phone == null) {
+                // Spotify-app wakker maken; daarna meldt de telefoon zich als apparaat
+                runOnUiThread {
+                    runCatching {
+                        startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(item.uri)).setPackage("com.spotify.music"))
+                    }.onFailure { mediaStatus.text = "Spotify-app niet gevonden op deze telefoon" }
+                }
+                for (t in 0 until 8) {
+                    Thread.sleep(1_000)
+                    phone = findPhone()
+                    if (phone != null) break
+                }
+            }
+            val dev = phone
+            if (dev == null) {
+                runOnUiThread { mediaStatus.text = "Spotify is geopend: tik daar op afspelen" }
+                return@thread
+            }
+            val r = runCatching { spotify.play(dev.id, item) }
+            runOnUiThread {
+                mediaStatus.text = r.exceptionOrNull()?.let { "Afspelen mislukt: ${it.message}" }
+                    ?: "${item.name} speelt op deze telefoon"
+            }
+        }
+    }
+
+    // ---------- Eigen muziek afspelen op deze telefoon ----------
+
+    private var localPlayer: android.media.MediaPlayer? = null
+    @Volatile private var localQueue: List<SmbMusic.Entry> = emptyList()
+    @Volatile private var localIndex = 0
+
+    private fun playLocal(tracks: List<SmbMusic.Entry>, startAt: Int) {
+        musicRun++   // eventuele cast-wachtrij stoppen
+        localQueue = tracks
+        playLocalAt(startAt)
+    }
+
+    private fun playLocalAt(i: Int) {
+        localPlayer?.let { runCatching { it.release() } }
+        localPlayer = null
+        val e = localQueue.getOrNull(i) ?: run { mediaStatus.text = "Klaar met afspelen"; localQueue = emptyList(); return }
+        localIndex = i
+        mediaStatus.text = "📱 ${e.name.substringBeforeLast('.')} laden…"
+        thread {
+            val url = runCatching { smbConfigure(); smb.urlFor(e.path) }
+            runOnUiThread {
+                val u = url.getOrNull() ?: run { mediaStatus.text = "Afspelen mislukt: ${url.exceptionOrNull()?.message}"; return@runOnUiThread }
+                localPlayer = android.media.MediaPlayer().apply {
+                    setAudioAttributes(
+                        android.media.AudioAttributes.Builder()
+                            .setUsage(android.media.AudioAttributes.USAGE_MEDIA)
+                            .setContentType(android.media.AudioAttributes.CONTENT_TYPE_MUSIC).build()
+                    )
+                    setWakeMode(this@MainActivity, android.os.PowerManager.PARTIAL_WAKE_LOCK)
+                    setOnPreparedListener {
+                        it.start()
+                        mediaStatus.text = "📱 ${e.name.substringBeforeLast('.')} (${i + 1}/${localQueue.size})"
+                        refreshMedia()
+                    }
+                    setOnCompletionListener { playLocalAt(localIndex + 1) }
+                    setOnErrorListener { _, what, _ -> mediaStatus.text = "Afspelen mislukt (fout $what)"; true }
+                    setDataSource(u)
+                    prepareAsync()
+                }
+            }
+        }
+    }
+
+    private fun toggleLocal() {
+        val p = localPlayer ?: return
+        if (p.isPlaying) p.pause() else p.start()
+        refreshMedia()
+    }
+
+    private fun stopLocal() {
+        localPlayer?.let { runCatching { it.release() } }
+        localPlayer = null
+        localQueue = emptyList()
+    }
+
     private fun playSpotify(item: SpotifyApi.Item, device: SpotifyApi.Device) {
+        stopLocal()
         mediaStatus.text = "${item.name} op ${device.name}…"
         thread {
             // Receiver aan en op de juiste ingang, afhankelijk van het apparaat
@@ -3702,6 +3798,7 @@ class MainActivity : Activity() {
     }
 
     private fun allOff() {
+        stopLocal()
         val status = when (currentTab) {
             TAB_DASH -> dashStatus
             TAB_MEDIA -> mediaStatus
@@ -4251,6 +4348,16 @@ class MainActivity : Activity() {
 
     /** Bepaalt via de bron van de Denon welk apparaat speelt, en wat. */
     private fun nowPlaying(): NowInfo? {
+        // Speelt er muziek op deze telefoon zelf? Dan die eerst
+        localPlayer?.let { p ->
+            val e = localQueue.getOrNull(localIndex)
+            if (e != null) return NowInfo(
+                title = "Deze telefoon",
+                sub = "${e.name.substringBeforeLast('.')} (${localIndex + 1}/${localQueue.size})",
+                icon = R.drawable.ic_folder_music, iconBg = 0xFF6D4C41.toInt(),
+                entity = "local", playing = runCatching { p.isPlaying }.getOrDefault(false),
+            )
+        }
         val rec = stateOf(DASH_RECEIVER)
         recState = rec
         val recOn = isOn(rec)
