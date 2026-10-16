@@ -172,6 +172,7 @@ class MainActivity : Activity() {
         private const val KEY_MA_LAST_PLAYER = "ma_last_player"
         /** Kodi op de GoogleTV-box (JSON-RPC via http). Wachtwoord vul je in de app in. */
         const val KODI_PKG = "org.xbmc.kodi"
+        private const val KEY_TILE_ORDER = "tile_order"
         const val KODI_DEFAULT_HOST = "192.168.50.140"
         private const val KEY_KODI_HOST = "kodi_host"
         private const val KEY_KODI_PORT = "kodi_port"
@@ -2766,22 +2767,91 @@ class MainActivity : Activity() {
         nowBar.addView(nowPlayPause)
         mediaList.addView(nowBar)
 
-        val tiles = listOf<(Boolean) -> View>({ second -> watchTvTile(second) }, { second -> heosTile(second) }, { second -> spotifyTile(second) }, { second -> musicTile(second) }) +
-            MEDIA_APPS.map { app -> { second: Boolean -> appTile(app, second) } }
-        tiles.chunked(TILE_COLS).forEach { pair ->
+        tileGrid = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        mediaList.addView(tileGrid)
+        buildTiles()
+    }
+
+    private lateinit var tileGrid: LinearLayout
+
+    /** Alle tegels met een vaste sleutel (voor de eigen volgorde). */
+    private fun tileMakers(): List<Pair<String, (Boolean) -> View>> =
+        listOf<Pair<String, (Boolean) -> View>>(
+            "tv" to { second -> watchTvTile(second) },
+            "heos" to { second -> heosTile(second) },
+            "spotify" to { second -> spotifyTile(second) },
+            "music" to { second -> musicTile(second) },
+        ) + MEDIA_APPS.map { app -> app.pkg to { second: Boolean -> appTile(app, second) } }
+
+    private fun tileOrder(): List<String> {
+        val all = tileMakers().map { it.first }
+        val saved = prefs().getString(KEY_TILE_ORDER, "")!!.split(',').filter { it in all }
+        return saved + all.filter { it !in saved }   // nieuwe tegels achteraan
+    }
+
+    /** Tegels (opnieuw) opbouwen; ingedrukt houden en slepen verplaatst een tegel. */
+    private fun buildTiles() {
+        tileGrid.removeAllViews()
+        val makers = tileMakers().toMap()
+        tileOrder().chunked(TILE_COLS).forEach { keys ->
             val row = LinearLayout(this).apply {
                 orientation = LinearLayout.HORIZONTAL
                 layoutParams = LinearLayout.LayoutParams(
                     ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT
                 ).apply { bottomMargin = dp(TILE_GAP) }
             }
-            pair.forEachIndexed { i, make -> row.addView(make(i > 0)) }
-            repeat(TILE_COLS - pair.size) {
+            keys.forEachIndexed { i, key ->
+                val v = makers.getValue(key)(i > 0)
+                makeDraggable(v, key)
+                row.addView(v)
+            }
+            repeat(TILE_COLS - keys.size) {
                 row.addView(View(this).apply {
                     layoutParams = LinearLayout.LayoutParams(0, dp(TILE_H), 1f).apply { marginStart = dp(TILE_GAP) }
                 })
             }
-            mediaList.addView(row)
+            tileGrid.addView(row)
+        }
+    }
+
+    private fun makeDraggable(v: View, key: String) {
+        v.setOnLongClickListener {
+            v.performHapticFeedback(android.view.HapticFeedbackConstants.LONG_PRESS)
+            v.startDragAndDrop(android.content.ClipData.newPlainText("tegel", key), View.DragShadowBuilder(v), key, 0)
+            v.alpha = 0.3f
+            true
+        }
+        v.setOnDragListener { target, e ->
+            when (e.action) {
+                android.view.DragEvent.ACTION_DRAG_STARTED -> true
+                android.view.DragEvent.ACTION_DRAG_ENTERED -> {
+                    if (e.localState != key) { target.scaleX = 0.9f; target.scaleY = 0.9f }
+                    true
+                }
+                android.view.DragEvent.ACTION_DRAG_EXITED -> { target.scaleX = 1f; target.scaleY = 1f; true }
+                android.view.DragEvent.ACTION_DROP -> {
+                    val from = e.localState as? String
+                    if (from != null && from != key) {
+                        val order = tileOrder().toMutableList()
+                        val toIdx = order.indexOf(key)
+                        val fromIdx = order.indexOf(from)
+                        order.removeAt(fromIdx)
+                        order.add(toIdx, from)   // op de plek van de tegel waar je hem loslaat
+                        prefs().edit().putString(KEY_TILE_ORDER, order.joinToString(",")).apply()
+                    }
+                    true
+                }
+                android.view.DragEvent.ACTION_DRAG_ENDED -> {
+                    target.scaleX = 1f; target.scaleY = 1f
+                    if (target === v && e.localState == key) {
+                        // Na het slepen alles opnieuw tekenen in de nieuwe volgorde
+                        v.alpha = 1f
+                        tileGrid.post { buildTiles() }
+                    }
+                    true
+                }
+                else -> false
+            }
         }
     }
 
@@ -2804,14 +2874,6 @@ class MainActivity : Activity() {
         }
         return tile.apply {
             setupTile(app.color, second) { if (app.pkg == KODI_PKG) showKodiSheet() else launchApp(app) }
-            setOnLongClickListener {
-                AlertDialog.Builder(this@MainActivity)
-                    .setTitle(app.name)
-                    .setMessage("Pakketnaam: ${app.pkg}" + (app.link?.let { "\nDeeplink: $it" } ?: ""))
-                    .setPositiveButton("OK", null)
-                    .show()
-                true
-            }
         }
     }
 
@@ -3569,8 +3631,6 @@ class MainActivity : Activity() {
             gravity = Gravity.CENTER
         })
         setupTile(0xFF6D4C41.toInt(), second) { showMusicSheet() }
-        // Lang indrukken: zoeken in Music Assistant (op tags: artiest/album)
-        setOnLongClickListener { showMusicSearch(maSource); true }
     }
 
     /** Bladeren door de netwerkmap: mappen openen, op een nummer tikken speelt de map vanaf daar. */
@@ -3711,6 +3771,9 @@ class MainActivity : Activity() {
                     if (entries == null) {
                         status.text = "Netwerkmap niet bereikbaar: ${r.exceptionOrNull()?.message}"
                         return@runOnUiThread
+                    }
+                    if (path == base) {
+                        list.addView(row("🔍", "Zoeken op artiest of album") { dialog.dismiss(); showMusicSearch(maSource) })
                     }
                     if (path != base) {
                         val up = if (path.contains('\\')) path.substringBeforeLast('\\') else ""
