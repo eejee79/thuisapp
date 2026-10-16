@@ -2768,17 +2768,17 @@ class MainActivity : Activity() {
 
         val tiles = listOf<(Boolean) -> View>({ second -> watchTvTile(second) }, { second -> heosTile(second) }, { second -> spotifyTile(second) }, { second -> musicTile(second) }) +
             MEDIA_APPS.map { app -> { second: Boolean -> appTile(app, second) } }
-        tiles.chunked(2).forEach { pair ->
+        tiles.chunked(TILE_COLS).forEach { pair ->
             val row = LinearLayout(this).apply {
                 orientation = LinearLayout.HORIZONTAL
                 layoutParams = LinearLayout.LayoutParams(
                     ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT
-                ).apply { bottomMargin = dp(12) }
+                ).apply { bottomMargin = dp(TILE_GAP) }
             }
-            pair.forEachIndexed { i, make -> row.addView(make(i == 1)) }
-            if (pair.size == 1) {
+            pair.forEachIndexed { i, make -> row.addView(make(i > 0)) }
+            repeat(TILE_COLS - pair.size) {
                 row.addView(View(this).apply {
-                    layoutParams = LinearLayout.LayoutParams(0, dp(100), 1f).apply { marginStart = dp(12) }
+                    layoutParams = LinearLayout.LayoutParams(0, dp(TILE_H), 1f).apply { marginStart = dp(TILE_GAP) }
                 })
             }
             mediaList.addView(row)
@@ -2796,7 +2796,7 @@ class MainActivity : Activity() {
         } else {
             TextView(this).apply {
                 text = app.name
-                textSize = 19f
+                textSize = 14f
                 setTextColor(Color.WHITE)
                 setTypeface(typeface, Typeface.BOLD)
                 gravity = Gravity.CENTER
@@ -2821,11 +2821,11 @@ class MainActivity : Activity() {
         gravity = Gravity.CENTER
         addView(ImageView(this@MainActivity).apply {
             setImageResource(R.drawable.ic_tv_watch)
-            layoutParams = LinearLayout.LayoutParams(dp(44), dp(44))
+            layoutParams = LinearLayout.LayoutParams(dp(30), dp(30))
         })
         addView(TextView(this@MainActivity).apply {
             text = "TV kijken"
-            textSize = 17f
+            textSize = 13f
             setTextColor(Color.WHITE)
             setTypeface(typeface, Typeface.BOLD)
             gravity = Gravity.CENTER
@@ -3559,11 +3559,11 @@ class MainActivity : Activity() {
         addView(ImageView(this@MainActivity).apply {
             setImageResource(R.drawable.ic_folder_music)
             setColorFilter(Color.WHITE)
-            layoutParams = LinearLayout.LayoutParams(dp(40), dp(40))
+            layoutParams = LinearLayout.LayoutParams(dp(28), dp(28))
         })
         addView(TextView(this@MainActivity).apply {
             text = "Mijn muziek"
-            textSize = 17f
+            textSize = 13f
             setTextColor(Color.WHITE)
             setTypeface(typeface, Typeface.BOLD)
             gravity = Gravity.CENTER
@@ -4092,22 +4092,12 @@ class MainActivity : Activity() {
         }
     }
 
-    private fun spotifyTile(second: Boolean): View = LinearLayout(this).apply {
-        orientation = LinearLayout.VERTICAL
-        gravity = Gravity.CENTER
-        addView(ImageView(this@MainActivity).apply {
-            setImageResource(R.drawable.ic_music)
-            setColorFilter(Color.BLACK)
-            layoutParams = LinearLayout.LayoutParams(dp(40), dp(40))
-        })
-        addView(TextView(this@MainActivity).apply {
-            text = "Spotify"
-            textSize = 17f
-            setTextColor(Color.BLACK)
-            setTypeface(typeface, Typeface.BOLD)
-            gravity = Gravity.CENTER
-        })
-        setupTile(0xFF1DB954.toInt(), second) { showSpotifySheet() }
+    private fun spotifyTile(second: Boolean): View = ImageView(this).apply {
+        setImageResource(R.drawable.logo_spotify)
+        scaleType = ImageView.ScaleType.CENTER_CROP
+        contentDescription = "Spotify"
+        clipToOutline = true
+        setupTile(0xFF191414.toInt(), second) { showSpotifySheet() }
     }
 
     // Hoesjes laden zonder extra bibliotheek: eenvoudige cache in het geheugen
@@ -4537,12 +4527,17 @@ class MainActivity : Activity() {
         }
     }
 
+    /** Tegels: 3 naast elkaar, verhouding past precies bij de logo's (480×300). */
+    private val TILE_COLS = 3
+    private val TILE_H = 72
+    private val TILE_GAP = 10
+
     private fun View.setupTile(color: Int, second: Boolean, onTap: () -> Unit) {
         background = GradientDrawable().apply {
             setColor(color)
             cornerRadius = dp(16).toFloat()
         }
-        layoutParams = LinearLayout.LayoutParams(0, dp(100), 1f).apply { if (second) marginStart = dp(12) }
+        layoutParams = LinearLayout.LayoutParams(0, dp(TILE_H), 1f).apply { if (second) marginStart = dp(TILE_GAP) }
         isClickable = true
         isFocusable = true
         setOnClickListener {
