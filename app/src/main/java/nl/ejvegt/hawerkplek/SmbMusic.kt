@@ -97,6 +97,14 @@ class SmbMusic {
             .sortedWith(compareBy<Entry>({ !it.isDir }, { it.name.lowercase() }))
     }
 
+    /** Bestand schrijven op de share (bijv. een ondertitel naast de video). */
+    fun write(path: String, data: ByteArray) = withShare { d ->
+        d.openFile(
+            path, EnumSet.of(AccessMask.GENERIC_WRITE), null, SMB2ShareAccess.ALL,
+            SMB2CreateDisposition.FILE_OVERWRITE_IF, null,
+        ).use { f -> f.outputStream.use { it.write(data) } }
+    }
+
     // ---------- Mini-webserver voor de Chromecast ----------
 
     private var server: ServerSocket? = null

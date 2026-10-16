@@ -27,6 +27,8 @@ class KodiApi(
         val playerId: Int, val title: String, val time: String, val total: String,
         val subtitles: List<Stream>, val currentSub: Int, val subOn: Boolean,
         val audio: List<Stream>, val currentAudio: Int,
+        /** Pad van het bestand dat speelt (bijv. smb://…/serie.S01E02.mkv). */
+        val file: String = "",
     )
 
     private var id = 0
@@ -142,6 +144,7 @@ class KodiApi(
             streams(p.optJSONArray("subtitles")), p.optJSONObject("currentsubtitle")?.optInt("index", -1) ?: -1,
             p.optBoolean("subtitleenabled"),
             streams(p.optJSONArray("audiostreams")), p.optJSONObject("currentaudiostream")?.optInt("index", -1) ?: -1,
+            item?.optString("file") ?: "",
         )
     }
 
@@ -153,6 +156,11 @@ class KodiApi(
 
     fun setAudio(pid: Int, index: Int) {
         rpc("Player.SetAudioStream", JSONObject().put("playerid", pid).put("stream", index))
+    }
+
+    /** Extern ondertitelbestand laden in de speler (pad dat Kodi kan lezen: smb://, http://, …). */
+    fun addSubtitle(pid: Int, path: String) {
+        rpc("Player.AddSubtitle", JSONObject().put("playerid", pid).put("subtitle", path))
     }
 
     /** Opent het zoekscherm voor ondertitels op de tv (zoekt via je ondertitel-add-ons). */

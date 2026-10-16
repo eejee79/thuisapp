@@ -177,6 +177,10 @@ class MainActivity : Activity() {
         private const val KEY_KODI_PORT = "kodi_port"
         private const val KEY_KODI_USER = "kodi_user"
         private const val KEY_KODI_PASS = "kodi_pass"
+        private const val KEY_OS_KEY = "os_key"
+        private const val KEY_OS_USER = "os_user"
+        private const val KEY_OS_PASS = "os_pass"
+        private const val KEY_OS_LANG = "os_lang"
         /** Cast-apparaten waarop muziek van de netwerkmap kan spelen: naam → (entity, bron Denon). */
         val MUSIC_TARGETS = listOf(
             Triple("Chromecast Audio", "media_player.chromecastaudio8913", "AUX1"),
@@ -333,6 +337,18 @@ class MainActivity : Activity() {
     private lateinit var kodiUserInput: EditText
     private lateinit var kodiPassInput: EditText
     private lateinit var kodiStatus: TextView
+    private lateinit var osKeyInput: EditText
+    private lateinit var osUserInput: EditText
+    private lateinit var osPassInput: EditText
+    private lateinit var osLangInput: EditText
+    private val openSubs by lazy {
+        OpenSubs(
+            { prefs().getString(KEY_OS_KEY, "")!!.trim() },
+            { prefs().getString(KEY_OS_USER, "")!!.trim() },
+            { prefs().getString(KEY_OS_PASS, "") ?: "" },
+        )
+    }
+    private fun osLangs() = prefs().getString(KEY_OS_LANG, "")!!.trim().ifEmpty { "nl,en" }
     private val kodi by lazy {
         KodiApi(
             { prefs().getString(KEY_KODI_HOST, "")!!.trim().ifEmpty { KODI_DEFAULT_HOST } },
@@ -425,6 +441,10 @@ class MainActivity : Activity() {
         kodiUserInput = findViewById(R.id.kodiUserInput)
         kodiPassInput = findViewById(R.id.kodiPassInput)
         kodiStatus = findViewById(R.id.kodiStatus)
+        osKeyInput = findViewById(R.id.osKeyInput)
+        osUserInput = findViewById(R.id.osUserInput)
+        osPassInput = findViewById(R.id.osPassInput)
+        osLangInput = findViewById(R.id.osLangInput)
         updateSection = findViewById(R.id.updateSection)
         updateVersion = findViewById(R.id.updateVersion)
         ghTokenInput = findViewById(R.id.ghTokenInput)
@@ -680,6 +700,10 @@ class MainActivity : Activity() {
             kodiPortInput.setText(prefs().getString(KEY_KODI_PORT, "8080"))
             kodiUserInput.setText(prefs().getString(KEY_KODI_USER, "kodi"))
             kodiPassInput.setText(prefs().getString(KEY_KODI_PASS, ""))
+            osKeyInput.setText(prefs().getString(KEY_OS_KEY, ""))
+            osUserInput.setText(prefs().getString(KEY_OS_USER, ""))
+            osPassInput.setText(prefs().getString(KEY_OS_PASS, ""))
+            osLangInput.setText(osLangs())
             kodiStatus.text = ""
         }
         if (page == PAGE_MUSIC) {
@@ -2821,6 +2845,10 @@ class MainActivity : Activity() {
             .putString(KEY_KODI_PORT, kodiPortInput.text.toString().trim())
             .putString(KEY_KODI_USER, kodiUserInput.text.toString().trim())
             .putString(KEY_KODI_PASS, kodiPassInput.text.toString())
+            .putString(KEY_OS_KEY, osKeyInput.text.toString().trim())
+            .putString(KEY_OS_USER, osUserInput.text.toString().trim())
+            .putString(KEY_OS_PASS, osPassInput.text.toString())
+            .putString(KEY_OS_LANG, osLangInput.text.toString().trim())
             .apply()
         kodiStatus.text = "Verbinden met Kodi…"
         thread {
@@ -3204,6 +3232,144 @@ class MainActivity : Activity() {
         } else start(false)
     }
 
+    private fun kodiSearchOnTv() {
+        thread {
+            val res = runCatching { kodi.searchSubtitles() }
+            runOnUiThread {
+                if (res.isFailure) { mediaStatus.text = "Mislukt: ${res.exceptionOrNull()?.message}"; return@runOnUiThread }
+                Toast.makeText(this, "Kies de ondertitel op de tv", Toast.LENGTH_LONG).show()
+                showRemoteSheet(MEDIA_REMOTE, false)
+            }
+        }
+    }
+
+    /** Ondertitels zoeken op OpenSubtitles.com en direct in Kodi laden. */
+    private fun showSubSearchSheet(st: KodiApi.PlayerState) {
+        val content = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(16), dp(12), dp(16), dp(16))
+        }
+        val dialog = sheetDialog(content)
+        val q = OpenSubs.parse(st.file.ifEmpty { st.title })
+        content.addView(TextView(this).apply {
+            text = "Ondertitels zoeken"
+            textSize = 19f
+            setTextColor(Color.WHITE)
+            setTypeface(typeface, Typeface.BOLD)
+        })
+        val input = EditText(this).apply {
+            setText(q.text)
+            setTextColor(Color.WHITE)
+            setSingleLine()
+            imeOptions = android.view.inputmethod.EditorInfo.IME_ACTION_SEARCH
+            layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
+        }
+        val se = EditText(this).apply {
+            setText(listOfNotNull(q.season?.let { "S%02d".format(it) }, q.episode?.let { "E%02d".format(it) }).joinToString(""))
+            hint = "S01E01"
+            setHintTextColor(0xFF666666.toInt())
+            setTextColor(Color.WHITE)
+            setSingleLine()
+            layoutParams = LinearLayout.LayoutParams(dp(90), ViewGroup.LayoutParams.WRAP_CONTENT).apply { marginStart = dp(6) }
+        }
+        val go = Button(this).apply { text = "Zoek" }
+        content.addView(LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            addView(input); addView(se); addView(go)
+        })
+        val status = TextView(this).apply {
+            textSize = 13f
+            setTextColor(0xFFAAAAAA.toInt())
+            setPadding(0, dp(4), 0, dp(8))
+        }
+        content.addView(status)
+        val list = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        content.addView(ScrollView(this).apply {
+            addView(list)
+            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(420))
+        })
+        var busy = false
+        fun applySub(r: OpenSubs.Result) {
+            if (busy) return
+            busy = true
+            status.text = "Downloaden en in Kodi laden…"
+            thread {
+                val res = runCatching {
+                    val (bytes, remaining) = openSubs.download(r)
+                    val lang = r.lang.lowercase().ifEmpty { "nl" }
+                    // Video op de netwerkmap? Dan de ondertitel ernaast zetten (blijft ook voor later bewaard)
+                    val file = st.file.replace(Regex("^smb://[^/@]*@"), "smb://")
+                    val m = Regex("^smb://([^/]+)/([^/]+)/(.+)$").find(file)
+                    smbConfigure()
+                    val (host, share, _) = SmbMusic.parseUnc(smbPath()) ?: Triple("", "", "")
+                    if (m == null || !m.groupValues[1].equals(host, true) || !m.groupValues[2].equals(share, true)) {
+                        throw IOException("De video staat niet op de netwerkmap \\\\$host\\$share, dus de ondertitel kan er niet naast")
+                    }
+                    val rel = java.net.URLDecoder.decode(m.groupValues[3].replace("+", "%2B"), "UTF-8")
+                    val subRel = rel.substringBeforeLast('.') + ".$lang.srt"
+                    smb.write(subRel.replace('/', '\\'), bytes)
+                    val kodiPath = st.file.substringBeforeLast('.') + ".$lang.srt"
+                    val how = try {
+                        kodi.addSubtitle(st.playerId, kodiPath)
+                        "geladen"
+                    } catch (e: IOException) {
+                        // Oudere Kodi zonder AddSubtitle: opnieuw starten op dezelfde plek, dan ziet hij het bestand
+                        kodi.play(st.file, true)
+                        "geladen (video kort opnieuw gestart)"
+                    }
+                    how to remaining
+                }
+                runOnUiThread {
+                    busy = false
+                    val e = res.exceptionOrNull()
+                    if (e != null) { status.text = "Mislukt: ${e.message}"; return@runOnUiThread }
+                    val (how, remaining) = res.getOrNull()!!
+                    dialog.dismiss()
+                    Toast.makeText(
+                        this, "Ondertitel $how ✓" + (if (remaining >= 0) " · nog $remaining downloads vandaag" else ""),
+                        Toast.LENGTH_LONG,
+                    ).show()
+                    handler.postDelayed({ showKodiSubsSheet() }, 1_500)
+                }
+            }
+        }
+        var seq = 0
+        fun search() {
+            val my = ++seq
+            val m = Regex("(?i)S?(\\d{1,2})\\s*[Ex](\\d{1,3})").find(se.text.toString())
+            val query = OpenSubs.Query(
+                input.text.toString().trim(),
+                m?.groupValues?.get(1)?.toInt(), m?.groupValues?.get(2)?.toInt(),
+                if (m == null) q.year else null,
+            )
+            status.text = "Zoeken…"
+            list.removeAllViews()
+            thread {
+                val res = runCatching { openSubs.search(query, osLangs()) }
+                runOnUiThread {
+                    if (my != seq) return@runOnUiThread
+                    val items = res.getOrNull()
+                    if (items == null) { status.text = "Mislukt: ${res.exceptionOrNull()?.message}"; return@runOnUiThread }
+                    // Gesorteerd op taalvoorkeur, daarna populariteit
+                    val order = osLangs().lowercase().split(',').map { it.trim() }
+                    val sorted = items.sortedWith(compareBy<OpenSubs.Result>({ order.indexOf(it.lang.lowercase()).let { i -> if (i < 0) 99 else i } }, { -it.downloads }))
+                    status.text = if (sorted.isEmpty()) "Niets gevonden. Pas de zoekterm aan." else "${sorted.size} gevonden · tik om te laden"
+                    sorted.forEach { r ->
+                        list.addView(sheetRow(
+                            "${OpenSubs.langName(r.lang)}  ·  ⬇ ${r.downloads}" + (if (r.impaired) "  ·  doven/slechthorenden" else "") + "\n" + r.release
+                        ) { applySub(r) })
+                    }
+                }
+            }
+        }
+        go.setOnClickListener { search() }
+        input.setOnEditorActionListener { _, _, _ -> search(); true }
+        content.addView(sheetRow("📺   Toch op de tv zoeken") { dialog.dismiss(); kodiSearchOnTv() })
+        dialog.show()
+        search()
+    }
+
     /** Ondertitels en audiospoor van wat Kodi nu afspeelt; ook online ondertitels zoeken. */
     private fun showKodiSubsSheet() {
         val content = LinearLayout(this).apply {
@@ -3283,14 +3449,16 @@ class MainActivity : Activity() {
                         })
                     }
                     list.addView(sheetRow("🔍   Online ondertitels zoeken…", 0xFF17B2E7.toInt(), dark = true) {
-                        thread {
-                            val res = runCatching { kodi.searchSubtitles() }
-                            runOnUiThread {
-                                if (res.isFailure) { status.text = "Mislukt: ${res.exceptionOrNull()?.message}"; return@runOnUiThread }
-                                dialog.dismiss()
-                                Toast.makeText(this, "Kies de ondertitel op de tv", Toast.LENGTH_LONG).show()
-                                showRemoteSheet(MEDIA_REMOTE, false)
-                            }
+                        if (prefs().getString(KEY_OS_KEY, "").isNullOrBlank() || prefs().getString(KEY_OS_USER, "").isNullOrBlank()) {
+                            AlertDialog.Builder(this)
+                                .setTitle("Ondertitels zoeken")
+                                .setMessage("Om in de app te zoeken heb je een (gratis) OpenSubtitles.com-account en API-sleutel nodig. Vul die in via ⚙ → API's → Kodi.\n\nOf zoek nu op de tv met de afstandsbediening.")
+                                .setPositiveButton("Naar instellingen") { _, _ -> dialog.dismiss(); showSettings(true); showSettingsPage(PAGE_KODI) }
+                                .setNeutralButton("Op de tv zoeken") { _, _ -> dialog.dismiss(); kodiSearchOnTv() }
+                                .setNegativeButton("Annuleren", null)
+                                .show()
+                        } else {
+                            dialog.dismiss(); showSubSearchSheet(st)
                         }
                     })
                     if (st.subOn) {
