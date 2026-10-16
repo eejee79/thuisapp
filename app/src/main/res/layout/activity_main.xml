@@ -377,6 +377,19 @@
                         android:textColor="#FFFFFF"
                         android:textSize="17sp" />
 
+                    <TextView
+                        android:id="@+id/menuKodi"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:layout_marginBottom="12dp"
+                        android:background="#1E1E1E"
+                        android:drawablePadding="16dp"
+                        android:gravity="center_vertical"
+                        android:padding="18dp"
+                        android:text="Kodi"
+                        android:textColor="#FFFFFF"
+                        android:textSize="17sp" />
+
                 </LinearLayout>
 
                 <!-- Onderdeel: Home Assistant -->
@@ -680,6 +693,100 @@
 
                     <TextView
                         android:id="@+id/smbStatus"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:layout_marginTop="16dp"
+                        android:textColor="#B0B0B0"
+                        android:textSize="15sp" />
+                </LinearLayout>
+
+                <!-- Onderdeel: Kodi -->
+                <LinearLayout
+                    android:id="@+id/kodiSection"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:orientation="vertical"
+                    android:visibility="gone">
+
+                    <TextView
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:text="Zet in Kodi aan: Instellingen → Diensten → Bediening → HTTP toestaan + bediening door andere systemen."
+                        android:textColor="#888888"
+                        android:textSize="13sp" />
+
+                    <TextView
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:layout_marginTop="8dp"
+                        android:text="Adres van de box"
+                        android:textColor="#B0B0B0" />
+
+                    <EditText
+                        android:id="@+id/kodiHostInput"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:hint="192.168.50.140"
+                        android:inputType="textUri"
+                        android:textColor="#FFFFFF"
+                        android:textColorHint="#666666" />
+
+                    <TextView
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:layout_marginTop="8dp"
+                        android:text="Poort"
+                        android:textColor="#B0B0B0" />
+
+                    <EditText
+                        android:id="@+id/kodiPortInput"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:hint="8080"
+                        android:inputType="number"
+                        android:textColor="#FFFFFF"
+                        android:textColorHint="#666666" />
+
+                    <TextView
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:layout_marginTop="8dp"
+                        android:text="Gebruiker"
+                        android:textColor="#B0B0B0" />
+
+                    <EditText
+                        android:id="@+id/kodiUserInput"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:hint="kodi"
+                        android:inputType="text"
+                        android:textColor="#FFFFFF"
+                        android:textColorHint="#666666" />
+
+                    <TextView
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:layout_marginTop="8dp"
+                        android:text="Wachtwoord"
+                        android:textColor="#B0B0B0" />
+
+                    <EditText
+                        android:id="@+id/kodiPassInput"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:inputType="textPassword"
+                        android:textColor="#FFFFFF"
+                        android:textColorHint="#666666" />
+
+                    <Button
+                        android:id="@+id/saveKodi"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:layout_marginTop="24dp"
+                        android:text="Opslaan en testen" />
+
+                    <TextView
+                        android:id="@+id/kodiStatus"
                         android:layout_width="match_parent"
                         android:layout_height="wrap_content"
                         android:layout_marginTop="16dp"

@@ -170,6 +170,13 @@ class MainActivity : Activity() {
         private const val KEY_SMB_USER = "smb_user"
         private const val KEY_SMB_PASS = "smb_pass"
         private const val KEY_MA_LAST_PLAYER = "ma_last_player"
+        /** Kodi op de GoogleTV-box (JSON-RPC via http). Wachtwoord vul je in de app in. */
+        const val KODI_PKG = "org.xbmc.kodi"
+        const val KODI_DEFAULT_HOST = "192.168.50.140"
+        private const val KEY_KODI_HOST = "kodi_host"
+        private const val KEY_KODI_PORT = "kodi_port"
+        private const val KEY_KODI_USER = "kodi_user"
+        private const val KEY_KODI_PASS = "kodi_pass"
         /** Cast-apparaten waarop muziek van de netwerkmap kan spelen: naam → (entity, bron Denon). */
         val MUSIC_TARGETS = listOf(
             Triple("Chromecast Audio", "media_player.chromecastaudio8913", "AUX1"),
@@ -320,6 +327,20 @@ class MainActivity : Activity() {
     private lateinit var smbPassInput: EditText
     private lateinit var smbStatus: TextView
     private val smb by lazy { SmbMusic() }
+    private lateinit var kodiSection: View
+    private lateinit var kodiHostInput: EditText
+    private lateinit var kodiPortInput: EditText
+    private lateinit var kodiUserInput: EditText
+    private lateinit var kodiPassInput: EditText
+    private lateinit var kodiStatus: TextView
+    private val kodi by lazy {
+        KodiApi(
+            { prefs().getString(KEY_KODI_HOST, "")!!.trim().ifEmpty { KODI_DEFAULT_HOST } },
+            { prefs().getString(KEY_KODI_PORT, "")!!.trim().ifEmpty { "8080" } },
+            { prefs().getString(KEY_KODI_USER, "")!!.trim().ifEmpty { "kodi" } },
+            { prefs().getString(KEY_KODI_PASS, "") ?: "" },
+        )
+    }
     private lateinit var updateSection: View
     private lateinit var updateVersion: TextView
     private lateinit var ghTokenInput: EditText
@@ -398,6 +419,12 @@ class MainActivity : Activity() {
         smbUserInput = findViewById(R.id.smbUserInput)
         smbPassInput = findViewById(R.id.smbPassInput)
         smbStatus = findViewById(R.id.smbStatus)
+        kodiSection = findViewById(R.id.kodiSection)
+        kodiHostInput = findViewById(R.id.kodiHostInput)
+        kodiPortInput = findViewById(R.id.kodiPortInput)
+        kodiUserInput = findViewById(R.id.kodiUserInput)
+        kodiPassInput = findViewById(R.id.kodiPassInput)
+        kodiStatus = findViewById(R.id.kodiStatus)
         updateSection = findViewById(R.id.updateSection)
         updateVersion = findViewById(R.id.updateVersion)
         ghTokenInput = findViewById(R.id.ghTokenInput)
@@ -434,6 +461,8 @@ class MainActivity : Activity() {
         menuItem(R.id.menuSpotify, R.drawable.ic_music, PAGE_SPOTIFY)
         menuItem(R.id.menuMusic, R.drawable.ic_folder_music, PAGE_MUSIC)
         findViewById<Button>(R.id.saveMusic).setOnClickListener { saveMusicSettings() }
+        menuItem(R.id.menuKodi, R.drawable.logo_kodi, PAGE_KODI)
+        findViewById<Button>(R.id.saveKodi).setOnClickListener { saveKodiSettings() }
         findViewById<Button>(R.id.spLoginButton).setOnClickListener { spotifyLogin() }
         findViewById<Button>(R.id.spLogoutButton).setOnClickListener {
             spotify.logout()
@@ -558,7 +587,7 @@ class MainActivity : Activity() {
         if (settingsPanel.visibility == View.VISIBLE) {
             when (settingsPage) {
                 PAGE_MENU -> showSettings(false)
-                PAGE_HA, PAGE_PVE, PAGE_FRITZ, PAGE_SPOTIFY, PAGE_MUSIC -> showSettingsPage(PAGE_API)
+                PAGE_HA, PAGE_PVE, PAGE_FRITZ, PAGE_SPOTIFY, PAGE_MUSIC, PAGE_KODI -> showSettingsPage(PAGE_API)
                 else -> showSettingsPage(PAGE_MENU)
             }
         } else {
@@ -620,6 +649,7 @@ class MainActivity : Activity() {
     private val PAGE_API = 5
     private val PAGE_SPOTIFY = 6
     private val PAGE_MUSIC = 7
+    private val PAGE_KODI = 8
     private var settingsPage = PAGE_MENU
 
     /** Instellingen: menu, of één van de twee onderdelen. */
@@ -632,6 +662,7 @@ class MainActivity : Activity() {
         fritzSection.visibility = if (page == PAGE_FRITZ) View.VISIBLE else View.GONE
         spotifySection.visibility = if (page == PAGE_SPOTIFY) View.VISIBLE else View.GONE
         musicSection.visibility = if (page == PAGE_MUSIC) View.VISIBLE else View.GONE
+        kodiSection.visibility = if (page == PAGE_KODI) View.VISIBLE else View.GONE
         updateSection.visibility = if (page == PAGE_UPDATE) View.VISIBLE else View.GONE
         settingsTitle.text = when (page) {
             PAGE_API -> "API's"
@@ -640,8 +671,16 @@ class MainActivity : Activity() {
             PAGE_FRITZ -> "Fritzbox"
             PAGE_SPOTIFY -> "Spotify"
             PAGE_MUSIC -> "Muziek (netwerkmap)"
+            PAGE_KODI -> "Kodi"
             PAGE_UPDATE -> "Updates"
             else -> "Instellingen"
+        }
+        if (page == PAGE_KODI) {
+            kodiHostInput.setText(prefs().getString(KEY_KODI_HOST, KODI_DEFAULT_HOST))
+            kodiPortInput.setText(prefs().getString(KEY_KODI_PORT, "8080"))
+            kodiUserInput.setText(prefs().getString(KEY_KODI_USER, "kodi"))
+            kodiPassInput.setText(prefs().getString(KEY_KODI_PASS, ""))
+            kodiStatus.text = ""
         }
         if (page == PAGE_MUSIC) {
             smbPathInput.setText(smbPath())
@@ -2568,6 +2607,7 @@ class MainActivity : Activity() {
     private lateinit var nowChannelBtn: TextView
     private lateinit var nowRemoteBtn: ImageView
     private lateinit var nowKeyboardBtn: ImageView
+    private lateinit var nowSubsBtn: ImageView
     @Volatile private var nowRemote: String? = null
     @Volatile private var mediaBusy = false
 
@@ -2665,7 +2705,16 @@ class MainActivity : Activity() {
             isClickable = true
             setOnClickListener { typeOnTv() }
         }
+        nowSubsBtn = ImageView(this).apply {
+            setImageResource(R.drawable.ic_subtitles)
+            contentDescription = "Ondertitels en audio"
+            setPadding(dp(10), dp(6), dp(6), dp(6))
+            visibility = View.GONE
+            isClickable = true
+            setOnClickListener { showKodiSubsSheet() }
+        }
         nowBar.addView(nowChannelBtn)
+        nowBar.addView(nowSubsBtn)
         nowBar.addView(nowKeyboardBtn)
         nowBar.addView(nowRemoteBtn)
         nowBar.addView(nowPlayPause)
@@ -2708,7 +2757,7 @@ class MainActivity : Activity() {
             }
         }
         return tile.apply {
-            setupTile(app.color, second) { launchApp(app) }
+            setupTile(app.color, second) { if (app.pkg == KODI_PKG) showKodiSheet() else launchApp(app) }
             setOnLongClickListener {
                 AlertDialog.Builder(this@MainActivity)
                     .setTitle(app.name)
@@ -2760,6 +2809,408 @@ class MainActivity : Activity() {
             }
             .setNegativeButton("Annuleren", null)
             .show()
+    }
+
+    // ================= Kodi: bibliotheek bladeren, afspelen, ondertitels =================
+
+    private fun kodiConfigured() = (prefs().getString(KEY_KODI_PASS, "") ?: "").isNotEmpty()
+
+    private fun saveKodiSettings() {
+        prefs().edit()
+            .putString(KEY_KODI_HOST, kodiHostInput.text.toString().trim())
+            .putString(KEY_KODI_PORT, kodiPortInput.text.toString().trim())
+            .putString(KEY_KODI_USER, kodiUserInput.text.toString().trim())
+            .putString(KEY_KODI_PASS, kodiPassInput.text.toString())
+            .apply()
+        kodiStatus.text = "Verbinden met Kodi…"
+        thread {
+            val r = runCatching { kodi.sources() }
+            runOnUiThread {
+                kodiStatus.text = r.exceptionOrNull()?.let {
+                    "Lukt niet: ${it.message ?: it.javaClass.simpleName}\n(Staat Kodi open op de box en is http-bediening aan?)"
+                } ?: "Verbonden ✓  Bronnen: ${r.getOrNull()!!.joinToString { it.label }}"
+            }
+        }
+    }
+
+    /** Alleen Series en Movies tonen (Series 2 niet). */
+    private fun kodiRootFilter(all: List<KodiApi.Entry>): List<KodiApi.Entry> {
+        fun norm(l: String) = l.lowercase(NL).replace(Regex("[^a-z0-9]"), "")
+        val visible = all.filter { norm(it.label) in setOf("series", "movies", "films") }
+        return visible.ifEmpty { all.filter { !norm(it.label).startsWith("series2") } }
+    }
+
+    /** Onderblad-dialoog in dezelfde stijl als Mijn muziek. */
+    private fun sheetDialog(content: View): Dialog {
+        val dialog = Dialog(this)
+        dialog.setContentView(content)
+        dialog.window?.apply {
+            setBackgroundDrawable(GradientDrawable().apply {
+                setColor(0xFF1E1E1E.toInt())
+                cornerRadii = floatArrayOf(dp(22).toFloat(), dp(22).toFloat(), dp(22).toFloat(), dp(22).toFloat(), 0f, 0f, 0f, 0f)
+            })
+            setGravity(Gravity.BOTTOM)
+            setLayout(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
+        }
+        return dialog
+    }
+
+    private fun sheetRow(text: String, color: Int = 0xFF2A2A2A.toInt(), dark: Boolean = false, onClick: () -> Unit) =
+        TextView(this).apply {
+            this.text = text
+            textSize = 15f
+            setTextColor(if (dark) Color.BLACK else Color.WHITE)
+            if (dark) setTypeface(typeface, Typeface.BOLD)
+            maxLines = 2
+            ellipsize = android.text.TextUtils.TruncateAt.END
+            setPadding(dp(12), dp(14), dp(12), dp(14))
+            background = GradientDrawable().apply { setColor(color); cornerRadius = dp(10).toFloat() }
+            layoutParams = LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT
+            ).apply { bottomMargin = dp(6) }
+            isClickable = true
+            setOnClickListener { onClick() }
+        }
+
+    private fun fmtSec(sec: Double): String {
+        val t = sec.toLong()
+        return if (t >= 3600) "%d:%02d:%02d".format(t / 3600, t / 60 % 60, t % 60) else "%d:%02d".format(t / 60, t % 60)
+    }
+
+    private fun showKodiSheet() {
+        if (!kodiConfigured()) {
+            AlertDialog.Builder(this)
+                .setTitle("Kodi")
+                .setMessage(
+                    "Zet in Kodi aan: Instellingen → Diensten → Bediening → \"Bediening via HTTP toestaan\" " +
+                        "(poort 8080, kies een gebruikersnaam en wachtwoord).\n\nVul daarna het wachtwoord in via ⚙ → API's → Kodi."
+                )
+                .setPositiveButton("Naar instellingen") { _, _ -> showSettings(true); showSettingsPage(PAGE_KODI) }
+                .setNeutralButton("Alleen Kodi openen") { _, _ -> MEDIA_APPS.firstOrNull { it.pkg == KODI_PKG }?.let { launchApp(it) } }
+                .setNegativeButton("Annuleren", null)
+                .show()
+            return
+        }
+        val content = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(16), dp(12), dp(16), dp(16))
+        }
+        val dialog = sheetDialog(content)
+        val title = TextView(this).apply {
+            text = "Kodi"
+            textSize = 19f
+            setTextColor(Color.WHITE)
+            setTypeface(typeface, Typeface.BOLD)
+        }
+        val status = TextView(this).apply {
+            textSize = 13f
+            setTextColor(0xFFAAAAAA.toInt())
+            setPadding(0, dp(4), 0, dp(8))
+        }
+        val list = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        val scroll = ScrollView(this).apply {
+            addView(list)
+            isScrollbarFadingEnabled = false
+            if (Build.VERSION.SDK_INT >= 29) {
+                scrollBarSize = dp(8)
+                verticalScrollbarThumbDrawable = GradientDrawable().apply {
+                    setColor(0xFF8D8D8D.toInt()); cornerRadius = dp(4).toFloat()
+                }
+            }
+            layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.MATCH_PARENT, 1f)
+        }
+        val letters = listOf("#") + ('A'..'Z').map { it.toString() }
+        val firstRow = HashMap<String, View>()
+        val bubble = TextView(this).apply {
+            textSize = 28f
+            setTextColor(Color.WHITE)
+            setTypeface(typeface, Typeface.BOLD)
+            gravity = Gravity.CENTER
+            background = GradientDrawable().apply { setColor(0xCC333333.toInt()); cornerRadius = dp(14).toFloat() }
+            visibility = View.GONE
+        }
+        val strip = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            layoutParams = LinearLayout.LayoutParams(dp(28), ViewGroup.LayoutParams.MATCH_PARENT).apply { marginStart = dp(4) }
+            background = GradientDrawable().apply { setColor(0xFF262626.toInt()); cornerRadius = dp(14).toFloat() }
+            letters.forEach { l ->
+                addView(TextView(this@MainActivity).apply {
+                    text = l
+                    textSize = 10f
+                    setTextColor(0xFFBBBBBB.toInt())
+                    setTypeface(typeface, Typeface.BOLD)
+                    gravity = Gravity.CENTER
+                    layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f)
+                })
+            }
+            setOnTouchListener { v, ev ->
+                when (ev.actionMasked) {
+                    android.view.MotionEvent.ACTION_DOWN, android.view.MotionEvent.ACTION_MOVE -> {
+                        val i = (ev.y / v.height * letters.size).toInt().coerceIn(0, letters.size - 1)
+                        val target = letters.drop(i).firstNotNullOfOrNull { firstRow[it] }
+                            ?: letters.take(i).reversed().firstNotNullOfOrNull { firstRow[it] }
+                        target?.let { scroll.scrollTo(0, it.top) }
+                        bubble.text = letters[i]
+                        bubble.visibility = View.VISIBLE
+                        true
+                    }
+                    android.view.MotionEvent.ACTION_UP, android.view.MotionEvent.ACTION_CANCEL -> {
+                        bubble.postDelayed({ bubble.visibility = View.GONE }, 400)
+                        true
+                    }
+                    else -> false
+                }
+            }
+        }
+        content.addView(title)
+        content.addView(status)
+        content.addView(android.widget.FrameLayout(this).apply {
+            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(460))
+            addView(LinearLayout(this@MainActivity).apply {
+                orientation = LinearLayout.HORIZONTAL
+                addView(scroll)
+                addView(strip)
+            }, android.widget.FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
+            addView(bubble, android.widget.FrameLayout.LayoutParams(dp(64), dp(64), Gravity.CENTER))
+        })
+
+        // Pad als stapel (bestand, naam); leeg = de bronnen. Scrollpositie per map onthouden.
+        val stack = ArrayList<Pair<String, String>>()
+        val scrollPos = HashMap<String, Int>()
+        var seq = 0
+        lateinit var load: () -> Unit
+        fun go(push: Pair<String, String>?) {
+            scrollPos[stack.lastOrNull()?.first ?: ""] = scroll.scrollY
+            if (push != null) stack.add(push) else if (stack.isNotEmpty()) stack.removeAt(stack.size - 1)
+            load()
+        }
+        load = {
+            val my = ++seq
+            val dir = stack.lastOrNull()
+            title.text = dir?.second ?: "Kodi"
+            status.text = "Laden…"
+            list.removeAllViews()
+            firstRow.clear()
+            thread {
+                val r = runCatching {
+                    if (dir == null) kodiRootFilter(kodi.sources()) else kodi.list(dir.first)
+                }
+                val playing = if (dir == null) runCatching { kodi.state() }.getOrNull() else null
+                runOnUiThread {
+                    if (my != seq) return@runOnUiThread
+                    val entries = r.getOrNull()
+                    if (entries == null) {
+                        status.text = "Kodi niet bereikbaar: ${r.exceptionOrNull()?.message}"
+                        list.addView(sheetRow("▶   Kodi openen op de tv", 0xFF17B2E7.toInt(), dark = true) {
+                            status.text = "Kodi starten…"
+                            thread { kodiEnsureRunning(); runOnUiThread { load() } }
+                        })
+                        return@runOnUiThread
+                    }
+                    if (dir != null) list.addView(sheetRow("←   Terug") { go(null) })
+                    playing?.let { st ->
+                        list.addView(sheetRow("💬   Ondertitels & audio · ${st.title}", 0xFF17B2E7.toInt(), dark = true) {
+                            showKodiSubsSheet()
+                        })
+                    }
+                    val files = entries.count { !it.isDir }
+                    status.text = if (dir == null) "Kies een map" else
+                        listOfNotNull(
+                            entries.count { it.isDir }.takeIf { it > 0 }?.let { "$it mappen" },
+                            files.takeIf { it > 0 }?.let { "$it video's" },
+                        ).joinToString(" · ").ifEmpty { "Lege map" }
+                    entries.forEach { e ->
+                        val mark = when {
+                            e.isDir -> "📁"
+                            e.played -> "✓"
+                            e.resumeSec > 0 -> "◐"
+                            else -> "🎬"
+                        }
+                        val extra = if (!e.isDir && e.resumeSec > 0 && !e.played) "  (${fmtSec(e.resumeSec)})" else ""
+                        val label = if (e.isDir) e.label else e.label.substringBeforeLast('.').ifEmpty { e.label }
+                        val v = sheetRow("$mark   $label$extra", if (e.played) 0xFF242424.toInt() else 0xFF2A2A2A.toInt()) {
+                            if (e.isDir) go(e.file to e.label) else kodiPlay(e) { dialog.dismiss() }
+                        }
+                        if (e.played) (v as TextView).setTextColor(0xFF9E9E9E.toInt())
+                        list.addView(v)
+                        val c = label.firstOrNull()?.uppercaseChar()
+                        firstRow.putIfAbsent(if (c != null && c in 'A'..'Z') c.toString() else "#", v)
+                    }
+                    val y = scrollPos[dir?.first ?: ""] ?: 0
+                    scroll.post { scroll.scrollTo(0, y) }
+                }
+            }
+        }
+        // Terug-knop van de telefoon: eerst een map omhoog
+        dialog.setOnKeyListener { _, keyCode, ev ->
+            if (keyCode == KeyEvent.KEYCODE_BACK && ev.action == KeyEvent.ACTION_UP && stack.isNotEmpty()) {
+                go(null); true
+            } else keyCode == KeyEvent.KEYCODE_BACK && stack.isNotEmpty()
+        }
+        dialog.show()
+        load()
+    }
+
+    /** Kodi draait en luistert? Zo niet: box aan en Kodi starten, dan wachten tot hij antwoordt. */
+    private fun kodiEnsureRunning(): Boolean {
+        if (kodi.ping()) return true
+        if (currentMediaState() != "on") {
+            runCatching { haRequest("POST", "/api/services/remote/turn_on", JSONObject().put("entity_id", MEDIA_REMOTE).toString()) }
+            Thread.sleep(2_500)
+        }
+        quietService(
+            "androidtv/adb_command", JSONObject().put("entity_id", MEDIA_ADB).put(
+                "command", "monkey -p $KODI_PKG -c android.intent.category.LEANBACK_LAUNCHER -c android.intent.category.LAUNCHER 1"
+            )
+        )
+        repeat(20) {
+            Thread.sleep(1_000)
+            if (kodi.ping()) { boxApp = KODI_PKG; return true }
+        }
+        return false
+    }
+
+    private fun kodiPlay(e: KodiApi.Entry, onStarted: () -> Unit) {
+        fun start(resume: Boolean) {
+            onStarted()
+            val name = e.label.substringBeforeLast('.').ifEmpty { e.label }
+            mediaStatus.text = "$name starten in Kodi…"
+            thread { prepareWatching(SOURCE_APPS) }   // tv + receiver klaarzetten
+            thread {
+                val r = runCatching {
+                    if (!kodiEnsureRunning()) throw IOException("Kodi reageert niet (staat http-bediening aan?)")
+                    kodi.play(e.file, resume)
+                    boxApp = KODI_PKG
+                }
+                runOnUiThread {
+                    mediaStatus.text = r.exceptionOrNull()?.let { "Afspelen mislukt: ${it.message}" } ?: "▶ $name"
+                    handler.postDelayed({ refreshMedia() }, 3_000)
+                }
+            }
+        }
+        if (e.resumeSec > 0 && !e.played) {
+            AlertDialog.Builder(this)
+                .setTitle(e.label.substringBeforeLast('.'))
+                .setItems(arrayOf("Verder kijken vanaf ${fmtSec(e.resumeSec)}", "Vanaf het begin")) { _, i -> start(i == 0) }
+                .setNegativeButton("Annuleren", null)
+                .show()
+        } else start(false)
+    }
+
+    /** Ondertitels en audiospoor van wat Kodi nu afspeelt; ook online ondertitels zoeken. */
+    private fun showKodiSubsSheet() {
+        val content = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(16), dp(12), dp(16), dp(16))
+        }
+        val dialog = sheetDialog(content)
+        val title = TextView(this).apply {
+            text = "Ondertitels & audio"
+            textSize = 19f
+            setTextColor(Color.WHITE)
+            setTypeface(typeface, Typeface.BOLD)
+        }
+        val status = TextView(this).apply {
+            textSize = 13f
+            setTextColor(0xFFAAAAAA.toInt())
+            setPadding(0, dp(4), 0, dp(8))
+            text = "Laden…"
+        }
+        val list = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        content.addView(title)
+        content.addView(status)
+        content.addView(ScrollView(this).apply {
+            addView(list)
+            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
+        })
+        fun header(t: String) = TextView(this).apply {
+            text = t
+            textSize = 13f
+            setTextColor(0xFF17B2E7.toInt())
+            setTypeface(typeface, Typeface.BOLD)
+            setPadding(dp(4), dp(10), 0, dp(6))
+        }
+        fun pill(t: String, onClick: () -> Unit) = TextView(this).apply {
+            text = t
+            textSize = 15f
+            setTextColor(Color.WHITE)
+            setTypeface(typeface, Typeface.BOLD)
+            gravity = Gravity.CENTER
+            setPadding(dp(8), dp(12), dp(8), dp(12))
+            background = GradientDrawable().apply { setColor(0xFF2A2A2A.toInt()); cornerRadius = dp(10).toFloat() }
+            layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f).apply { marginEnd = dp(6) }
+            isClickable = true
+            setOnClickListener { onClick() }
+        }
+        lateinit var load: () -> Unit
+        fun act(f: () -> Unit) {
+            thread {
+                val r = runCatching(f)
+                runOnUiThread {
+                    r.exceptionOrNull()?.let { status.text = "Mislukt: ${it.message}" }
+                    handler.postDelayed({ if (dialog.isShowing) load() }, 600)
+                }
+            }
+        }
+        load = {
+            thread {
+                val r = runCatching { kodi.state() }
+                runOnUiThread {
+                    list.removeAllViews()
+                    val st = r.getOrNull()
+                    if (st == null) {
+                        status.text = r.exceptionOrNull()?.let { "Kodi niet bereikbaar: ${it.message}" }
+                            ?: "Kodi speelt nu geen video af."
+                        return@runOnUiThread
+                    }
+                    title.text = st.title
+                    status.text = if (st.total.isNotEmpty()) "${st.time} / ${st.total}" else ""
+                    list.addView(header("ONDERTITELS"))
+                    list.addView(sheetRow((if (!st.subOn) "✓   " else "      ") + "Uit") {
+                        act { kodi.setSubtitle(st.playerId, null) }
+                    })
+                    st.subtitles.forEach { s ->
+                        val on = st.subOn && s.index == st.currentSub
+                        list.addView(sheetRow((if (on) "✓   " else "      ") + s.label, if (on) 0xFF1F4E5F.toInt() else 0xFF2A2A2A.toInt()) {
+                            act { kodi.setSubtitle(st.playerId, s.index) }
+                        })
+                    }
+                    list.addView(sheetRow("🔍   Online ondertitels zoeken…", 0xFF17B2E7.toInt(), dark = true) {
+                        thread {
+                            val res = runCatching { kodi.searchSubtitles() }
+                            runOnUiThread {
+                                if (res.isFailure) { status.text = "Mislukt: ${res.exceptionOrNull()?.message}"; return@runOnUiThread }
+                                dialog.dismiss()
+                                Toast.makeText(this, "Kies de ondertitel op de tv", Toast.LENGTH_LONG).show()
+                                showRemoteSheet(MEDIA_REMOTE, false)
+                            }
+                        }
+                    })
+                    if (st.subOn) {
+                        list.addView(header("ONDERTITELS LOPEN NIET GELIJK?"))
+                        list.addView(LinearLayout(this).apply {
+                            orientation = LinearLayout.HORIZONTAL
+                            layoutParams = LinearLayout.LayoutParams(
+                                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT
+                            ).apply { bottomMargin = dp(6) }
+                            addView(pill("− eerder") { act { kodi.action("subtitledelayminus") } })
+                            addView(pill("+ later") { act { kodi.action("subtitledelayplus") } })
+                        })
+                    }
+                    if (st.audio.size > 1) {
+                        list.addView(header("AUDIO"))
+                        st.audio.forEach { a ->
+                            val on = a.index == st.currentAudio
+                            list.addView(sheetRow((if (on) "✓   " else "      ") + a.label, if (on) 0xFF1F4E5F.toInt() else 0xFF2A2A2A.toInt()) {
+                                act { kodi.setAudio(st.playerId, a.index) }
+                            })
+                        }
+                    }
+                }
+            }
+        }
+        dialog.show()
+        load()
     }
 
     // ================= Muziek van de netwerkmap (SMB) =================
@@ -4484,6 +4935,7 @@ class MainActivity : Activity() {
         nowRemoteBtn.visibility = if (info.remote != null) View.VISIBLE else View.GONE
         // Typen kan alleen op de GoogleTV-box (via ADB)
         nowKeyboardBtn.visibility = if (info.remote == MEDIA_REMOTE) View.VISIBLE else View.GONE
+        nowSubsBtn.visibility = if (info.remote == MEDIA_REMOTE && boxApp == KODI_PKG) View.VISIBLE else View.GONE
         nowPlayPause.text = if (info.playing) "⏸" else "▶"
     }
 
