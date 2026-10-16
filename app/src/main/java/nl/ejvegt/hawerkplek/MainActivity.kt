@@ -3071,6 +3071,22 @@ class MainActivity : Activity() {
         return r.optJSONObject("service_response") ?: JSONObject()
     }
 
+    @Volatile private var maPlayerCache: List<Pair<String, String>> = emptyList()
+    @Volatile private var maPlayerCacheAt = 0L
+
+    /** Music Assistant-spelers (entity, naam), 10 minuten onthouden. */
+    private fun maPlayers(): List<Pair<String, String>> {
+        if (System.currentTimeMillis() - maPlayerCacheAt < 600_000) return maPlayerCache
+        maPlayerCacheAt = System.currentTimeMillis()
+        maPlayerCache = runCatching {
+            val tpl = "{% for e in integration_entities('music_assistant') if e.startswith('media_player.') %}" +
+                "{{ e }}|{{ state_attr(e, 'friendly_name') }}\n{% endfor %}"
+            haRequest("POST", "/api/template", JSONObject().put("template", tpl).toString())
+                .lines().filter { it.contains('|') }.map { it.substringBefore('|') to it.substringAfter('|') }
+        }.getOrDefault(maPlayerCache)
+        return maPlayerCache
+    }
+
     private fun maItem(o: JSONObject): SpotifyApi.Item {
         val type = o.optString("media_type")
         val artists = o.optJSONArray("artists")?.let { a ->
@@ -4211,11 +4227,26 @@ class MainActivity : Activity() {
             }
             "AUX1" -> {
                 val c = stateOf(CHROMECAST_AUDIO)
+                // Speelt Music Assistant op de Chromecast? Dan die gegevens (staat los van Spotify)
+                val ma = maPlayers().firstOrNull { (_, name) ->
+                    val n = name.lowercase(NL)
+                    "chromecast" in n || "audio woonkamer" in n
+                }?.let { stateOf(it.first) }
+                if (ma != null && (isPlaying(ma) || (ma.optString("state") == "paused" && !isPlaying(c)))) {
+                    return NowInfo(
+                        title = "Chromecast Audio",
+                        sub = joinNonEmpty(attr(ma, "media_artist"), attr(ma, "media_title")).ifEmpty { "Music Assistant" },
+                        icon = null, iconBg = 0xFF455A64.toInt(),
+                        entity = ma.optString("entity_id"), playing = isPlaying(ma),
+                    )
+                }
                 val sp = stateOf(SPOTIFY)
                 // Speelt Spotify? Dan die gegevens gebruiken; anders wat de Chromecast zelf meldt
                 // Speelt de Chromecast zelf (bijv. muziek van de netwerkmap), dan heeft die voorrang
-                val spActive = sp?.optString("state") == "playing" ||
-                    (sp?.optString("state") == "paused" && !isPlaying(c))
+                // Spotify alleen als die echt op de Chromecast speelt (niet op een ander apparaat)
+                val spOnCast = attr(sp, "source")?.lowercase(NL)?.let { "chromecast" in it || "audio woonkamer" in it } ?: true
+                val spActive = spOnCast && (sp?.optString("state") == "playing" ||
+                    (sp?.optString("state") == "paused" && !isPlaying(c)))
                 if (spActive) NowInfo(
                     title = "Chromecast Audio",
                     sub = joinNonEmpty(attr(sp, "media_artist"), attr(sp, "media_title")).ifEmpty { "Spotify" },
