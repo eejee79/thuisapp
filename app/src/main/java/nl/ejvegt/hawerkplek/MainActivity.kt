@@ -2730,7 +2730,11 @@ class MainActivity : Activity() {
             setPadding(dp(10), dp(6), dp(6), dp(6))
             visibility = View.GONE
             isClickable = true
-            setOnClickListener { nowRemote?.let { showRemoteSheet(it, it == TVPLUS_REMOTE) } }
+            setOnClickListener {
+                val r = nowRemote
+                if (r != null) showRemoteSheet(r, r == TVPLUS_REMOTE)
+                else nowEntity?.let { showMediaSheet(it, nowTitle.text.toString().removeSuffix(" ▾")) }
+            }
         }
         nowKeyboardBtn = ImageView(this).apply {
             setImageResource(R.drawable.ic_keyboard)
@@ -4843,6 +4847,190 @@ class MainActivity : Activity() {
     }
 
     /** Afstandsbediening voor de GoogleTV-box of de TV+-box (via remote.send_command). */
+    /** Bediening voor een mediaspeler in HA (Chromecast Audio, PiCore, Spotify…): voortgang, spoelen, vorige/volgende. */
+    private fun showMediaSheet(entity: String, label: String) {
+        val dialog = Dialog(this)
+        val content = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(20), dp(10), dp(20), dp(22))
+        }
+        content.addView(View(this).apply {
+            background = GradientDrawable().apply { setColor(0xFF555555.toInt()); cornerRadius = dp(2).toFloat() }
+            layoutParams = LinearLayout.LayoutParams(dp(40), dp(4)).apply {
+                gravity = Gravity.CENTER_HORIZONTAL; bottomMargin = dp(12)
+            }
+        })
+        content.addView(TextView(this).apply {
+            text = label
+            textSize = 19f
+            setTextColor(Color.WHITE)
+            setTypeface(typeface, Typeface.BOLD)
+        })
+        val art = ImageView(this).apply {
+            scaleType = ImageView.ScaleType.CENTER_CROP
+            clipToOutline = true
+            background = GradientDrawable().apply { setColor(0xFF2A2A2A.toInt()); cornerRadius = dp(12).toFloat() }
+            visibility = View.GONE
+            layoutParams = LinearLayout.LayoutParams(dp(160), dp(160)).apply {
+                gravity = Gravity.CENTER_HORIZONTAL; topMargin = dp(12)
+            }
+        }
+        content.addView(art)
+        val title = TextView(this).apply {
+            textSize = 17f
+            setTextColor(Color.WHITE)
+            setTypeface(typeface, Typeface.BOLD)
+            gravity = Gravity.CENTER
+            maxLines = 2
+            ellipsize = android.text.TextUtils.TruncateAt.END
+            setPadding(0, dp(12), 0, 0)
+        }
+        val artist = TextView(this).apply {
+            textSize = 14f
+            setTextColor(0xFFB0B0B0.toInt())
+            gravity = Gravity.CENTER
+            maxLines = 1
+            ellipsize = android.text.TextUtils.TruncateAt.END
+            setPadding(0, 0, 0, dp(8))
+        }
+        content.addView(title)
+        content.addView(artist)
+        val bar = SeekBar(this).apply {
+            max = 1000
+            progressTintList = ColorStateList.valueOf(0xFF1DB954.toInt())
+            thumbTintList = ColorStateList.valueOf(0xFF1DB954.toInt())
+        }
+        val pos = TextView(this).apply { textSize = 12f; setTextColor(0xFF999999.toInt()) }
+        val dur = TextView(this).apply { textSize = 12f; setTextColor(0xFF999999.toInt()); gravity = Gravity.END }
+        val progBox = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            visibility = View.GONE
+            addView(bar)
+            addView(LinearLayout(this@MainActivity).apply {
+                orientation = LinearLayout.HORIZONTAL
+                setPadding(dp(14), 0, dp(14), dp(8))
+                addView(pos, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+                addView(dur, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+            })
+        }
+        content.addView(progBox)
+
+        var curPos = 0.0
+        var curDur = 0.0
+        var playing = false
+        var dragging = false
+        var lastFetch = 0L
+        var lastArt: String? = null
+        fun render() {
+            if (curDur <= 0) { progBox.visibility = View.GONE; return }
+            progBox.visibility = View.VISIBLE
+            dur.text = fmtSec(curDur)
+            if (!dragging) {
+                bar.progress = (curPos.coerceIn(0.0, curDur) * 1000 / curDur).toInt()
+                pos.text = fmtSec(curPos.coerceIn(0.0, curDur))
+            }
+        }
+        fun call(service: String, extra: JSONObject.() -> Unit = {}) {
+            thread {
+                quietService("media_player/$service", JSONObject().put("entity_id", entity).apply(extra))
+                Thread.sleep(700)
+                runOnUiThread { lastFetch = 0 }
+            }
+        }
+        fun seekTo(sec: Double) {
+            curPos = sec.coerceIn(0.0, curDur.takeIf { it > 0 } ?: sec)
+            render()
+            call("media_seek") { put("seek_position", curPos) }
+        }
+        bar.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
+            override fun onProgressChanged(sb: SeekBar, v: Int, fromUser: Boolean) {
+                if (fromUser) pos.text = fmtSec(curDur * v / 1000)
+            }
+            override fun onStartTrackingTouch(sb: SeekBar) { dragging = true }
+            override fun onStopTrackingTouch(sb: SeekBar) { dragging = false; seekTo(curDur * sb.progress / 1000) }
+        })
+
+        fun ctl(label: String, size: Float = 24f, onTap: () -> Unit) = TextView(this).apply {
+            text = label
+            textSize = size
+            setTextColor(Color.WHITE)
+            setTypeface(typeface, Typeface.BOLD)
+            gravity = Gravity.CENTER
+            background = GradientDrawable().apply { setColor(0xFF2A2A2A.toInt()); cornerRadius = dp(14).toFloat() }
+            isClickable = true
+            setOnClickListener { alpha = 0.5f; postDelayed({ alpha = 1f }, 150); onTap() }
+            layoutParams = LinearLayout.LayoutParams(0, dp(58), 1f).apply { marginStart = dp(6); marginEnd = dp(6) }
+        }
+        val playBtn = ctl("⏯\uFE0E", 26f) {
+            playing = !playing
+            call("media_play_pause")
+        }
+        content.addView(LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            setPadding(0, dp(6), 0, dp(6))
+            addView(ctl("⏮\uFE0E") { call("media_previous_track") })
+            addView(ctl("−15", 16f) { seekTo(curPos - 15) })
+            addView(playBtn)
+            addView(ctl("+30", 16f) { seekTo(curPos + 30) })
+            addView(ctl("⏭\uFE0E") { call("media_next_track") })
+        })
+
+        val ticker = object : Runnable {
+            override fun run() {
+                if (playing && !dragging) curPos += 1.0
+                render()
+                playBtn.text = if (playing) "⏸\uFE0E" else "▶\uFE0E"
+                val now = System.currentTimeMillis()
+                if (now - lastFetch > 4_000) {
+                    lastFetch = now
+                    thread {
+                        val st = stateOf(entity) ?: return@thread
+                        val a = st.optJSONObject("attributes") ?: JSONObject()
+                        var p = a.optDouble("media_position", 0.0)
+                        val isPl = st.optString("state") == "playing"
+                        if (isPl) runCatching {
+                            p += (System.currentTimeMillis() - OffsetDateTime.parse(a.optString("media_position_updated_at"))
+                                .toInstant().toEpochMilli()) / 1000.0
+                        }
+                        val pic = attr(st, "entity_picture")?.let { if (it.startsWith("http")) it else haBase() + it }
+                        runOnUiThread {
+                            if (!dialog.isShowing) return@runOnUiThread
+                            title.text = attr(st, "media_title") ?: "Niets aan het spelen"
+                            artist.text = joinNonEmpty(attr(st, "media_artist"), attr(st, "media_album_name"))
+                            playing = isPl
+                            curDur = a.optDouble("media_duration", 0.0).takeIf { !it.isNaN() } ?: 0.0
+                            if (!dragging) curPos = if (p.isNaN()) 0.0 else p
+                            if (pic != null && pic != lastArt) {
+                                lastArt = pic
+                                art.visibility = View.VISIBLE
+                                loadImage(art, pic)
+                            }
+                            render()
+                        }
+                    }
+                }
+                handler.postDelayed(this, 1_000)
+            }
+        }
+        dialog.setContentView(ScrollView(this).apply { addView(content) })
+        dialog.setOnKeyListener { _, _, event ->
+            if (event.keyCode == KeyEvent.KEYCODE_VOLUME_UP || event.keyCode == KeyEvent.KEYCODE_VOLUME_DOWN) {
+                dispatchKeyEvent(event)
+            } else false
+        }
+        dialog.window?.apply {
+            setBackgroundDrawable(GradientDrawable().apply {
+                setColor(0xFF1E1E1E.toInt())
+                cornerRadii = floatArrayOf(dp(22).toFloat(), dp(22).toFloat(), dp(22).toFloat(), dp(22).toFloat(), 0f, 0f, 0f, 0f)
+            })
+            setGravity(Gravity.BOTTOM)
+            setLayout(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
+        }
+        dialog.setOnDismissListener { handler.removeCallbacks(ticker) }
+        dialog.show()
+        handler.post(ticker)
+    }
+
     private fun showRemoteSheet(remote: String, kpn: Boolean) {
         val dialog = Dialog(this)
         val content = LinearLayout(this).apply {
@@ -5476,7 +5664,9 @@ class MainActivity : Activity() {
         nowChannelBtn.visibility = if (info.tv) View.VISIBLE else View.GONE
         nowGuideBtn.visibility = if (info.tv) View.VISIBLE else View.GONE
         nowRemote = info.remote
-        nowRemoteBtn.visibility = if (info.remote != null) View.VISIBLE else View.GONE
+        // Afstandsbediening: box/TV+ met pijltjes, of bij muziek (Chromecast Audio, PiCore…) een speler-bediening
+        val musicEntity = info.remote == null && info.entity != null && info.entity != "local"
+        nowRemoteBtn.visibility = if (info.remote != null || musicEntity) View.VISIBLE else View.GONE
         // Typen kan alleen op de GoogleTV-box (via ADB)
         nowKeyboardBtn.visibility = if (info.remote == MEDIA_REMOTE) View.VISIBLE else View.GONE
         nowSubsBtn.visibility = if (info.remote == MEDIA_REMOTE && boxApp == KODI_PKG) View.VISIBLE else View.GONE
