@@ -2835,13 +2835,16 @@ class MainActivity : Activity() {
 
     private fun kodiNorm(l: String) = l.lowercase(NL).replace(Regex("[^a-z0-9]"), "")
     private fun kodiWanted(l: String) = kodiNorm(l) in setOf("series", "movies", "films")
+    /** Echte mappen op schijf/netwerk; geen add-ons of bibliotheek-lijsten (plugin://, videodb:// …). */
+    private fun kodiRealPath(f: String) =
+        listOf("plugin://", "videodb://", "library://", "addons://", "special://", "sources://").none { f.startsWith(it, true) }
 
     /**
      * Alleen Series en Movies tonen (Series 2 niet). Staan ze niet als bron in Kodi, dan zoeken we
      * ze één en twee niveaus diep in de bronnen (bijv. Download/Series).
      */
     private fun kodiRoot(): List<KodiApi.Entry> {
-        val all = kodi.sources()
+        val all = kodi.sources().filter { kodiRealPath(it.file) }
         val direct = all.filter { kodiWanted(it.label) }
         if (direct.isNotEmpty()) return direct
         val found = ArrayList<KodiApi.Entry>()
@@ -2850,7 +2853,7 @@ class MainActivity : Activity() {
             if (found.isNotEmpty()) return@repeat
             val next = ArrayList<KodiApi.Entry>()
             level.forEach { src ->
-                runCatching { kodi.list(src.file) }.getOrNull()?.filter { it.isDir }?.forEach { d ->
+                runCatching { kodi.list(src.file) }.getOrNull()?.filter { it.isDir && kodiRealPath(it.file) }?.forEach { d ->
                     if (kodiWanted(d.label)) found.add(d) else next.add(d)
                 }
             }
@@ -3051,7 +3054,8 @@ class MainActivity : Activity() {
                         }
                         val extra = if (!e.isDir && e.resumeSec > 0 && !e.played) "  (${fmtSec(e.resumeSec)})" else ""
                         val label = if (e.isDir) e.label else e.label.substringBeforeLast('.').ifEmpty { e.label }
-                        val v = sheetRow("$mark   $label$extra", if (e.played) 0xFF242424.toInt() else 0xFF2A2A2A.toInt()) {
+                        val pathHint = if (dir == null) "\n" + e.file.replace(Regex("//[^/@]*@"), "//") else ""
+                        val v = sheetRow("$mark   $label$extra$pathHint", if (e.played) 0xFF242424.toInt() else 0xFF2A2A2A.toInt()) {
                             if (e.isDir) go(e.file to e.label) else kodiPlay(e) { dialog.dismiss() }
                         }
                         if (e.played) (v as TextView).setTextColor(0xFF9E9E9E.toInt())
