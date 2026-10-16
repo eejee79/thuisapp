@@ -2845,7 +2845,8 @@ class MainActivity : Activity() {
         val list = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
         content.addView(title)
         content.addView(status)
-        content.addView(ScrollView(this).apply {
+        val scroll = ScrollView(this)
+        content.addView(scroll.apply {
             addView(list)
             layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(460))
         })
@@ -2869,8 +2870,13 @@ class MainActivity : Activity() {
         }
 
         var seq = 0
+        // Scrollpositie per map onthouden, zodat "Omhoog" terugkomt op dezelfde plek
+        val scrollPos = HashMap<String, Int>()
+        var current = ""
         lateinit var open: (String) -> Unit
         open = { path ->
+            scrollPos[current] = scroll.scrollY
+            current = path
             val my = ++seq
             status.text = "Laden…"
             list.removeAllViews()
@@ -2891,6 +2897,8 @@ class MainActivity : Activity() {
                     }
                     val tracks = entries.filter { !it.isDir }
                     status.text = "${entries.count { it.isDir }} mappen · ${tracks.size} nummers"
+                    val y = scrollPos[path] ?: 0
+                    scroll.post { scroll.scrollTo(0, y) }
                     if (tracks.isNotEmpty()) {
                         list.addView(row("▶", "Speel deze map af (${tracks.size} nummers)", accent = true) {
                             dialog.dismiss(); chooseMusicTarget(tracks, 0)
