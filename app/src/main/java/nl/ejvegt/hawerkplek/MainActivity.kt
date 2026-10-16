@@ -3634,6 +3634,10 @@ class MainActivity : Activity() {
         mediaStatus.text = "Apparaten zoeken…"
         thread {
             val r = runCatching { spotify.devices() }
+            // Spelers van Music Assistant (bijv. piCorePlayer) die Spotify zelf niet kent
+            val maExtra = runCatching { maPlayers() }.getOrDefault(emptyList()).filter { (_, n) ->
+                r.getOrNull().orEmpty().none { d -> d.name.equals(n, true) || d.name.contains(n, true) || n.contains(d.name, true) }
+            }
             runOnUiThread {
                 val devices = r.getOrNull()
                 if (devices == null) {
@@ -3644,11 +3648,16 @@ class MainActivity : Activity() {
                 // Deze telefoon staat apart bovenaan; die zelf dus niet nog eens in de lijst
                 val sorted = devices.filterNot { isThisPhone(it) }
                     .sortedBy { if (it.id == last) 0 else if (it.active) 1 else 2 }
-                val labels = listOf("📱  Deze telefoon") + sorted.map { it.name + if (it.active) "  (speelt nu)" else "" }
+                val labels = listOf("📱  Deze telefoon") + sorted.map { it.name + if (it.active) "  (speelt nu)" else "" } +
+                    maExtra.map { "${it.second}  (via Music Assistant)" }
                 AlertDialog.Builder(this)
                     .setTitle("${item.name} afspelen op")
                     .setItems(labels.toTypedArray()) { _, i ->
-                        if (i == 0) playSpotifyHere(item) else playSpotify(item, sorted[i - 1])
+                        when {
+                            i == 0 -> playSpotifyHere(item)
+                            i <= sorted.size -> playSpotify(item, sorted[i - 1])
+                            else -> maExtra[i - 1 - sorted.size].let { (entity, name) -> playOnMa(item, entity, name) }
+                        }
                     }
                     .setNegativeButton("Annuleren", null)
                     .show()
