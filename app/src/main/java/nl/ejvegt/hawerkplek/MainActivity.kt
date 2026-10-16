@@ -2766,6 +2766,7 @@ class MainActivity : Activity() {
         nowBar.addView(nowRemoteBtn)
         nowBar.addView(nowPlayPause)
         mediaList.addView(nowBar)
+        buildSecondBar()
 
         tileGrid = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
         mediaList.addView(tileGrid)
@@ -5287,6 +5288,8 @@ class MainActivity : Activity() {
             try {
                 val info = runCatching { nowPlaying() }
                 runOnUiThread { showNowBar(info) }
+                val second = runCatching { secondPlayer() }.getOrNull()
+                runOnUiThread { showSecondBar(second) }
             } finally {
                 mediaBusy = false
             }
@@ -5401,6 +5404,95 @@ class MainActivity : Activity() {
                 icon = null, iconBg = 0xFF455A64.toInt(), entity = null, playing = false,
             )
         }
+    }
+
+    // ---------- Tweede balk: muziek elders in huis (PiCore boven via Music Assistant) ----------
+
+    private lateinit var secondBar: LinearLayout
+    private lateinit var secondTitle: TextView
+    private lateinit var secondSub: TextView
+    private lateinit var secondPlay: TextView
+    @Volatile private var secondEntity: String? = null
+
+    private fun buildSecondBar() {
+        fun ctl(label: String, onTap: () -> Unit) = TextView(this).apply {
+            text = label
+            textSize = 20f
+            setTextColor(Color.WHITE)
+            gravity = Gravity.CENTER
+            setPadding(dp(10), dp(4), dp(10), dp(4))
+            isClickable = true
+            setOnClickListener { alpha = 0.5f; postDelayed({ alpha = 1f }, 150); onTap() }
+        }
+        fun svc(service: String) {
+            val e = secondEntity ?: return
+            thread {
+                quietService("media_player/$service", JSONObject().put("entity_id", e))
+                Thread.sleep(1_200)
+                runOnUiThread { refreshMedia() }
+            }
+        }
+        secondTitle = TextView(this).apply {
+            textSize = 15f
+            setTextColor(Color.WHITE)
+            setTypeface(typeface, Typeface.BOLD)
+            maxLines = 1
+            ellipsize = android.text.TextUtils.TruncateAt.END
+        }
+        secondSub = TextView(this).apply {
+            textSize = 13f
+            setTextColor(0xFFB0B0B0.toInt())
+            maxLines = 1
+            ellipsize = android.text.TextUtils.TruncateAt.END
+        }
+        secondPlay = ctl("⏯\uFE0E") {
+            secondPlay.text = if (secondPlay.text.startsWith("⏸")) "▶\uFE0E" else "⏸\uFE0E"
+            svc("media_play_pause")
+        }
+        secondBar = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            setPadding(dp(14), dp(8), dp(6), dp(8))
+            background = GradientDrawable().apply { setColor(0xFF1E1E1E.toInt()); cornerRadius = dp(14).toFloat() }
+            layoutParams = LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT
+            ).apply { bottomMargin = dp(12) }
+            visibility = View.GONE
+            addView(TextView(this@MainActivity).apply {
+                text = "♫"
+                textSize = 20f
+                setTextColor(0xFFFFB300.toInt())
+                setPadding(0, 0, dp(12), 0)
+            })
+            addView(LinearLayout(this@MainActivity).apply {
+                orientation = LinearLayout.VERTICAL
+                layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
+                addView(secondTitle)
+                addView(secondSub)
+            })
+            addView(ctl("⏮\uFE0E") { svc("media_previous_track") })
+            addView(secondPlay)
+            addView(ctl("⏭\uFE0E") { svc("media_next_track") })
+        }
+        mediaList.addView(secondBar)
+    }
+
+    /** Speelt (of pauzeert) er iets op PiCore boven? Dan (entiteit, naam, staat). */
+    private fun secondPlayer(): Triple<String, String, JSONObject>? {
+        val (entity, name) = maPlayers().firstOrNull { (_, n) -> "picore" in n.lowercase(NL) } ?: return null
+        val st = stateOf(entity) ?: return null
+        if (st.optString("state") !in listOf("playing", "paused")) return null
+        return Triple(entity, name, st)
+    }
+
+    private fun showSecondBar(p: Triple<String, String, JSONObject>?) {
+        if (p == null) { secondBar.visibility = View.GONE; secondEntity = null; return }
+        val (entity, name, st) = p
+        secondEntity = entity
+        secondTitle.text = "$name · boven"
+        secondSub.text = joinNonEmpty(attr(st, "media_artist"), attr(st, "media_title")).ifEmpty { "Music Assistant" }
+        secondPlay.text = if (isPlaying(st)) "⏸\uFE0E" else "▶\uFE0E"
+        secondBar.visibility = View.VISIBLE
     }
 
     private fun showNowBar(result: Result<NowInfo?>) {
