@@ -5362,7 +5362,13 @@ class MainActivity : Activity() {
                     val n = name.lowercase(NL)
                     "chromecast" in n || "audio woonkamer" in n
                 }?.let { stateOf(it.first) }
-                if (ma != null && (isPlaying(ma) || (ma.optString("state") == "paused" && !isPlaying(c)))) {
+                val sp = stateOf(SPOTIFY)
+                // Speelt Spotify via een omweg (bijv. Lyrion → Chromecast), dan kennen MA en de Chromecast
+                // zelf de titel niet; Spotify weet hem wel
+                val maTitle = ma?.let { attr(it, "media_title") }.orEmpty()
+                val spPlaying = sp?.optString("state") == "playing"
+                if (ma != null && (isPlaying(ma) || (ma.optString("state") == "paused" && !isPlaying(c))) &&
+                    !(maTitle.isEmpty() && spPlaying)) {
                     return NowInfo(
                         title = "Chromecast Audio",
                         sub = joinNonEmpty(attr(ma, "media_artist"), attr(ma, "media_title")).ifEmpty { "Music Assistant" },
@@ -5370,11 +5376,12 @@ class MainActivity : Activity() {
                         entity = ma.optString("entity_id"), playing = isPlaying(ma),
                     )
                 }
-                val sp = stateOf(SPOTIFY)
                 // Speelt Spotify? Dan die gegevens gebruiken; anders wat de Chromecast zelf meldt
                 // Speelt de Chromecast zelf (bijv. muziek van de netwerkmap), dan heeft die voorrang
                 // Spotify alleen als die echt op de Chromecast speelt (niet op een ander apparaat)
-                val spOnCast = attr(sp, "source")?.lowercase(NL)?.let { "chromecast" in it || "audio woonkamer" in it } ?: true
+                val castTitle = attr(c, "media_title").orEmpty()
+                val spOnCast = attr(sp, "source")?.lowercase(NL)?.let { "chromecast" in it || "audio woonkamer" in it } ?: true ||
+                    (spPlaying && castTitle.isEmpty() && isPlaying(c))
                 val spActive = spOnCast && (sp?.optString("state") == "playing" ||
                     (sp?.optString("state") == "paused" && !isPlaying(c)))
                 if (spActive) NowInfo(
