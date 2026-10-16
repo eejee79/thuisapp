@@ -134,6 +134,17 @@ class SpotifyApi(private val context: Context) {
         val code = conn.responseCode
         val text = (if (code in 200..299) conn.inputStream else conn.errorStream)
             ?.bufferedReader()?.use { it.readText() }.orEmpty()
+        if (code == 429) {
+            // Spotify remt af: alle apps met dezelfde Client ID tellen samen
+            val wait = conn.getHeaderField("Retry-After")?.toLongOrNull() ?: 0L
+            val hoe = when {
+                wait <= 0 -> "even"
+                wait < 120 -> "$wait seconden"
+                wait < 7200 -> "${wait / 60} minuten"
+                else -> "${wait / 3600} uur"
+            }
+            throw ApiException(429, "Spotify remt tijdelijk af (te veel verzoeken). Probeer het over $hoe opnieuw.")
+        }
         if (code !in 200..299) {
             val msg = runCatching { JSONObject(text).getJSONObject("error").optString("message") }.getOrNull()
             throw ApiException(code, msg?.ifEmpty { null } ?: "Spotify gaf fout $code")
