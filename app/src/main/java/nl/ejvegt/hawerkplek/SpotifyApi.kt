@@ -28,7 +28,7 @@ class SpotifyApi(private val context: Context) {
         private const val KEY_VERIFIER = "sp_verifier"
         const val KEY_LAST_DEVICE = "sp_last_device"
         private const val SCOPES = "user-read-playback-state user-modify-playback-state " +
-            "user-read-currently-playing playlist-read-private user-library-read user-read-private"
+            "user-read-currently-playing playlist-read-private user-library-read user-read-private user-read-recently-played"
     }
 
     class Item(
@@ -229,6 +229,42 @@ class SpotifyApi(private val context: Context) {
                 o.optString("uri"), "playlist", image = img(o),
             )
         }
+    }
+
+    /**
+     * Recent beluisterd: de laatste [maxArtists] verschillende artiesten en [maxAlbums] albums.
+     * (Vraagt de toestemming "user-read-recently-played"; zonder die krijg je een 403.)
+     */
+    fun recent(maxArtists: Int = 10, maxAlbums: Int = 5): Pair<List<Item>, List<Item>> {
+        val items = JSONObject(call("GET", "/me/player/recently-played?limit=50")).optJSONArray("items") ?: JSONArray()
+        val artists = LinkedHashMap<String, Item>()
+        val albums = LinkedHashMap<String, Item>()
+        for (i in 0 until items.length()) {
+            val track = items.optJSONObject(i)?.optJSONObject("track") ?: continue
+            val album = track.optJSONObject("album")
+            val albumImg = img(album)
+            val a = track.optJSONArray("artists")?.optJSONObject(0)
+            if (a != null && artists.size < maxArtists && !artists.containsKey(a.optString("uri"))) {
+                artists[a.optString("uri")] = Item(a.optString("name"), "Artiest", a.optString("uri"), "artist", image = albumImg)
+            }
+            if (album != null && album.optString("album_type") == "album" && albums.size < maxAlbums &&
+                !albums.containsKey(album.optString("uri"))
+            ) {
+                albums[album.optString("uri")] = Item(
+                    album.optString("name"), "Album · " + names(album.optJSONArray("artists")),
+                    album.optString("uri"), "album", album.optString("release_date"), albumImg,
+                )
+            }
+        }
+        // Echte artiestfoto's ophalen (lukt dat niet, dan blijft het albumhoesje staan)
+        val withPhotos = runCatching {
+            val ids = artists.keys.joinToString(",") { it.substringAfterLast(':') }
+            val arr = JSONObject(call("GET", "/artists?ids=$ids")).optJSONArray("artists") ?: JSONArray()
+            val photos = (0 until arr.length()).mapNotNull { arr.optJSONObject(it) }
+                .associate { it.optString("uri") to img(it) }
+            artists.values.map { Item(it.name, it.sub, it.uri, it.type, image = photos[it.uri] ?: it.image) }
+        }.getOrDefault(artists.values.toList())
+        return withPhotos to albums.values.toList()
     }
 
     fun devices(): List<Device> {

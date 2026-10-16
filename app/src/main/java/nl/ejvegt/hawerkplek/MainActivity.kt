@@ -2848,6 +2848,7 @@ class MainActivity : Activity() {
 
         var searchSeq = 0
         lateinit var showArtist: (SpotifyApi.Item) -> Unit
+        lateinit var showRecent: () -> Unit
 
         fun row(title: String, sub: String?, accent: Boolean = false, image: String? = null, round: Boolean = false,
                  art: Boolean = false, onClick: () -> Unit) =
@@ -2956,7 +2957,9 @@ class MainActivity : Activity() {
                     if (seq != searchSeq) return@runOnUiThread
                     results.removeAllViews()
                     status.text = artist.name
-                    results.addView(row("← Terug naar zoekresultaten", null) { doSearch() })
+                    results.addView(row("← Terug", null) {
+                        if (input.text.isNullOrBlank()) showRecent() else doSearch()
+                    })
                     results.addView(row("▶  Alles van ${artist.name} afspelen", null, accent = true) {
                         dialog.dismiss(); chooseSpotifyDevice(artist)
                     })
@@ -2972,6 +2975,30 @@ class MainActivity : Activity() {
                 }
             }
         }
+        // Voordat je zoekt: recent beluisterde artiesten en albums
+        showRecent = {
+            val seq = ++searchSeq
+            status.text = "Recent beluisterd laden…"
+            results.removeAllViews()
+            thread {
+                val r = runCatching { spotify.recent() }
+                runOnUiThread {
+                    if (seq != searchSeq) return@runOnUiThread
+                    results.removeAllViews()
+                    val (artists, albums) = r.getOrNull() ?: run {
+                        val e = r.exceptionOrNull()
+                        status.text = if ((e as? SpotifyApi.ApiException)?.code == 403 ||
+                            e?.message?.contains("scope", ignoreCase = true) == true
+                        ) "Voor 'recent beluisterd' moet je één keer opnieuw inloggen (⚙ → API's → Spotify)."
+                        else "Typ om te zoeken"
+                        return@runOnUiThread
+                    }
+                    status.text = "Recent beluisterd · typ om te zoeken"
+                    render(artists + albums) { if (it.type == "artist") "RECENTE ARTIESTEN" else "RECENTE ALBUMS" }
+                }
+            }
+        }
+
         input.setOnEditorActionListener { _, _, _ -> doSearch(); true }
         // Zoeken tijdens het typen: kort wachten tot je even stopt, vanaf 2 tekens
         val typed = Runnable { doSearch() }
@@ -2980,7 +3007,9 @@ class MainActivity : Activity() {
             override fun onTextChanged(t: CharSequence?, a: Int, b: Int, c: Int) {}
             override fun afterTextChanged(e: android.text.Editable?) {
                 handler.removeCallbacks(typed)
-                if ((e?.trim()?.length ?: 0) >= 2) handler.postDelayed(typed, 350)
+                val len = e?.trim()?.length ?: 0
+                if (len >= 2) handler.postDelayed(typed, 350)
+                else if (len == 0) showRecent()
             }
         })
         dialog.setOnDismissListener { handler.removeCallbacks(typed) }
@@ -2998,6 +3027,7 @@ class MainActivity : Activity() {
         }
         dialog.show()
         input.requestFocus()
+        showRecent()
     }
 
     /** Kies waar het moet spelen (Spotify Connect-apparaten); het laatst gebruikte staat bovenaan. */
