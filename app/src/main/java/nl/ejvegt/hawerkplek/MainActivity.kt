@@ -3182,6 +3182,17 @@ class MainActivity : Activity() {
                     mediaStatus.text = r.exceptionOrNull()?.let { "Afspelen mislukt: ${it.message}" } ?: "▶ $name"
                     handler.postDelayed({ refreshMedia() }, 3_000)
                 }
+                // Zodra de video echt loopt (en de sporen bekend zijn): meteen ondertitels & audio tonen
+                if (r.isSuccess) {
+                    for (i in 0 until 15) {
+                        Thread.sleep(1_000)
+                        val st = runCatching { kodi.state() }.getOrNull() ?: continue
+                        if (st.total.isNotEmpty() && st.total != "0:00") {
+                            runOnUiThread { if (!isFinishing) showKodiSubsSheet() }
+                            break
+                        }
+                    }
+                }
             }
         }
         if (e.resumeSec > 0 && !e.played) {
