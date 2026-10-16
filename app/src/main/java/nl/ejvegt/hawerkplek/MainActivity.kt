@@ -3966,6 +3966,18 @@ class MainActivity : Activity() {
     @Volatile private var maPlayerCacheAt = 0L
 
     /** Music Assistant-spelers (entity, naam), 10 minuten onthouden. */
+    /** Music Assistant-speler die nu op deze box speelt (of gepauzeerd staat), anders null. */
+    private fun maPlayerOnBox(remote: String): String? {
+        if (remote != MEDIA_REMOTE) return null
+        val tpl = "{% for e in integration_entities('music_assistant') if e.startswith('media_player.') " +
+            "and states(e) in ['playing','paused'] %}{{ e }}|{{ state_attr(e, 'friendly_name') }}\n{% endfor %}"
+        val active = runCatching {
+            haRequest("POST", "/api/template", JSONObject().put("template", tpl).toString())
+                .lines().filter { it.contains('|') }.map { it.substringBefore('|') to it.substringAfter('|').lowercase(NL) }
+        }.getOrDefault(emptyList())
+        return active.firstOrNull { (_, n) -> "google" in n || "tv" in n || "woonkamer" in n }?.first
+    }
+
     private fun maPlayers(): List<Pair<String, String>> {
         if (System.currentTimeMillis() - maPlayerCacheAt < 600_000) return maPlayerCache
         maPlayerCacheAt = System.currentTimeMillis()
@@ -4893,11 +4905,27 @@ class MainActivity : Activity() {
             height = 64,
         ))
         content.addView(row(btn("", null), btn("▼", "DPAD_DOWN", dark, size = 22f), btn("", null), height = 64))
-        // Afspelen
+        // Afspelen. \uFE0E = gewoon symbool, geen (gele) emoji.
+        // Vorige/volgende/pauze: speelt Music Assistant op deze box, dan via MA (de box kent de wachtrij niet)
+        fun mediaBtn(label: String, service: String, key: String) = btn(label, null).apply {
+            background = GradientDrawable().apply { setColor(0xFF2A2A2A.toInt()); cornerRadius = dp(14).toFloat() }
+            isClickable = true
+            setOnClickListener {
+                alpha = 0.5f
+                postDelayed({ alpha = 1f }, 150)
+                thread {
+                    val ma = maPlayerOnBox(remote)
+                    if (ma != null) quietService("media_player/$service", JSONObject().put("entity_id", ma))
+                    else runOnUiThread { send(key) }
+                }
+            }
+        }
         content.addView(row(
-            btn("⏪", "MEDIA_REWIND"),
-            btn("⏯", "MEDIA_PLAY_PAUSE"),
-            btn("⏩", "MEDIA_FAST_FORWARD"),
+            mediaBtn("⏮\uFE0E", "media_previous_track", "MEDIA_PREVIOUS"),
+            btn("⏪\uFE0E", "MEDIA_REWIND"),
+            mediaBtn("⏯\uFE0E", "media_play_pause", "MEDIA_PLAY_PAUSE"),
+            btn("⏩\uFE0E", "MEDIA_FAST_FORWARD"),
+            mediaBtn("⏭\uFE0E", "media_next_track", "MEDIA_NEXT"),
         ))
         if (kpn) {
             // Gekleurde knoppen (rood, groen, geel, blauw)
