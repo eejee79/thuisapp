@@ -27,6 +27,7 @@ class SpotifyApi(private val context: Context) {
         private const val KEY_EXPIRY = "sp_expiry"
         private const val KEY_VERIFIER = "sp_verifier"
         const val KEY_LAST_DEVICE = "sp_last_device"
+        const val KEY_BLOCKED_UNTIL = "sp_blocked_until"
         private const val SCOPES = "user-read-playback-state user-modify-playback-state " +
             "user-read-currently-playing playlist-read-private user-library-read user-read-private user-read-recently-played"
     }
@@ -75,6 +76,8 @@ class SpotifyApi(private val context: Context) {
             "client_id" to clientId(),
             "code_verifier" to verifier,
         )
+        // Nieuwe login (bijv. met een nieuwe Client ID): oude afremming vergeten
+        prefs().edit().remove(KEY_BLOCKED_UNTIL).apply()
     }
 
     private fun b64(b: ByteArray) =
@@ -118,7 +121,20 @@ class SpotifyApi(private val context: Context) {
 
     // ---------- Web API ----------
 
+    /** Seconden dat Spotify de app nog afremt (0 = vrij). Tijdens afremmen niets vragen: dat verlengt het. */
+    fun blockedFor(): Long = maxOf(0L, (prefs().getLong(KEY_BLOCKED_UNTIL, 0) - System.currentTimeMillis()) / 1000)
+
+    private fun waitText(wait: Long) = when {
+        wait <= 0 -> "even"
+        wait < 120 -> "$wait seconden"
+        wait < 7200 -> "${wait / 60} minuten"
+        else -> "${wait / 3600} uur"
+    }
+
     private fun call(method: String, path: String, body: String? = null): String {
+        blockedFor().takeIf { it > 0 }?.let {
+            throw ApiException(429, "Spotify remt de app nog ${waitText(it)} af (te veel verzoeken).")
+        }
         val conn = URL("https://api.spotify.com/v1$path").openConnection() as HttpURLConnection
         conn.requestMethod = method
         conn.connectTimeout = 10_000
@@ -136,14 +152,9 @@ class SpotifyApi(private val context: Context) {
             ?.bufferedReader()?.use { it.readText() }.orEmpty()
         if (code == 429) {
             // Spotify remt af: alle apps met dezelfde Client ID tellen samen
-            val wait = conn.getHeaderField("Retry-After")?.toLongOrNull() ?: 0L
-            val hoe = when {
-                wait <= 0 -> "even"
-                wait < 120 -> "$wait seconden"
-                wait < 7200 -> "${wait / 60} minuten"
-                else -> "${wait / 3600} uur"
-            }
-            throw ApiException(429, "Spotify remt tijdelijk af (te veel verzoeken). Probeer het over $hoe opnieuw.")
+            val wait = conn.getHeaderField("Retry-After")?.toLongOrNull() ?: 30L
+            prefs().edit().putLong(KEY_BLOCKED_UNTIL, System.currentTimeMillis() + wait * 1000).apply()
+            throw ApiException(429, "Spotify remt tijdelijk af (te veel verzoeken). Probeer het over ${waitText(wait)} opnieuw.")
         }
         if (code !in 200..299) {
             val msg = runCatching { JSONObject(text).getJSONObject("error").optString("message") }.getOrNull()

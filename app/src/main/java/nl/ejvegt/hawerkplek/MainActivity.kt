@@ -4548,6 +4548,13 @@ class MainActivity : Activity() {
                 .show()
             return
         }
+        val blocked = spotify.blockedFor()
+        if (blocked > 0) {
+            // Spotify remt de app af: zoeken via Music Assistant (die heeft een eigen tegoed bij Spotify)
+            Toast.makeText(this, "Spotify remt de app nog ${if (blocked > 3600) "${blocked / 3600} uur" else "${blocked / 60 + 1} min"} af; zoeken via Music Assistant", Toast.LENGTH_LONG).show()
+            showMusicSearch(maSource)
+            return
+        }
         showMusicSearch(spotifySource)
     }
 
@@ -4782,9 +4789,15 @@ class MainActivity : Activity() {
                 r.getOrNull().orEmpty().none { d -> d.name.equals(n, true) || d.name.contains(n, true) || n.contains(d.name, true) }
             }
             runOnUiThread {
-                val devices = r.getOrNull()
+                val err = r.exceptionOrNull()
+                // Afgeremd door Spotify? Dan alleen de spelers van Music Assistant aanbieden
+                val devices = r.getOrNull() ?: if ((err as? SpotifyApi.ApiException)?.code == 429 && maExtra.isNotEmpty()) {
+                    Toast.makeText(this, "Spotify remt de app af; kies een speler via Music Assistant", Toast.LENGTH_LONG).show()
+                    emptyList()
+                } else null
                 if (devices == null) {
-                    mediaStatus.text = "Spotify: ${r.exceptionOrNull()?.message}"
+                    mediaStatus.text = "Spotify: ${err?.message}"
+                    showPlayError("Spotify", err?.message, viaMa = false)
                     return@runOnUiThread
                 }
                 val last = prefs().getString(SpotifyApi.KEY_LAST_DEVICE, null)
