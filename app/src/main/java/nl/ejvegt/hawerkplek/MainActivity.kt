@@ -3058,6 +3058,10 @@ class MainActivity : Activity() {
             list.removeAllViews()
             firstRow.clear()
             thread {
+                if (dir == null && !kodi.ping()) {
+                    runOnUiThread { if (my == seq) status.text = "GoogleTV-box en Kodi aanzetten…" }
+                    kodiEnsureRunning()
+                }
                 val r = runCatching {
                     if (dir == null) (if (showAll) kodi.sources() else kodiRoot()) else kodi.list(dir.first)
                 }
@@ -3172,16 +3176,18 @@ class MainActivity : Activity() {
             } else keyCode == KeyEvent.KEYCODE_BACK && stack.isNotEmpty()
         }
         dialog.show()
+        // Meteen tv en receiver klaarzetten, zodat je kunt kiezen en kijken
+        thread { prepareWatching(SOURCE_APPS) }
         load()
     }
 
     /** Kodi draait en luistert? Zo niet: box aan en Kodi starten, dan wachten tot hij antwoordt. */
     private fun kodiEnsureRunning(): Boolean {
         if (kodi.ping()) return true
-        if (currentMediaState() != "on") {
-            runCatching { haRequest("POST", "/api/services/remote/turn_on", JSONObject().put("entity_id", MEDIA_REMOTE).toString()) }
-            Thread.sleep(2_500)
-        }
+        // Box altijd aanzetten (doet niets als hij al aan staat), ook als HA denkt dat hij aan is
+        val wasOn = currentMediaState() == "on"
+        quietService("remote/turn_on", JSONObject().put("entity_id", MEDIA_REMOTE))
+        Thread.sleep(if (wasOn) 800 else 3_000)
         quietService(
             "androidtv/adb_command", JSONObject().put("entity_id", MEDIA_ADB).put(
                 "command", "monkey -p $KODI_PKG -c android.intent.category.LEANBACK_LAUNCHER -c android.intent.category.LAUNCHER 1"
