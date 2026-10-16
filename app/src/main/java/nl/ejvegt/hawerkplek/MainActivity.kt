@@ -169,6 +169,7 @@ class MainActivity : Activity() {
         private const val KEY_SMB_PATH = "smb_path"
         private const val KEY_SMB_USER = "smb_user"
         private const val KEY_SMB_PASS = "smb_pass"
+        private const val KEY_MA_LAST_PLAYER = "ma_last_player"
         /** Cast-apparaten waarop muziek van de netwerkmap kan spelen: naam → (entity, bron Denon). */
         val MUSIC_TARGETS = listOf(
             Triple("Chromecast Audio", "media_player.chromecastaudio8913", "AUX1"),
@@ -2809,7 +2810,9 @@ class MainActivity : Activity() {
             setTypeface(typeface, Typeface.BOLD)
             gravity = Gravity.CENTER
         })
-        setupTile(0xFF6D4C41.toInt(), second) { showMusicSheet() }
+        setupTile(0xFF6D4C41.toInt(), second) { showMusicSearch(maSource) }
+        // Lang indrukken: rechtstreeks door de netwerkmap bladeren (zonder Music Assistant)
+        setOnLongClickListener { showMusicSheet(); true }
     }
 
     /** Bladeren door de netwerkmap: mappen openen, op een nummer tikken speelt de map vanaf daar. */
@@ -2992,6 +2995,160 @@ class MainActivity : Activity() {
         }
     }
 
+    // ================= Music Assistant (eigen muziek + Spotify, via Home Assistant) =================
+
+    @Volatile private var maEntryId: String? = null
+
+    /** De config-entry van Music Assistant (nodig voor zoeken/bibliotheek). */
+    private fun maEntry(): String {
+        maEntryId?.let { return it }
+        val arr = JSONArray(haRequest("GET", "/api/config/config_entries/entry", null))
+        val id = (0 until arr.length()).map { arr.getJSONObject(it) }
+            .firstOrNull { it.optString("domain") == "music_assistant" }?.optString("entry_id")
+            ?: throw IOException("Music Assistant-integratie niet gevonden in Home Assistant")
+        maEntryId = id
+        return id
+    }
+
+    /** Een Music Assistant-actie uitvoeren en het antwoord teruggeven. */
+    private fun maCall(service: String, data: JSONObject): JSONObject {
+        data.put("config_entry_id", maEntry())
+        val r = JSONObject(haRequest("POST", "/api/services/music_assistant/$service?return_response", data.toString()))
+        return r.optJSONObject("service_response") ?: JSONObject()
+    }
+
+    private fun maItem(o: JSONObject): SpotifyApi.Item {
+        val type = o.optString("media_type")
+        val artists = o.optJSONArray("artists")?.let { a ->
+            (0 until a.length()).mapNotNull { a.optJSONObject(it)?.optString("name") }.joinToString(", ")
+        }.orEmpty()
+        val year = o.optInt("year", 0).takeIf { it > 0 }?.toString().orEmpty()
+        val sub = when (type) {
+            "artist" -> "Artiest"
+            "album" -> listOf(year, o.optString("album_type").replaceFirstChar { it.uppercase() }.ifEmpty { "Album" }, artists)
+                .filter { it.isNotEmpty() }.joinToString(" · ")
+            "track" -> artists
+            "radio" -> "Radio"
+            else -> "Playlist"
+        }
+        val image = o.optString("image").takeIf { it.startsWith("http") }
+        val albumType = o.optString("album_type")
+        val itemType = if (type == "album" && (albumType == "single" || albumType == "ep")) "single" else type
+        return SpotifyApi.Item(o.optString("name"), sub, o.optString("uri"), itemType, year, image)
+    }
+
+    private fun maList(resp: JSONObject, key: String): List<SpotifyApi.Item> {
+        val arr = resp.optJSONArray(key) ?: return emptyList()
+        return (0 until arr.length()).mapNotNull { arr.optJSONObject(it) }.map { maItem(it) }
+    }
+
+    private val maSource = object : MusicSource {
+        override val title = "Mijn muziek"
+
+        override fun search(q: String): List<SpotifyApi.Item> {
+            val r = maCall("search", JSONObject().put("name", q).put("limit", 6))
+            return maList(r, "artists") + maList(r, "albums") + maList(r, "tracks") +
+                maList(r, "playlists") + maList(r, "radio")
+        }
+
+        private fun library(type: String, order: String, limit: Int): List<SpotifyApi.Item> {
+            val r = maCall("get_library", JSONObject().put("media_type", type).put("order_by", order).put("limit", limit))
+            return maList(r, "items")
+        }
+
+        override fun recent(): Pair<List<SpotifyApi.Item>, List<SpotifyApi.Item>> {
+            fun lib(type: String, limit: Int) = runCatching { library(type, "last_played_desc", limit) }
+                .getOrElse { library(type, "timestamp_added_desc", limit) }
+            return lib("artist", 10) to lib("album", 5)
+        }
+
+        override fun artistReleases(artist: SpotifyApi.Item): List<SpotifyApi.Item> {
+            val r = maCall(
+                "search",
+                JSONObject().put("name", artist.name).put("media_type", JSONArray().put("album")).put("limit", 50),
+            )
+            // Alleen albums waar deze artiest bij staat; nieuw → oud
+            val arr = r.optJSONArray("albums") ?: JSONArray()
+            return (0 until arr.length()).mapNotNull { arr.optJSONObject(it) }
+                .filter { o ->
+                    val a = o.optJSONArray("artists") ?: return@filter true
+                    (0 until a.length()).any { a.optJSONObject(it)?.optString("name").equals(artist.name, true) }
+                }
+                .map { maItem(it) }
+                .sortedByDescending { it.date }
+                .distinctBy { it.type + it.name.lowercase() }
+        }
+
+        override fun artistPlaylists(artist: SpotifyApi.Item): List<SpotifyApi.Item> =
+            maList(
+                maCall("search", JSONObject().put("name", artist.name).put("media_type", JSONArray().put("playlist")).put("limit", 10)),
+                "playlists",
+            )
+
+        override fun pick(item: SpotifyApi.Item) = chooseMaPlayer(item)
+    }
+
+    /** Kies een Music Assistant-speler (Chromecast, Denon/HEOS, GoogleTV, piCorePlayer…). */
+    private fun chooseMaPlayer(item: SpotifyApi.Item) {
+        mediaStatus.text = "Spelers zoeken…"
+        thread {
+            val r = runCatching {
+                val tpl = "{% for e in integration_entities('music_assistant') if e.startswith('media_player.') %}" +
+                    "{{ e }}|{{ state_attr(e, 'friendly_name') }}|{{ states(e) }}\n{% endfor %}"
+                haRequest("POST", "/api/template", JSONObject().put("template", tpl).toString())
+                    .lines().filter { it.contains('|') }
+                    .map { it.split('|') }
+                    .filter { it.getOrNull(2) != "unavailable" }
+                    .map { Triple(it[0], it[1], it.getOrNull(2) ?: "") }
+            }
+            runOnUiThread {
+                val players = r.getOrNull()
+                if (players.isNullOrEmpty()) {
+                    mediaStatus.text = "Geen Music Assistant-spelers gevonden" +
+                        (r.exceptionOrNull()?.message?.let { ": $it" } ?: "")
+                    return@runOnUiThread
+                }
+                mediaStatus.text = ""
+                val last = prefs().getString(KEY_MA_LAST_PLAYER, null)
+                val sorted = players.sortedBy { if (it.first == last) 0 else 1 }
+                AlertDialog.Builder(this)
+                    .setTitle("${item.name} afspelen op")
+                    .setItems(sorted.map { it.second + if (it.third == "playing") "  (speelt nu)" else "" }.toTypedArray()) { _, i ->
+                        playOnMa(item, sorted[i].first, sorted[i].second)
+                    }
+                    .setNegativeButton("Annuleren", null)
+                    .show()
+            }
+        }
+    }
+
+    private fun playOnMa(item: SpotifyApi.Item, entity: String, name: String) {
+        prefs().edit().putString(KEY_MA_LAST_PLAYER, entity).apply()
+        musicRun++   // eventuele oude wachtrij van de netwerkmap stoppen
+        mediaStatus.text = "${item.name} op $name…"
+        thread {
+            val n = name.lowercase(NL)
+            when {
+                "chromecast" in n || "audio woonkamer" in n -> prepareReceiver("AUX1")
+                "googletv" in n || "google tv" in n || "tv in woonkamer" in n -> prepareWatching(SOURCE_APPS)
+                "denon" in n || "heos" in n -> prepareReceiver("HEOS Music")
+            }
+            val type = if (item.type == "single") "album" else item.type
+            val r = runCatching {
+                haRequest(
+                    "POST", "/api/services/music_assistant/play_media",
+                    JSONObject().put("entity_id", entity).put("media_id", item.uri)
+                        .put("media_type", type).put("enqueue", "replace").toString(),
+                )
+            }
+            runOnUiThread {
+                mediaStatus.text = r.exceptionOrNull()?.let { "Afspelen mislukt: ${it.message}" }
+                    ?: "${item.name} speelt op $name"
+                handler.postDelayed({ refreshMedia() }, 2_000)
+            }
+        }
+    }
+
     // ================= Spotify (zoeken en afspelen op een apparaat) =================
 
     private fun spotifyLogin() {
@@ -3068,6 +3225,25 @@ class MainActivity : Activity() {
     }
 
     /** Zoekscherm: typ een artiest, nummer, album of playlist en kies wat je wilt horen. */
+    /** Een muziekbron voor het zoekscherm (Spotify of Music Assistant). */
+    interface MusicSource {
+        val title: String
+        fun search(q: String): List<SpotifyApi.Item>
+        fun recent(): Pair<List<SpotifyApi.Item>, List<SpotifyApi.Item>>
+        fun artistReleases(artist: SpotifyApi.Item): List<SpotifyApi.Item>
+        fun artistPlaylists(artist: SpotifyApi.Item): List<SpotifyApi.Item>
+        fun pick(item: SpotifyApi.Item)
+    }
+
+    private val spotifySource = object : MusicSource {
+        override val title = "Spotify"
+        override fun search(q: String) = spotify.search(q)
+        override fun recent() = spotify.recent()
+        override fun artistReleases(artist: SpotifyApi.Item) = spotify.artistReleases(artist.uri)
+        override fun artistPlaylists(artist: SpotifyApi.Item) = spotify.artistPlaylists(artist.name)
+        override fun pick(item: SpotifyApi.Item) = chooseSpotifyDevice(item)
+    }
+
     private fun showSpotifySheet() {
         if (!spotify.isLoggedIn()) {
             AlertDialog.Builder(this)
@@ -3078,13 +3254,18 @@ class MainActivity : Activity() {
                 .show()
             return
         }
+        showMusicSearch(spotifySource)
+    }
+
+    /** Zoekscherm voor een muziekbron: eerst recent, dan zoeken tijdens het typen, artiestpagina's. */
+    private fun showMusicSearch(src: MusicSource) {
         val dialog = Dialog(this)
         val content = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             setPadding(dp(16), dp(12), dp(16), dp(16))
         }
         content.addView(TextView(this).apply {
-            text = "Spotify"
+            text = src.title
             textSize = 19f
             setTextColor(Color.WHITE)
             setTypeface(typeface, Typeface.BOLD)
@@ -3180,7 +3361,7 @@ class MainActivity : Activity() {
                     image = item.image, round = item.type == "artist", art = true,
                 ) {
                     if (item.type == "artist") showArtist(item)
-                    else { dialog.dismiss(); chooseSpotifyDevice(item) }
+                    else { dialog.dismiss(); src.pick(item) }
                 })
             }
         }
@@ -3191,7 +3372,7 @@ class MainActivity : Activity() {
             val seq = ++searchSeq
             status.text = "Zoeken…"
             thread {
-                val r = runCatching { spotify.search(q) }
+                val r = runCatching { src.search(q) }
                 runOnUiThread {
                     if (seq != searchSeq) return@runOnUiThread  // er is intussen verder getypt
                     results.removeAllViews()
@@ -3202,7 +3383,9 @@ class MainActivity : Activity() {
                     }
                     status.text = if (items.isEmpty()) "Niets gevonden." else "Tik om af te spelen, of op een artiest voor zijn albums"
                     render(items) {
-                        when (it.type) { "artist" -> "ARTIESTEN"; "track" -> "NUMMERS"; "album" -> "ALBUMS"; else -> "PLAYLISTS" }
+                        when (it.type) {
+                            "artist" -> "ARTIESTEN"; "track" -> "NUMMERS"; "album" -> "ALBUMS"; "radio" -> "RADIO"; else -> "PLAYLISTS"
+                        }
                     }
                 }
             }
@@ -3216,8 +3399,8 @@ class MainActivity : Activity() {
             status.text = "${artist.name} laden…"
             results.removeAllViews()
             thread {
-                val rel = runCatching { spotify.artistReleases(artist.uri) }
-                val pls = runCatching { spotify.artistPlaylists(artist.name) }.getOrDefault(emptyList())
+                val rel = runCatching { src.artistReleases(artist) }
+                val pls = runCatching { src.artistPlaylists(artist) }.getOrDefault(emptyList())
                 runOnUiThread {
                     if (seq != searchSeq) return@runOnUiThread
                     results.removeAllViews()
@@ -3226,7 +3409,7 @@ class MainActivity : Activity() {
                         if (input.text.isNullOrBlank()) showRecent() else doSearch()
                     })
                     results.addView(row("▶  Alles van ${artist.name} afspelen", null, accent = true) {
-                        dialog.dismiss(); chooseSpotifyDevice(artist)
+                        dialog.dismiss(); src.pick(artist)
                     })
                     val releases = rel.getOrNull()
                     if (releases == null) {
@@ -3246,7 +3429,7 @@ class MainActivity : Activity() {
             status.text = "Recent beluisterd laden…"
             results.removeAllViews()
             thread {
-                val r = runCatching { spotify.recent() }
+                val r = runCatching { src.recent() }
                 runOnUiThread {
                     if (seq != searchSeq) return@runOnUiThread
                     results.removeAllViews()
@@ -3254,7 +3437,7 @@ class MainActivity : Activity() {
                         val e = r.exceptionOrNull()
                         status.text = if ((e as? SpotifyApi.ApiException)?.code == 403 ||
                             e?.message?.contains("scope", ignoreCase = true) == true
-                        ) "Voor 'recent beluisterd' moet je één keer opnieuw inloggen (⚙ → API's → Spotify)."
+                        ) "Voor 'recent beluisterd' moet je één keer opnieuw inloggen (⚙ → API's → ${src.title})."
                         else "Typ om te zoeken"
                         return@runOnUiThread
                     }
