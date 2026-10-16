@@ -2845,11 +2845,73 @@ class MainActivity : Activity() {
         val list = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
         content.addView(title)
         content.addView(status)
-        val scroll = ScrollView(this)
-        content.addView(scroll.apply {
+        val scroll = ScrollView(this).apply {
             addView(list)
+            isScrollbarFadingEnabled = false
+            if (Build.VERSION.SDK_INT >= 29) {
+                // Bredere, beter zichtbare schuifbalk
+                scrollBarSize = dp(8)
+                verticalScrollbarThumbDrawable = GradientDrawable().apply {
+                    setColor(0xFF8D8D8D.toInt()); cornerRadius = dp(4).toFloat()
+                }
+            }
+            layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.MATCH_PARENT, 1f)
+        }
+        // Rechts een letterbalk: tik of sleep naar een letter om er direct heen te springen
+        val letters = listOf("#") + ('A'..'Z').map { it.toString() }
+        val firstRow = HashMap<String, View>()
+        val bubble = TextView(this).apply {
+            textSize = 28f
+            setTextColor(Color.WHITE)
+            setTypeface(typeface, Typeface.BOLD)
+            gravity = Gravity.CENTER
+            background = GradientDrawable().apply { setColor(0xCC333333.toInt()); cornerRadius = dp(14).toFloat() }
+            visibility = View.GONE
+        }
+        val strip = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            layoutParams = LinearLayout.LayoutParams(dp(28), ViewGroup.LayoutParams.MATCH_PARENT).apply { marginStart = dp(4) }
+            background = GradientDrawable().apply { setColor(0xFF262626.toInt()); cornerRadius = dp(14).toFloat() }
+            letters.forEach { l ->
+                addView(TextView(this@MainActivity).apply {
+                    text = l
+                    textSize = 10f
+                    setTextColor(0xFFBBBBBB.toInt())
+                    setTypeface(typeface, Typeface.BOLD)
+                    gravity = Gravity.CENTER
+                    layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f)
+                })
+            }
+            setOnTouchListener { v, ev ->
+                when (ev.actionMasked) {
+                    android.view.MotionEvent.ACTION_DOWN, android.view.MotionEvent.ACTION_MOVE -> {
+                        val i = (ev.y / v.height * letters.size).toInt().coerceIn(0, letters.size - 1)
+                        // Deze letter, of anders de eerstvolgende die wel voorkomt
+                        val target = letters.drop(i).firstNotNullOfOrNull { firstRow[it] }
+                            ?: letters.take(i).reversed().firstNotNullOfOrNull { firstRow[it] }
+                        target?.let { scroll.scrollTo(0, it.top) }
+                        bubble.text = letters[i]
+                        bubble.visibility = View.VISIBLE
+                        true
+                    }
+                    android.view.MotionEvent.ACTION_UP, android.view.MotionEvent.ACTION_CANCEL -> {
+                        bubble.postDelayed({ bubble.visibility = View.GONE }, 400)
+                        true
+                    }
+                    else -> false
+                }
+            }
+        }
+        val listArea = android.widget.FrameLayout(this).apply {
             layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(460))
-        })
+            addView(LinearLayout(this@MainActivity).apply {
+                orientation = LinearLayout.HORIZONTAL
+                addView(scroll)
+                addView(strip)
+            }, android.widget.FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
+            addView(bubble, android.widget.FrameLayout.LayoutParams(dp(64), dp(64), Gravity.CENTER))
+        }
+        content.addView(listArea)
 
         fun row(icon: String, text: String, accent: Boolean = false, onClick: () -> Unit) = TextView(this).apply {
             this.text = "$icon   $text"
@@ -2880,6 +2942,7 @@ class MainActivity : Activity() {
             val my = ++seq
             status.text = "Laden…"
             list.removeAllViews()
+            firstRow.clear()
             thread {
                 val base = smbConfigure()
                 val r = runCatching { smb.list(path) }
@@ -2905,10 +2968,14 @@ class MainActivity : Activity() {
                         })
                     }
                     entries.forEach { e ->
-                        if (e.isDir) list.addView(row("📁", e.name) { open(e.path) })
-                        else list.addView(row("🎵", e.name.substringBeforeLast('.')) {
+                        val v = if (e.isDir) row("📁", e.name) { open(e.path) }
+                        else row("🎵", e.name.substringBeforeLast('.')) {
                             dialog.dismiss(); chooseMusicTarget(tracks, tracks.indexOf(e))
-                        })
+                        }
+                        list.addView(v)
+                        val c = e.name.firstOrNull()?.uppercaseChar()
+                        val key = if (c != null && c in 'A'..'Z') c.toString() else "#"
+                        firstRow.putIfAbsent(key, v)
                     }
                 }
             }
