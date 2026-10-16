@@ -2810,9 +2810,9 @@ class MainActivity : Activity() {
             setTypeface(typeface, Typeface.BOLD)
             gravity = Gravity.CENTER
         })
-        setupTile(0xFF6D4C41.toInt(), second) { showMusicSearch(maSource) }
-        // Lang indrukken: rechtstreeks door de netwerkmap bladeren (zonder Music Assistant)
-        setOnLongClickListener { showMusicSheet(); true }
+        setupTile(0xFF6D4C41.toInt(), second) { showMusicSheet() }
+        // Lang indrukken: zoeken in Music Assistant (op tags: artiest/album)
+        setOnLongClickListener { showMusicSearch(maSource); true }
     }
 
     /** Bladeren door de netwerkmap: mappen openen, op een nummer tikken speelt de map vanaf daar. */
@@ -2922,7 +2922,53 @@ class MainActivity : Activity() {
         }
     }
 
+    /** Map afspelen via Music Assistant op een gekozen speler (mappen zoals op schijf, geen tags). */
     private fun chooseMusicTarget(tracks: List<SmbMusic.Entry>, startAt: Int) {
+        val label = if (startAt == 0) tracks.firstOrNull()?.path?.substringBeforeLast('\\')?.substringAfterLast('\\') ?: "Map"
+        else tracks[startAt].name.substringBeforeLast('.')
+        chooseMaPlayer(label) { entity, name -> playFolderOnMa(tracks.drop(startAt), entity, name) }
+    }
+
+    private fun playFolderOnMa(tracks: List<SmbMusic.Entry>, entity: String, name: String) {
+        musicRun++   // oude wachtrij via de telefoon stoppen
+        mediaStatus.text = "${tracks.size} nummers op $name…"
+        thread {
+            val n = name.lowercase(NL)
+            when {
+                "chromecast" in n || "audio woonkamer" in n -> prepareReceiver("AUX1")
+                "googletv" in n || "google tv" in n || "tv in woonkamer" in n -> prepareWatching(SOURCE_APPS)
+                "denon" in n || "heos" in n -> prepareReceiver("HEOS Music")
+            }
+            // Music Assistant leest dezelfde netwerkmap; het pad t.o.v. de muziekmap wijst het bestand aan
+            val base = smbConfigure().orEmpty()
+            fun rel(e: SmbMusic.Entry) =
+                (if (base.isNotEmpty() && e.path.startsWith("$base\\")) e.path.removePrefix("$base\\") else e.path)
+                    .replace('\\', '/')
+            fun play(ids: List<String>) = haRequest(
+                "POST", "/api/services/music_assistant/play_media",
+                JSONObject().put("entity_id", entity).put("media_id", JSONArray(ids))
+                    .put("media_type", "track").put("enqueue", "replace").toString(),
+            )
+            var how = ""
+            val r = runCatching {
+                try {
+                    play(tracks.map { "filesystem_smb://track/" + rel(it) })
+                } catch (e: Exception) {
+                    // Reserve: de telefoon geeft de bestanden zelf door (alleen thuis, app open laten)
+                    play(tracks.map { smb.urlFor(it.path) })
+                    how = " (via de telefoon)"
+                }
+            }
+            runOnUiThread {
+                mediaStatus.text = r.exceptionOrNull()?.let { "Afspelen mislukt: ${it.message}" }
+                    ?: "${tracks.size} nummers spelen op $name$how"
+                handler.postDelayed({ refreshMedia() }, 2_000)
+            }
+        }
+    }
+
+    /** Oude manier: rechtstreeks casten vanaf de telefoon (niet meer standaard). */
+    private fun chooseMusicTargetDirect(tracks: List<SmbMusic.Entry>, startAt: Int) {
         AlertDialog.Builder(this)
             .setTitle("Afspelen op")
             .setItems(MUSIC_TARGETS.map { it.first }.toTypedArray()) { _, i ->
@@ -3089,7 +3135,10 @@ class MainActivity : Activity() {
     }
 
     /** Kies een Music Assistant-speler (Chromecast, Denon/HEOS, GoogleTV, piCorePlayer…). */
-    private fun chooseMaPlayer(item: SpotifyApi.Item) {
+    private fun chooseMaPlayer(item: SpotifyApi.Item) =
+        chooseMaPlayer(item.name) { entity, name -> playOnMa(item, entity, name) }
+
+    private fun chooseMaPlayer(label: String, onChosen: (String, String) -> Unit) {
         mediaStatus.text = "Spelers zoeken…"
         thread {
             val r = runCatching {
@@ -3112,9 +3161,10 @@ class MainActivity : Activity() {
                 val last = prefs().getString(KEY_MA_LAST_PLAYER, null)
                 val sorted = players.sortedBy { if (it.first == last) 0 else 1 }
                 AlertDialog.Builder(this)
-                    .setTitle("${item.name} afspelen op")
+                    .setTitle("$label afspelen op")
                     .setItems(sorted.map { it.second + if (it.third == "playing") "  (speelt nu)" else "" }.toTypedArray()) { _, i ->
-                        playOnMa(item, sorted[i].first, sorted[i].second)
+                        prefs().edit().putString(KEY_MA_LAST_PLAYER, sorted[i].first).apply()
+                        onChosen(sorted[i].first, sorted[i].second)
                     }
                     .setNegativeButton("Annuleren", null)
                     .show()
