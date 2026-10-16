@@ -173,6 +173,7 @@ class MainActivity : Activity() {
         /** Kodi op de GoogleTV-box (JSON-RPC via http). Wachtwoord vul je in de app in. */
         const val KODI_PKG = "org.xbmc.kodi"
         private const val KEY_TILE_ORDER = "tile_order"
+        private const val KEY_ZONE_UP = "zone_up"
         const val KODI_DEFAULT_HOST = "192.168.50.140"
         private const val KEY_KODI_HOST = "kodi_host"
         private const val KEY_KODI_PORT = "kodi_port"
@@ -2419,11 +2420,19 @@ class MainActivity : Activity() {
             mediaStatus.text = "Geen van de ingestelde bronnen gevonden op de receiver."
             return
         }
-        val current = options.indexOfFirst { it.first == attrs?.optString("source") }
+        val current = if (zoneUp) options.size else options.indexOfFirst { it.first == attrs?.optString("source") }
         AlertDialog.Builder(this)
             .setTitle("Bron kiezen")
-            .setSingleChoiceItems(options.map { it.second }.toTypedArray(), current) { d, which ->
+            .setSingleChoiceItems((options.map { it.second } + "PiCore (boven)").toTypedArray(), current) { d, which ->
                 d.dismiss()
+                if (which == options.size) {
+                    zoneUp = true
+                    nowTitle.text = "PiCore (boven)"
+                    mediaStatus.text = "Bron: PiCore boven"
+                    refreshMedia()
+                    return@setSingleChoiceItems
+                }
+                zoneUp = false
                 val (denonName, label) = options[which]
                 nowTitle.text = "$label ▾"
                 mediaStatus.text = "Bron: $label"
@@ -2766,7 +2775,6 @@ class MainActivity : Activity() {
         nowBar.addView(nowRemoteBtn)
         nowBar.addView(nowPlayPause)
         mediaList.addView(nowBar)
-        buildSecondBar()
 
         tileGrid = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
         mediaList.addView(tileGrid)
@@ -3830,6 +3838,7 @@ class MainActivity : Activity() {
 
     private fun playFolderOnMa(tracks: List<SmbMusic.Entry>, entity: String, name: String) {
         stopLocal()
+        zoneUp = "picore" in name.lowercase(NL)
         musicRun++   // oude wachtrij via de telefoon stoppen
         mediaStatus.text = "${tracks.size} nummers op $name…"
         thread {
@@ -4107,6 +4116,7 @@ class MainActivity : Activity() {
 
     private fun playOnMa(item: SpotifyApi.Item, entity: String, name: String) {
         stopLocal()
+        zoneUp = "picore" in name.lowercase(NL)
         prefs().edit().putString(KEY_MA_LAST_PLAYER, entity).apply()
         musicRun++   // eventuele oude wachtrij van de netwerkmap stoppen
         mediaStatus.text = "${item.name} op $name…"
@@ -4585,6 +4595,7 @@ class MainActivity : Activity() {
 
     private fun playSpotify(item: SpotifyApi.Item, device: SpotifyApi.Device) {
         stopLocal()
+        if ("picore" in device.name.lowercase(NL)) zoneUp = true
         mediaStatus.text = "${item.name} op ${device.name}…"
         thread {
             // Receiver aan en op de juiste ingang, afhankelijk van het apparaat
@@ -4692,6 +4703,7 @@ class MainActivity : Activity() {
 
     /** Receiver aan en op de juiste bron. */
     private fun prepareReceiver(source: String) {
+        zoneUp = false   // iets beneden gestart: balk toont weer de woonkamer
         val rec = stateOf(DASH_RECEIVER)
         if (rec?.optString("state") in listOf(null, "off", "standby", "unavailable")) {
             quietService("media_player/turn_on", JSONObject().put("entity_id", DASH_RECEIVER))
@@ -5288,8 +5300,6 @@ class MainActivity : Activity() {
             try {
                 val info = runCatching { nowPlaying() }
                 runOnUiThread { showNowBar(info) }
-                val second = runCatching { secondPlayer() }.getOrNull()
-                runOnUiThread { showSecondBar(second) }
             } finally {
                 mediaBusy = false
             }
@@ -5319,6 +5329,7 @@ class MainActivity : Activity() {
         }
         val rec = stateOf(DASH_RECEIVER)
         recState = rec
+        if (zoneUp) return picoreInfo()
         val recOn = isOn(rec)
         val source = if (recOn) attr(rec, "source") else null
         val box = stateOf(MEDIA_REMOTE)
@@ -5406,93 +5417,30 @@ class MainActivity : Activity() {
         }
     }
 
-    // ---------- Tweede balk: muziek elders in huis (PiCore boven via Music Assistant) ----------
+    // ---------- Zone boven: PiCore (via Music Assistant) als "bron" in de balk ----------
 
-    private lateinit var secondBar: LinearLayout
-    private lateinit var secondTitle: TextView
-    private lateinit var secondSub: TextView
-    private lateinit var secondPlay: TextView
-    @Volatile private var secondEntity: String? = null
+    /** true = de balk toont PiCore boven i.p.v. de receiver beneden. */
+    private var zoneUp: Boolean
+        get() = prefs().getBoolean(KEY_ZONE_UP, false)
+        set(v) { prefs().edit().putBoolean(KEY_ZONE_UP, v).apply() }
 
-    private fun buildSecondBar() {
-        fun ctl(label: String, onTap: () -> Unit) = TextView(this).apply {
-            text = label
-            textSize = 20f
-            setTextColor(Color.WHITE)
-            gravity = Gravity.CENTER
-            setPadding(dp(10), dp(4), dp(10), dp(4))
-            isClickable = true
-            setOnClickListener { alpha = 0.5f; postDelayed({ alpha = 1f }, 150); onTap() }
-        }
-        fun svc(service: String) {
-            val e = secondEntity ?: return
-            thread {
-                quietService("media_player/$service", JSONObject().put("entity_id", e))
-                Thread.sleep(1_200)
-                runOnUiThread { refreshMedia() }
-            }
-        }
-        secondTitle = TextView(this).apply {
-            textSize = 15f
-            setTextColor(Color.WHITE)
-            setTypeface(typeface, Typeface.BOLD)
-            maxLines = 1
-            ellipsize = android.text.TextUtils.TruncateAt.END
-        }
-        secondSub = TextView(this).apply {
-            textSize = 13f
-            setTextColor(0xFFB0B0B0.toInt())
-            maxLines = 1
-            ellipsize = android.text.TextUtils.TruncateAt.END
-        }
-        secondPlay = ctl("⏯\uFE0E") {
-            secondPlay.text = if (secondPlay.text.startsWith("⏸")) "▶\uFE0E" else "⏸\uFE0E"
-            svc("media_play_pause")
-        }
-        secondBar = LinearLayout(this).apply {
-            orientation = LinearLayout.HORIZONTAL
-            gravity = Gravity.CENTER_VERTICAL
-            setPadding(dp(14), dp(8), dp(6), dp(8))
-            background = GradientDrawable().apply { setColor(0xFF1E1E1E.toInt()); cornerRadius = dp(14).toFloat() }
-            layoutParams = LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT
-            ).apply { bottomMargin = dp(12) }
-            visibility = View.GONE
-            addView(TextView(this@MainActivity).apply {
-                text = "♫"
-                textSize = 20f
-                setTextColor(0xFFFFB300.toInt())
-                setPadding(0, 0, dp(12), 0)
-            })
-            addView(LinearLayout(this@MainActivity).apply {
-                orientation = LinearLayout.VERTICAL
-                layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
-                addView(secondTitle)
-                addView(secondSub)
-            })
-            addView(ctl("⏮\uFE0E") { svc("media_previous_track") })
-            addView(secondPlay)
-            addView(ctl("⏭\uFE0E") { svc("media_next_track") })
-        }
-        mediaList.addView(secondBar)
-    }
+    private fun picorePlayer(): Pair<String, String>? =
+        maPlayers().firstOrNull { (_, n) -> "picore" in n.lowercase(NL) }
 
-    /** Speelt (of pauzeert) er iets op PiCore boven? Dan (entiteit, naam, staat). */
-    private fun secondPlayer(): Triple<String, String, JSONObject>? {
-        val (entity, name) = maPlayers().firstOrNull { (_, n) -> "picore" in n.lowercase(NL) } ?: return null
-        val st = stateOf(entity) ?: return null
-        if (st.optString("state") !in listOf("playing", "paused")) return null
-        return Triple(entity, name, st)
-    }
-
-    private fun showSecondBar(p: Triple<String, String, JSONObject>?) {
-        if (p == null) { secondBar.visibility = View.GONE; secondEntity = null; return }
-        val (entity, name, st) = p
-        secondEntity = entity
-        secondTitle.text = "$name · boven"
-        secondSub.text = joinNonEmpty(attr(st, "media_artist"), attr(st, "media_title")).ifEmpty { "Music Assistant" }
-        secondPlay.text = if (isPlaying(st)) "⏸\uFE0E" else "▶\uFE0E"
-        secondBar.visibility = View.VISIBLE
+    private fun picoreInfo(): NowInfo {
+        val p = picorePlayer()
+        val st = p?.let { stateOf(it.first) }
+        val active = st?.optString("state") in listOf("playing", "paused")
+        return NowInfo(
+            title = "${p?.second ?: "PiCore"} (boven)",
+            sub = when {
+                p == null -> "Niet gevonden in Music Assistant"
+                active -> joinNonEmpty(attr(st, "media_artist"), attr(st, "media_title")).ifEmpty { "Music Assistant" }
+                else -> "Speelt niets · kies muziek via Spotify of Mijn muziek"
+            },
+            icon = R.drawable.ic_folder_music, iconBg = 0xFF6D4C41.toInt(),
+            entity = if (p != null && active) p.first else null, playing = isPlaying(st),
+        )
     }
 
     private fun showNowBar(result: Result<NowInfo?>) {
