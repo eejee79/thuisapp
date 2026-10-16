@@ -298,6 +298,10 @@ class MainActivity : Activity() {
     private lateinit var haSection: View
     private lateinit var pveSection: View
     private lateinit var fritzSection: View
+    private lateinit var spotifySection: View
+    private lateinit var spClientIdInput: EditText
+    private lateinit var spStatus: TextView
+    private val spotify by lazy { SpotifyApi(this) }
     private lateinit var updateSection: View
     private lateinit var updateVersion: TextView
     private lateinit var ghTokenInput: EditText
@@ -368,6 +372,9 @@ class MainActivity : Activity() {
         haSection = findViewById(R.id.haSection)
         pveSection = findViewById(R.id.pveSection)
         fritzSection = findViewById(R.id.fritzSection)
+        spotifySection = findViewById(R.id.spotifySection)
+        spClientIdInput = findViewById(R.id.spClientIdInput)
+        spStatus = findViewById(R.id.spStatus)
         updateSection = findViewById(R.id.updateSection)
         updateVersion = findViewById(R.id.updateVersion)
         ghTokenInput = findViewById(R.id.ghTokenInput)
@@ -401,6 +408,12 @@ class MainActivity : Activity() {
         menuItem(R.id.menuHa, R.drawable.ic_tab_ha, PAGE_HA)
         menuItem(R.id.menuPve, R.drawable.ic_tab_pve, PAGE_PVE)
         menuItem(R.id.menuFritz, R.drawable.ic_tab_fritz, PAGE_FRITZ)
+        menuItem(R.id.menuSpotify, R.drawable.ic_music, PAGE_SPOTIFY)
+        findViewById<Button>(R.id.spLoginButton).setOnClickListener { spotifyLogin() }
+        findViewById<Button>(R.id.spLogoutButton).setOnClickListener {
+            spotify.logout()
+            spStatus.text = "Uitgelogd."
+        }
         menuItem(R.id.menuUpdate, R.drawable.ic_update, PAGE_UPDATE)
         findViewById<Button>(R.id.updateSaveButton).setOnClickListener { saveUpdateSettings() }
         findViewById<Button>(R.id.checkUpdateButton).setOnClickListener {
@@ -424,11 +437,13 @@ class MainActivity : Activity() {
             requestPermissions(arrayOf(android.Manifest.permission.POST_NOTIFICATIONS), 1)
         }
         handleInstallIntent(intent)
+        handleSpotifyCallback(intent)
     }
 
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
         handleInstallIntent(intent)
+        handleSpotifyCallback(intent)
     }
 
     /** Geopend via de update-melding: meteen controleren en bijwerken. */
@@ -518,7 +533,7 @@ class MainActivity : Activity() {
         if (settingsPanel.visibility == View.VISIBLE) {
             when (settingsPage) {
                 PAGE_MENU -> showSettings(false)
-                PAGE_HA, PAGE_PVE, PAGE_FRITZ -> showSettingsPage(PAGE_API)
+                PAGE_HA, PAGE_PVE, PAGE_FRITZ, PAGE_SPOTIFY -> showSettingsPage(PAGE_API)
                 else -> showSettingsPage(PAGE_MENU)
             }
         } else {
@@ -578,6 +593,7 @@ class MainActivity : Activity() {
     private val PAGE_FRITZ = 3
     private val PAGE_UPDATE = 4
     private val PAGE_API = 5
+    private val PAGE_SPOTIFY = 6
     private var settingsPage = PAGE_MENU
 
     /** Instellingen: menu, of één van de twee onderdelen. */
@@ -588,14 +604,20 @@ class MainActivity : Activity() {
         haSection.visibility = if (page == PAGE_HA) View.VISIBLE else View.GONE
         pveSection.visibility = if (page == PAGE_PVE) View.VISIBLE else View.GONE
         fritzSection.visibility = if (page == PAGE_FRITZ) View.VISIBLE else View.GONE
+        spotifySection.visibility = if (page == PAGE_SPOTIFY) View.VISIBLE else View.GONE
         updateSection.visibility = if (page == PAGE_UPDATE) View.VISIBLE else View.GONE
         settingsTitle.text = when (page) {
             PAGE_API -> "API's"
             PAGE_HA -> "Home Assistant"
             PAGE_PVE -> "Proxmox"
             PAGE_FRITZ -> "Fritzbox"
+            PAGE_SPOTIFY -> "Spotify"
             PAGE_UPDATE -> "Updates"
             else -> "Instellingen"
+        }
+        if (page == PAGE_SPOTIFY) {
+            spClientIdInput.setText(spotify.clientId())
+            spStatus.text = if (spotify.isLoggedIn()) "Ingelogd ✓" else "Nog niet ingelogd."
         }
         if (page == PAGE_UPDATE) {
             updateVersion.text = "Geïnstalleerd: versie ${BuildConfig.VERSION_NAME}"
@@ -2614,7 +2636,7 @@ class MainActivity : Activity() {
         nowBar.addView(nowPlayPause)
         mediaList.addView(nowBar)
 
-        val tiles = listOf<(Boolean) -> View>({ second -> watchTvTile(second) }, { second -> heosTile(second) }) +
+        val tiles = listOf<(Boolean) -> View>({ second -> watchTvTile(second) }, { second -> heosTile(second) }, { second -> spotifyTile(second) }) +
             MEDIA_APPS.map { app -> { second: Boolean -> appTile(app, second) } }
         tiles.chunked(2).forEach { pair ->
             val row = LinearLayout(this).apply {
@@ -2703,6 +2725,234 @@ class MainActivity : Activity() {
             }
             .setNegativeButton("Annuleren", null)
             .show()
+    }
+
+    // ================= Spotify (zoeken en afspelen op een apparaat) =================
+
+    private fun spotifyLogin() {
+        val id = spClientIdInput.text.toString().trim()
+        prefs().edit().putString(SpotifyApi.KEY_CLIENT_ID, id).apply()
+        if (id.isEmpty()) {
+            spStatus.text = "Vul eerst de Client ID in."
+            return
+        }
+        spStatus.text = "Inloggen in de browser…"
+        startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(spotify.authorizeUrl())))
+    }
+
+    /** Terug uit de browser na inloggen: code omwisselen voor een token. */
+    private fun handleSpotifyCallback(intent: Intent?) {
+        val data = intent?.data ?: return
+        if (data.scheme != "thuisbasis" || data.host != "spotify-callback") return
+        intent.data = null
+        val code = data.getQueryParameter("code")
+        showSettings(true)
+        showSettingsPage(PAGE_SPOTIFY)
+        if (code == null) {
+            spStatus.text = "Inloggen afgebroken: ${data.getQueryParameter("error") ?: "onbekend"}"
+            return
+        }
+        spStatus.text = "Bezig met inloggen…"
+        thread {
+            val r = runCatching { spotify.exchangeCode(code) }
+            runOnUiThread {
+                spStatus.text = r.exceptionOrNull()?.let { "Inloggen mislukt: ${it.message}" }
+                    ?: "Ingelogd ✓  Je vindt Spotify nu bij Multimedia."
+            }
+        }
+    }
+
+    private fun spotifyTile(second: Boolean): View = LinearLayout(this).apply {
+        orientation = LinearLayout.VERTICAL
+        gravity = Gravity.CENTER
+        addView(ImageView(this@MainActivity).apply {
+            setImageResource(R.drawable.ic_music)
+            setColorFilter(Color.BLACK)
+            layoutParams = LinearLayout.LayoutParams(dp(40), dp(40))
+        })
+        addView(TextView(this@MainActivity).apply {
+            text = "Spotify"
+            textSize = 17f
+            setTextColor(Color.BLACK)
+            setTypeface(typeface, Typeface.BOLD)
+            gravity = Gravity.CENTER
+        })
+        setupTile(0xFF1DB954.toInt(), second) { showSpotifySheet() }
+    }
+
+    /** Zoekscherm: typ een artiest, nummer, album of playlist en kies wat je wilt horen. */
+    private fun showSpotifySheet() {
+        if (!spotify.isLoggedIn()) {
+            AlertDialog.Builder(this)
+                .setTitle("Spotify")
+                .setMessage("Log eerst in bij Spotify via ⚙ → API's → Spotify.")
+                .setPositiveButton("Naar instellingen") { _, _ -> showSettings(true); showSettingsPage(PAGE_SPOTIFY) }
+                .setNegativeButton("Annuleren", null)
+                .show()
+            return
+        }
+        val dialog = Dialog(this)
+        val content = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(16), dp(12), dp(16), dp(16))
+        }
+        content.addView(TextView(this).apply {
+            text = "Spotify"
+            textSize = 19f
+            setTextColor(Color.WHITE)
+            setTypeface(typeface, Typeface.BOLD)
+        })
+        val input = EditText(this).apply {
+            hint = "Artiest, nummer, album of playlist"
+            setTextColor(Color.WHITE)
+            setHintTextColor(0xFF777777.toInt())
+            inputType = InputType.TYPE_CLASS_TEXT
+            imeOptions = android.view.inputmethod.EditorInfo.IME_ACTION_SEARCH
+            setSingleLine()
+        }
+        content.addView(input)
+        val status = TextView(this).apply {
+            textSize = 13f
+            setTextColor(0xFFAAAAAA.toInt())
+            setPadding(0, dp(6), 0, dp(6))
+        }
+        content.addView(status)
+        val results = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        val scroll = ScrollView(this).apply {
+            addView(results)
+            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(420))
+        }
+        content.addView(scroll)
+
+        fun doSearch() {
+            val q = input.text.toString().trim()
+            if (q.isEmpty()) return
+            status.text = "Zoeken…"
+            results.removeAllViews()
+            thread {
+                val r = runCatching { spotify.search(q) }
+                runOnUiThread {
+                    val items = r.getOrNull()
+                    if (items == null) {
+                        status.text = "Zoeken mislukt: ${r.exceptionOrNull()?.message}"
+                        return@runOnUiThread
+                    }
+                    status.text = if (items.isEmpty()) "Niets gevonden." else "Tik om af te spelen"
+                    var lastType = ""
+                    items.forEach { item ->
+                        if (item.type != lastType) {
+                            lastType = item.type
+                            results.addView(TextView(this).apply {
+                                text = when (item.type) {
+                                    "artist" -> "ARTIESTEN"; "track" -> "NUMMERS"; "album" -> "ALBUMS"; else -> "PLAYLISTS"
+                                }
+                                textSize = 12f
+                                setTextColor(0xFF1DB954.toInt())
+                                setPadding(0, dp(12), 0, dp(4))
+                            })
+                        }
+                        results.addView(LinearLayout(this).apply {
+                            orientation = LinearLayout.VERTICAL
+                            setPadding(dp(10), dp(9), dp(10), dp(9))
+                            background = GradientDrawable().apply {
+                                setColor(0xFF2A2A2A.toInt()); cornerRadius = dp(10).toFloat()
+                            }
+                            layoutParams = LinearLayout.LayoutParams(
+                                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT
+                            ).apply { bottomMargin = dp(6) }
+                            addView(TextView(this@MainActivity).apply {
+                                text = item.name
+                                textSize = 15f
+                                setTextColor(Color.WHITE)
+                                setTypeface(typeface, Typeface.BOLD)
+                                maxLines = 1
+                                ellipsize = android.text.TextUtils.TruncateAt.END
+                            })
+                            if (item.sub.isNotEmpty() && item.type != "artist") addView(TextView(this@MainActivity).apply {
+                                text = item.sub
+                                textSize = 12f
+                                setTextColor(0xFFAAAAAA.toInt())
+                                maxLines = 1
+                                ellipsize = android.text.TextUtils.TruncateAt.END
+                            })
+                            isClickable = true
+                            setOnClickListener { dialog.dismiss(); chooseSpotifyDevice(item) }
+                        })
+                    }
+                }
+            }
+        }
+        input.setOnEditorActionListener { _, _, _ -> doSearch(); true }
+
+        dialog.setContentView(content)
+        dialog.window?.apply {
+            setBackgroundDrawable(GradientDrawable().apply {
+                setColor(0xFF1E1E1E.toInt())
+                cornerRadii = floatArrayOf(dp(22).toFloat(), dp(22).toFloat(), dp(22).toFloat(), dp(22).toFloat(), 0f, 0f, 0f, 0f)
+            })
+            setGravity(Gravity.BOTTOM)
+            setLayout(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
+            setSoftInputMode(android.view.WindowManager.LayoutParams.SOFT_INPUT_STATE_VISIBLE or
+                android.view.WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE)
+        }
+        dialog.show()
+        input.requestFocus()
+    }
+
+    /** Kies waar het moet spelen (Spotify Connect-apparaten); het laatst gebruikte staat bovenaan. */
+    private fun chooseSpotifyDevice(item: SpotifyApi.Item) {
+        mediaStatus.text = "Apparaten zoeken…"
+        thread {
+            val r = runCatching { spotify.devices() }
+            runOnUiThread {
+                val devices = r.getOrNull()
+                if (devices == null) {
+                    mediaStatus.text = "Spotify: ${r.exceptionOrNull()?.message}"
+                    return@runOnUiThread
+                }
+                if (devices.isEmpty()) {
+                    mediaStatus.text = ""
+                    AlertDialog.Builder(this)
+                        .setTitle("Geen apparaten gevonden")
+                        .setMessage(
+                            "Spotify ziet nu geen speakers of tv's. Open Spotify één keer op je telefoon en tik " +
+                                "op het apparaat-icoontje; daarna verschijnen ze hier meestal wel."
+                        )
+                        .setPositiveButton("OK", null)
+                        .show()
+                    return@runOnUiThread
+                }
+                val last = prefs().getString(SpotifyApi.KEY_LAST_DEVICE, null)
+                val sorted = devices.sortedBy { if (it.id == last) 0 else if (it.active) 1 else 2 }
+                AlertDialog.Builder(this)
+                    .setTitle("${item.name} afspelen op")
+                    .setItems(sorted.map { it.name + if (it.active) "  (speelt nu)" else "" }.toTypedArray()) { _, i ->
+                        playSpotify(item, sorted[i])
+                    }
+                    .setNegativeButton("Annuleren", null)
+                    .show()
+                mediaStatus.text = ""
+            }
+        }
+    }
+
+    private fun playSpotify(item: SpotifyApi.Item, device: SpotifyApi.Device) {
+        mediaStatus.text = "${item.name} op ${device.name}…"
+        thread {
+            // Receiver aan en op de juiste ingang, afhankelijk van het apparaat
+            val n = device.name.lowercase(NL)
+            when {
+                "chromecast" in n || "audio woonkamer" in n -> prepareReceiver("AUX1")
+                "googletv" in n || "google tv" in n || "tv in woonkamer" in n -> prepareWatching(SOURCE_APPS)
+                "denon" in n || "heos" in n -> prepareReceiver("HEOS Music")
+            }
+            val r = runCatching { spotify.play(device.id, item) }
+            runOnUiThread {
+                mediaStatus.text = r.exceptionOrNull()?.let { "Afspelen mislukt: ${it.message}" }
+                    ?: "${item.name} speelt op ${device.name}"
+                handler.postDelayed({ refreshMedia() }, 2_000)
+            }
+        }
     }
 
     private fun View.setupTile(color: Int, second: Boolean, onTap: () -> Unit) {

@@ -351,6 +351,19 @@
                         android:textColor="#FFFFFF"
                         android:textSize="17sp" />
 
+                    <TextView
+                        android:id="@+id/menuSpotify"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:layout_marginBottom="12dp"
+                        android:background="#1E1E1E"
+                        android:drawablePadding="16dp"
+                        android:gravity="center_vertical"
+                        android:padding="18dp"
+                        android:text="Spotify"
+                        android:textColor="#FFFFFF"
+                        android:textSize="17sp" />
+
                 </LinearLayout>
 
                 <!-- Onderdeel: Home Assistant -->
@@ -536,6 +549,60 @@
                         android:layout_height="wrap_content"
                         android:layout_marginTop="24dp"
                         android:text="Opslaan" />
+                </LinearLayout>
+
+                <!-- Onderdeel: Spotify -->
+                <LinearLayout
+                    android:id="@+id/spotifySection"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:orientation="vertical"
+                    android:visibility="gone">
+
+                    <TextView
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:text="Client ID (uit je app op developer.spotify.com)"
+                        android:textColor="#B0B0B0" />
+
+                    <EditText
+                        android:id="@+id/spClientIdInput"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:inputType="text"
+                        android:textColor="#FFFFFF"
+                        android:textColorHint="#666666" />
+
+                    <TextView
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:layout_marginTop="8dp"
+                        android:text="Zet bij je Spotify-app onder Redirect URIs ook: thuisbasis://spotify-callback"
+                        android:textColor="#888888"
+                        android:textIsSelectable="true"
+                        android:textSize="13sp" />
+
+                    <Button
+                        android:id="@+id/spLoginButton"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:layout_marginTop="20dp"
+                        android:text="Opslaan en inloggen bij Spotify" />
+
+                    <Button
+                        android:id="@+id/spLogoutButton"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:layout_marginTop="8dp"
+                        android:text="Uitloggen" />
+
+                    <TextView
+                        android:id="@+id/spStatus"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:layout_marginTop="16dp"
+                        android:textColor="#B0B0B0"
+                        android:textSize="15sp" />
                 </LinearLayout>
 
                 <!-- Onderdeel: Updates -->
