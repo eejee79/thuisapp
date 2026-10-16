@@ -28,7 +28,7 @@ class SpotifyApi(private val context: Context) {
         private const val KEY_VERIFIER = "sp_verifier"
         const val KEY_LAST_DEVICE = "sp_last_device"
         private const val SCOPES = "user-read-playback-state user-modify-playback-state " +
-            "user-read-currently-playing playlist-read-private user-library-read"
+            "user-read-currently-playing playlist-read-private user-library-read user-read-private"
     }
 
     class Item(val name: String, val sub: String, val uri: String, val type: String)
@@ -144,7 +144,7 @@ class SpotifyApi(private val context: Context) {
     /** Zoekt artiesten, nummers, albums en playlists. */
     fun search(query: String): List<Item> {
         val q = URLEncoder.encode(query, "UTF-8")
-        val json = JSONObject(call("GET", "/search?q=$q&type=artist,track,album,playlist&limit=6&market=from_token"))
+        val json = JSONObject(call("GET", "/search?q=$q&type=artist,track,album,playlist&limit=6"))
         val out = mutableListOf<Item>()
         fun each(key: String, f: (JSONObject) -> Item?) {
             val items = json.optJSONObject(key)?.optJSONArray("items") ?: return
