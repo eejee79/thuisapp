@@ -4140,6 +4140,7 @@ class MainActivity : Activity() {
                 )
             }
             runOnUiThread {
+                r.exceptionOrNull()?.let { showPlayError(name, it.message, viaMa = true) }
                 mediaStatus.text = r.exceptionOrNull()?.let { "Afspelen mislukt: ${it.message}" }
                     ?: "${item.name} speelt op $name"
                 handler.postDelayed({ refreshMedia() }, 2_000)
@@ -4503,6 +4504,23 @@ class MainActivity : Activity() {
         }
     }
 
+    /** Foutmelding bij afspelen duidelijk in beeld (de statusregel valt vaak buiten beeld). */
+    private fun showPlayError(device: String, msg: String?, viaMa: Boolean) {
+        val hint = when {
+            viaMa -> "\n\nAfspelen via Music Assistant lukt alleen als in Music Assistant de Spotify-provider is toegevoegd (Instellingen → Providers → Spotify) en de speler aan staat."
+            msg?.contains("not found", true) == true || msg?.contains("404") == true ->
+                "\n\nSpotify kan dit apparaat nu niet bereiken. Cast-apparaten (Nest, Chromecast, tv) werken vaak pas nadat je ze één keer vanuit de Spotify-app hebt gekozen. Of kies dezelfde speler \"via Music Assistant\"."
+            msg?.contains("restricted", true) == true ->
+                "\n\nDit apparaat laat zich niet op afstand bedienen door Spotify."
+            else -> ""
+        }
+        AlertDialog.Builder(this)
+            .setTitle("Afspelen op $device mislukt")
+            .setMessage((msg ?: "Onbekende fout") + hint)
+            .setPositiveButton("OK", null)
+            .show()
+    }
+
     private fun isThisPhone(d: SpotifyApi.Device) = d.type.equals("Smartphone", true) &&
         (d.name.equals(Build.MODEL, true) || d.name.contains(Build.MODEL, true) ||
             d.name.equals(Settings.Global.getString(contentResolver, Settings.Global.DEVICE_NAME) ?: "-", true))
@@ -4611,6 +4629,7 @@ class MainActivity : Activity() {
             }
             val r = runCatching { spotify.play(device.id, item) }
             runOnUiThread {
+                r.exceptionOrNull()?.let { showPlayError(device.name, it.message, viaMa = false) }
                 mediaStatus.text = r.exceptionOrNull()?.let { "Afspelen mislukt: ${it.message}" }
                     ?: "${item.name} speelt op ${device.name}"
                 handler.postDelayed({ refreshMedia() }, 2_000)

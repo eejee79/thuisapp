@@ -279,7 +279,19 @@ class SpotifyApi(private val context: Context) {
     fun play(deviceId: String, item: Item) {
         val body = if (item.type == "track") JSONObject().put("uris", JSONArray().put(item.uri))
         else JSONObject().put("context_uri", item.uri)
-        call("PUT", "/me/player/play?device_id=" + URLEncoder.encode(deviceId, "UTF-8"), body.toString())
+        val path = "/me/player/play?device_id=" + URLEncoder.encode(deviceId, "UTF-8")
+        try {
+            call("PUT", path, body.toString())
+        } catch (e: ApiException) {
+            // Slapend apparaat (bijv. een Chromecast/Nest): eerst "wakker maken" door het afspelen
+            // ernaartoe over te zetten, even wachten, en dan nogmaals
+            if (e.code !in listOf(404, 502, 503)) throw e
+            runCatching {
+                call("PUT", "/me/player", JSONObject().put("device_ids", JSONArray().put(deviceId)).put("play", false).toString())
+            }
+            Thread.sleep(2_000)
+            call("PUT", path, body.toString())
+        }
         prefs().edit().putString(KEY_LAST_DEVICE, deviceId).apply()
     }
 }
