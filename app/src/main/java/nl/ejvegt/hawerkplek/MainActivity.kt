@@ -4942,12 +4942,107 @@ class MainActivity : Activity() {
                 btn("▲ CH+", "CHANNEL_UP"),
             ))
         }
-        content.addView(TextView(this).apply {
-            text = "Volume: met de volumeknoppen van je telefoon"
-            textSize = 12f
-            setTextColor(0xFF888888.toInt())
+        // Voortgang van wat er speelt (Kodi, Music Assistant of de box zelf); verslepen = spoelen
+        val progTitle = TextView(this).apply {
+            textSize = 13f
+            setTextColor(0xFFCCCCCC.toInt())
+            maxLines = 1
+            ellipsize = android.text.TextUtils.TruncateAt.END
             gravity = Gravity.CENTER
+        }
+        val progBar = SeekBar(this).apply {
+            max = 1000
+            progressTintList = ColorStateList.valueOf(0xFF18BCF2.toInt())
+            thumbTintList = ColorStateList.valueOf(0xFF18BCF2.toInt())
+        }
+        val progPos = TextView(this).apply { textSize = 12f; setTextColor(0xFF999999.toInt()) }
+        val progDur = TextView(this).apply { textSize = 12f; setTextColor(0xFF999999.toInt()); gravity = Gravity.END }
+        val progBox = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            visibility = View.GONE
+            addView(progTitle)
+            addView(progBar)
+            addView(LinearLayout(this@MainActivity).apply {
+                orientation = LinearLayout.HORIZONTAL
+                setPadding(dp(14), 0, dp(14), 0)
+                addView(progPos, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+                addView(progDur, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+            })
+        }
+        content.addView(progBox)
+        // Wat er nu speelt: (bron, positie, duur, speelt, titel); bron = "kodi:<id>" of een HA-entiteit
+        class Prog(val src: String, var pos: Double, val dur: Double, val playing: Boolean, val title: String)
+        var prog: Prog? = null
+        var dragging = false
+        var lastFetch = 0L
+        fun render() {
+            val p = prog
+            if (p == null || p.dur <= 0) { progBox.visibility = View.GONE; return }
+            progBox.visibility = View.VISIBLE
+            progTitle.text = p.title
+            progDur.text = fmtSec(p.dur)
+            if (!dragging) {
+                progBar.progress = (p.pos.coerceIn(0.0, p.dur) * 1000 / p.dur).toInt()
+                progPos.text = fmtSec(p.pos.coerceIn(0.0, p.dur))
+            }
+        }
+        progBar.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
+            override fun onProgressChanged(sb: SeekBar, v: Int, fromUser: Boolean) {
+                val p = prog ?: return
+                if (fromUser) progPos.text = fmtSec(p.dur * v / 1000)
+            }
+            override fun onStartTrackingTouch(sb: SeekBar) { dragging = true }
+            override fun onStopTrackingTouch(sb: SeekBar) {
+                val p = prog ?: run { dragging = false; return }
+                val frac = sb.progress / 1000.0
+                p.pos = p.dur * frac
+                thread {
+                    runCatching {
+                        if (p.src.startsWith("kodi:")) kodi.seekPercent(p.src.removePrefix("kodi:").toInt(), frac * 100)
+                        else haRequest("POST", "/api/services/media_player/media_seek",
+                            JSONObject().put("entity_id", p.src).put("seek_position", p.dur * frac).toString())
+                    }
+                    Thread.sleep(800)
+                    runOnUiThread { dragging = false; lastFetch = 0 }
+                }
+            }
         })
+        fun fetch(): Prog? {
+            if (remote == MEDIA_REMOTE && boxApp == KODI_PKG && kodiConfigured()) {
+                runCatching { kodi.progress() }.getOrNull()?.let { (pid, pd, playing) ->
+                    val title = runCatching { kodi.state()?.title }.getOrNull() ?: "Kodi"
+                    return Prog("kodi:$pid", pd.first, pd.second, playing, title)
+                }
+            }
+            val entity = maPlayerOnBox(remote) ?: if (remote == MEDIA_REMOTE) MEDIA_PLAYER else TVPLUS_PLAYER
+            val st = stateOf(entity) ?: return null
+            val a = st.optJSONObject("attributes") ?: return null
+            val dur = a.optDouble("media_duration", 0.0)
+            if (dur <= 0 || !a.has("media_position")) return null
+            val playing = st.optString("state") == "playing"
+            var pos = a.optDouble("media_position", 0.0)
+            if (playing) runCatching {
+                pos += (System.currentTimeMillis() - OffsetDateTime.parse(a.optString("media_position_updated_at"))
+                    .toInstant().toEpochMilli()) / 1000.0
+            }
+            val title = listOf(a.optString("media_title"), a.optString("media_artist")).filter { it.isNotEmpty() }.joinToString(" · ")
+            return Prog(entity, pos, dur, playing, title)
+        }
+        val ticker = object : Runnable {
+            override fun run() {
+                if (!dialog.isShowing && lastFetch != 0L) return
+                prog?.let { if (it.playing && !dragging) it.pos += 1.0 }
+                render()
+                val now = System.currentTimeMillis()
+                if (now - lastFetch > 5_000) {
+                    lastFetch = now
+                    thread { val p = fetch(); runOnUiThread { if (!dragging) { prog = p; render() } } }
+                }
+                handler.postDelayed(this, 1_000)
+            }
+        }
+        handler.post(ticker)
+        dialog.setOnDismissListener { handler.removeCallbacks(ticker) }
 
         dialog.setContentView(ScrollView(this).apply { addView(content) })
         // Volumeknoppen blijven de receiver regelen terwijl de afstandsbediening open is

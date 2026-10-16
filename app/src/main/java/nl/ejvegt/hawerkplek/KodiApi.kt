@@ -148,6 +148,20 @@ class KodiApi(
         )
     }
 
+    /** (speler, positie in s, totale duur in s, speelt) van de video die nu loopt, of null. */
+    fun progress(): Triple<Int, Pair<Double, Double>, Boolean>? {
+        val pid = activeVideoPlayer() ?: return null
+        val p = rpc("Player.GetProperties", JSONObject().put("playerid", pid)
+            .put("properties", JSONArray().put("time").put("totaltime").put("speed")), timeoutMs = 3_000) as? JSONObject ?: return null
+        fun sec(t: JSONObject?) = if (t == null) 0.0 else
+            t.optInt("hours") * 3600.0 + t.optInt("minutes") * 60 + t.optInt("seconds") + t.optInt("milliseconds") / 1000.0
+        return Triple(pid, sec(p.optJSONObject("time")) to sec(p.optJSONObject("totaltime")), p.optInt("speed") != 0)
+    }
+
+    fun seekPercent(pid: Int, pct: Double) {
+        rpc("Player.Seek", JSONObject().put("playerid", pid).put("value", JSONObject().put("percentage", pct)))
+    }
+
     fun setSubtitle(pid: Int, index: Int?) {
         val params = JSONObject().put("playerid", pid)
         if (index == null) params.put("subtitle", "off") else params.put("subtitle", index).put("enable", true)
