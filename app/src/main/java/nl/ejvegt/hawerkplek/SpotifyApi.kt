@@ -31,7 +31,7 @@ class SpotifyApi(private val context: Context) {
             "user-read-currently-playing playlist-read-private user-library-read user-read-private"
     }
 
-    class Item(val name: String, val sub: String, val uri: String, val type: String)
+    class Item(val name: String, val sub: String, val uri: String, val type: String, val date: String = "")
     class Device(val id: String, val name: String, val type: String, val active: Boolean)
     class ApiException(val code: Int, message: String) : IOException(message)
 
@@ -168,6 +168,49 @@ class SpotifyApi(private val context: Context) {
             )
         }
         return out
+    }
+
+    /**
+     * Albums en singles/EP's van een artiest, elk nieuw → oud. Spotify geeft ze in pagina's;
+     * die halen we allemaal op (met een maximum).
+     */
+    fun artistReleases(artistUri: String): List<Item> {
+        val id = artistUri.substringAfterLast(':')
+        val out = mutableListOf<Item>()
+        var path: String? = "/artists/$id/albums?include_groups=album,single&limit=10"
+        var pages = 0
+        while (path != null && pages < 15) {
+            val json = JSONObject(call("GET", path))
+            val items = json.optJSONArray("items") ?: JSONArray()
+            for (i in 0 until items.length()) {
+                val o = items.optJSONObject(i) ?: continue
+                val date = o.optString("release_date")
+                val kind = o.optString("album_group").ifEmpty { o.optString("album_type") }
+                val type = if (kind == "album") "album" else "single"
+                val label = if (type == "album") "Album" else if (o.optInt("total_tracks") > 3) "EP" else "Single"
+                out.add(Item(o.optString("name"), "${date.take(4)} · $label", o.optString("uri"), type, date))
+            }
+            path = json.optString("next").takeIf { it.startsWith("https://api.spotify.com/v1") }
+                ?.removePrefix("https://api.spotify.com/v1")
+            pages++
+        }
+        // Zelfde titel meerdere keren (bijv. deluxe/andere regio): alleen de nieuwste houden
+        return out.sortedByDescending { it.date }.distinctBy { it.type + it.name.lowercase() }
+    }
+
+    /** Playlists rond een artiest (bijv. "This Is …"). */
+    fun artistPlaylists(name: String): List<Item> {
+        val q = URLEncoder.encode(name, "UTF-8")
+        val items = JSONObject(call("GET", "/search?q=$q&type=playlist&limit=10"))
+            .optJSONObject("playlists")?.optJSONArray("items") ?: return emptyList()
+        return (0 until items.length()).mapNotNull { i ->
+            val o = items.optJSONObject(i) ?: return@mapNotNull null
+            Item(
+                o.optString("name"),
+                "Playlist · " + (o.optJSONObject("owner")?.optString("display_name") ?: ""),
+                o.optString("uri"), "playlist",
+            )
+        }
     }
 
     fun devices(): List<Device> {

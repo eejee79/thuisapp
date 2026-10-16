@@ -2825,6 +2825,58 @@ class MainActivity : Activity() {
         content.addView(scroll)
 
         var searchSeq = 0
+        lateinit var showArtist: (SpotifyApi.Item) -> Unit
+
+        fun row(title: String, sub: String?, accent: Boolean = false, onClick: () -> Unit) =
+            LinearLayout(this).apply {
+                orientation = LinearLayout.VERTICAL
+                setPadding(dp(10), dp(9), dp(10), dp(9))
+                background = GradientDrawable().apply {
+                    setColor(if (accent) 0xFF1DB954.toInt() else 0xFF2A2A2A.toInt()); cornerRadius = dp(10).toFloat()
+                }
+                layoutParams = LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT
+                ).apply { bottomMargin = dp(6) }
+                addView(TextView(this@MainActivity).apply {
+                    text = title
+                    textSize = 15f
+                    setTextColor(if (accent) Color.BLACK else Color.WHITE)
+                    setTypeface(typeface, Typeface.BOLD)
+                    maxLines = 1
+                    ellipsize = android.text.TextUtils.TruncateAt.END
+                })
+                if (!sub.isNullOrEmpty()) addView(TextView(this@MainActivity).apply {
+                    text = sub
+                    textSize = 12f
+                    setTextColor(0xFFAAAAAA.toInt())
+                    maxLines = 1
+                    ellipsize = android.text.TextUtils.TruncateAt.END
+                })
+                isClickable = true
+                setOnClickListener { onClick() }
+            }
+
+        /** Lijst tonen met kopjes; [section] bepaalt onder welk kopje een item valt. */
+        fun render(items: List<SpotifyApi.Item>, section: (SpotifyApi.Item) -> String) {
+            var last = ""
+            items.forEach { item ->
+                val sec = section(item)
+                if (sec != last) {
+                    last = sec
+                    results.addView(TextView(this).apply {
+                        text = sec
+                        textSize = 12f
+                        setTextColor(0xFF1DB954.toInt())
+                        setPadding(0, dp(12), 0, dp(4))
+                    })
+                }
+                results.addView(row(item.name, if (item.type == "artist") null else item.sub) {
+                    if (item.type == "artist") showArtist(item)
+                    else { dialog.dismiss(); chooseSpotifyDevice(item) }
+                })
+            }
+        }
+
         fun doSearch() {
             val q = input.text.toString().trim()
             if (q.isEmpty()) return
@@ -2840,47 +2892,40 @@ class MainActivity : Activity() {
                         status.text = "Zoeken mislukt: ${r.exceptionOrNull()?.message}"
                         return@runOnUiThread
                     }
-                    status.text = if (items.isEmpty()) "Niets gevonden." else "Tik om af te spelen"
-                    var lastType = ""
-                    items.forEach { item ->
-                        if (item.type != lastType) {
-                            lastType = item.type
-                            results.addView(TextView(this).apply {
-                                text = when (item.type) {
-                                    "artist" -> "ARTIESTEN"; "track" -> "NUMMERS"; "album" -> "ALBUMS"; else -> "PLAYLISTS"
-                                }
-                                textSize = 12f
-                                setTextColor(0xFF1DB954.toInt())
-                                setPadding(0, dp(12), 0, dp(4))
-                            })
-                        }
-                        results.addView(LinearLayout(this).apply {
-                            orientation = LinearLayout.VERTICAL
-                            setPadding(dp(10), dp(9), dp(10), dp(9))
-                            background = GradientDrawable().apply {
-                                setColor(0xFF2A2A2A.toInt()); cornerRadius = dp(10).toFloat()
-                            }
-                            layoutParams = LinearLayout.LayoutParams(
-                                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT
-                            ).apply { bottomMargin = dp(6) }
-                            addView(TextView(this@MainActivity).apply {
-                                text = item.name
-                                textSize = 15f
-                                setTextColor(Color.WHITE)
-                                setTypeface(typeface, Typeface.BOLD)
-                                maxLines = 1
-                                ellipsize = android.text.TextUtils.TruncateAt.END
-                            })
-                            if (item.sub.isNotEmpty() && item.type != "artist") addView(TextView(this@MainActivity).apply {
-                                text = item.sub
-                                textSize = 12f
-                                setTextColor(0xFFAAAAAA.toInt())
-                                maxLines = 1
-                                ellipsize = android.text.TextUtils.TruncateAt.END
-                            })
-                            isClickable = true
-                            setOnClickListener { dialog.dismiss(); chooseSpotifyDevice(item) }
-                        })
+                    status.text = if (items.isEmpty()) "Niets gevonden." else "Tik om af te spelen, of op een artiest voor zijn albums"
+                    render(items) {
+                        when (it.type) { "artist" -> "ARTIESTEN"; "track" -> "NUMMERS"; "album" -> "ALBUMS"; else -> "PLAYLISTS" }
+                    }
+                }
+            }
+        }
+
+        // Artiestpagina: albums (nieuw → oud), dan singles/EP's, dan playlists
+        showArtist = { artist ->
+            val seq = ++searchSeq
+            (getSystemService(Context.INPUT_METHOD_SERVICE) as android.view.inputmethod.InputMethodManager)
+                .hideSoftInputFromWindow(input.windowToken, 0)
+            status.text = "${artist.name} laden…"
+            results.removeAllViews()
+            thread {
+                val rel = runCatching { spotify.artistReleases(artist.uri) }
+                val pls = runCatching { spotify.artistPlaylists(artist.name) }.getOrDefault(emptyList())
+                runOnUiThread {
+                    if (seq != searchSeq) return@runOnUiThread
+                    results.removeAllViews()
+                    status.text = artist.name
+                    results.addView(row("← Terug naar zoekresultaten", null) { doSearch() })
+                    results.addView(row("▶  Alles van ${artist.name} afspelen", null, accent = true) {
+                        dialog.dismiss(); chooseSpotifyDevice(artist)
+                    })
+                    val releases = rel.getOrNull()
+                    if (releases == null) {
+                        status.text = "Laden mislukt: ${rel.exceptionOrNull()?.message}"
+                    }
+                    val albums = releases.orEmpty().filter { it.type == "album" }
+                    val singles = releases.orEmpty().filter { it.type == "single" }
+                    render(albums + singles + pls) {
+                        when (it.type) { "album" -> "ALBUMS"; "single" -> "SINGLES & EP'S"; else -> "PLAYLISTS" }
                     }
                 }
             }
