@@ -20,8 +20,8 @@ android {
         applicationId = "nl.ejvegt.hawerkplek"
         minSdk = 26
         targetSdk = 35
-        versionCode = 54
-        versionName = "1.53"
+        versionCode = 55
+        versionName = "1.54"
 
         buildConfigField("String", "HA_URL", "\"${localProp("HA_URL")}\"")
         buildConfigField("String", "HA_URL_LOCAL", "\"${localProp("HA_URL_LOCAL")}\"")
@@ -69,9 +69,22 @@ android {
         targetCompatibility = JavaVersion.VERSION_17
     }
 
+    packaging {
+        resources {
+            // Dubbele bestanden uit de bibliotheken (BouncyCastle e.d.) niet meenemen
+            excludes += setOf(
+                "META-INF/versions/**", "META-INF/*.SF", "META-INF/*.DSA", "META-INF/*.RSA",
+                "META-INF/DEPENDENCIES", "META-INF/LICENSE*", "META-INF/NOTICE*", "META-INF/INDEX.LIST",
+            )
+        }
+    }
+
     kotlinOptions {
         jvmTarget = "17"
     }
 }
 
-// Geen extra bibliotheken nodig: alleen standaard Android + Kotlin.
+// Eén extra bibliotheek: smbj, om muziek van de netwerkmap (SMB) te lezen.
+dependencies {
+    implementation("com.hierynomus:smbj:0.13.0")
+}

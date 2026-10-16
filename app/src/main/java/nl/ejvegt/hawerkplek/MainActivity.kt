@@ -163,6 +163,17 @@ class MainActivity : Activity() {
         const val CHROMECAST_AUDIO = "media_player.chromecastaudio8913"
         /** Spotify-integratie: weet altijd welk nummer er speelt (de cast-bridge geeft dat niet door). */
         const val SPOTIFY = "media_player.spotify_ejvegt"
+        /** Muziek op de netwerkmap (SMB). Wachtwoord vul je in de app in, het staat niet in de code. */
+        const val SMB_DEFAULT_PATH = "\\\\192.168.50.208\\NextcloudFiles\\music"
+        const val SMB_DEFAULT_USER = "ejvegt"
+        private const val KEY_SMB_PATH = "smb_path"
+        private const val KEY_SMB_USER = "smb_user"
+        private const val KEY_SMB_PASS = "smb_pass"
+        /** Cast-apparaten waarop muziek van de netwerkmap kan spelen: naam → (entity, bron Denon). */
+        val MUSIC_TARGETS = listOf(
+            Triple("Chromecast Audio", "media_player.chromecastaudio8913", "AUX1"),
+            Triple("GoogleTV Box", "media_player.tv_in_woonkamer", "GoogleTV Box"),
+        )
 
         private val C_NPO = 0xFFE65100.toInt()
         private val C_RTL = 0xFFC62828.toInt()
@@ -302,6 +313,12 @@ class MainActivity : Activity() {
     private lateinit var spClientIdInput: EditText
     private lateinit var spStatus: TextView
     private val spotify by lazy { SpotifyApi(this) }
+    private lateinit var musicSection: View
+    private lateinit var smbPathInput: EditText
+    private lateinit var smbUserInput: EditText
+    private lateinit var smbPassInput: EditText
+    private lateinit var smbStatus: TextView
+    private val smb by lazy { SmbMusic() }
     private lateinit var updateSection: View
     private lateinit var updateVersion: TextView
     private lateinit var ghTokenInput: EditText
@@ -375,6 +392,11 @@ class MainActivity : Activity() {
         spotifySection = findViewById(R.id.spotifySection)
         spClientIdInput = findViewById(R.id.spClientIdInput)
         spStatus = findViewById(R.id.spStatus)
+        musicSection = findViewById(R.id.musicSection)
+        smbPathInput = findViewById(R.id.smbPathInput)
+        smbUserInput = findViewById(R.id.smbUserInput)
+        smbPassInput = findViewById(R.id.smbPassInput)
+        smbStatus = findViewById(R.id.smbStatus)
         updateSection = findViewById(R.id.updateSection)
         updateVersion = findViewById(R.id.updateVersion)
         ghTokenInput = findViewById(R.id.ghTokenInput)
@@ -409,6 +431,8 @@ class MainActivity : Activity() {
         menuItem(R.id.menuPve, R.drawable.ic_tab_pve, PAGE_PVE)
         menuItem(R.id.menuFritz, R.drawable.ic_tab_fritz, PAGE_FRITZ)
         menuItem(R.id.menuSpotify, R.drawable.ic_music, PAGE_SPOTIFY)
+        menuItem(R.id.menuMusic, R.drawable.ic_folder_music, PAGE_MUSIC)
+        findViewById<Button>(R.id.saveMusic).setOnClickListener { saveMusicSettings() }
         findViewById<Button>(R.id.spLoginButton).setOnClickListener { spotifyLogin() }
         findViewById<Button>(R.id.spLogoutButton).setOnClickListener {
             spotify.logout()
@@ -533,7 +557,7 @@ class MainActivity : Activity() {
         if (settingsPanel.visibility == View.VISIBLE) {
             when (settingsPage) {
                 PAGE_MENU -> showSettings(false)
-                PAGE_HA, PAGE_PVE, PAGE_FRITZ, PAGE_SPOTIFY -> showSettingsPage(PAGE_API)
+                PAGE_HA, PAGE_PVE, PAGE_FRITZ, PAGE_SPOTIFY, PAGE_MUSIC -> showSettingsPage(PAGE_API)
                 else -> showSettingsPage(PAGE_MENU)
             }
         } else {
@@ -594,6 +618,7 @@ class MainActivity : Activity() {
     private val PAGE_UPDATE = 4
     private val PAGE_API = 5
     private val PAGE_SPOTIFY = 6
+    private val PAGE_MUSIC = 7
     private var settingsPage = PAGE_MENU
 
     /** Instellingen: menu, of één van de twee onderdelen. */
@@ -605,6 +630,7 @@ class MainActivity : Activity() {
         pveSection.visibility = if (page == PAGE_PVE) View.VISIBLE else View.GONE
         fritzSection.visibility = if (page == PAGE_FRITZ) View.VISIBLE else View.GONE
         spotifySection.visibility = if (page == PAGE_SPOTIFY) View.VISIBLE else View.GONE
+        musicSection.visibility = if (page == PAGE_MUSIC) View.VISIBLE else View.GONE
         updateSection.visibility = if (page == PAGE_UPDATE) View.VISIBLE else View.GONE
         settingsTitle.text = when (page) {
             PAGE_API -> "API's"
@@ -612,8 +638,15 @@ class MainActivity : Activity() {
             PAGE_PVE -> "Proxmox"
             PAGE_FRITZ -> "Fritzbox"
             PAGE_SPOTIFY -> "Spotify"
+            PAGE_MUSIC -> "Muziek (netwerkmap)"
             PAGE_UPDATE -> "Updates"
             else -> "Instellingen"
+        }
+        if (page == PAGE_MUSIC) {
+            smbPathInput.setText(smbPath())
+            smbUserInput.setText(prefs().getString(KEY_SMB_USER, SMB_DEFAULT_USER))
+            smbPassInput.setText(prefs().getString(KEY_SMB_PASS, ""))
+            smbStatus.text = ""
         }
         if (page == PAGE_SPOTIFY) {
             spClientIdInput.setText(spotify.clientId())
@@ -2636,7 +2669,7 @@ class MainActivity : Activity() {
         nowBar.addView(nowPlayPause)
         mediaList.addView(nowBar)
 
-        val tiles = listOf<(Boolean) -> View>({ second -> watchTvTile(second) }, { second -> heosTile(second) }, { second -> spotifyTile(second) }) +
+        val tiles = listOf<(Boolean) -> View>({ second -> watchTvTile(second) }, { second -> heosTile(second) }, { second -> spotifyTile(second) }, { second -> musicTile(second) }) +
             MEDIA_APPS.map { app -> { second: Boolean -> appTile(app, second) } }
         tiles.chunked(2).forEach { pair ->
             val row = LinearLayout(this).apply {
@@ -2725,6 +2758,238 @@ class MainActivity : Activity() {
             }
             .setNegativeButton("Annuleren", null)
             .show()
+    }
+
+    // ================= Muziek van de netwerkmap (SMB) =================
+
+    private fun smbPath() = prefs().getString(KEY_SMB_PATH, null)?.ifBlank { null } ?: SMB_DEFAULT_PATH
+
+    /** Instellingen doorgeven aan de SMB-verbinding; geeft de map binnen de share terug. */
+    private fun smbConfigure(): String? {
+        val (host, share, base) = SmbMusic.parseUnc(smbPath()) ?: return null
+        smb.configure(
+            host, share,
+            prefs().getString(KEY_SMB_USER, SMB_DEFAULT_USER) ?: SMB_DEFAULT_USER,
+            prefs().getString(KEY_SMB_PASS, "") ?: "",
+        )
+        return base
+    }
+
+    private fun saveMusicSettings() {
+        prefs().edit()
+            .putString(KEY_SMB_PATH, smbPathInput.text.toString().trim())
+            .putString(KEY_SMB_USER, smbUserInput.text.toString().trim())
+            .putString(KEY_SMB_PASS, smbPassInput.text.toString())
+            .apply()
+        smbStatus.text = "Verbinden…"
+        thread {
+            val r = runCatching {
+                val base = smbConfigure() ?: throw IllegalArgumentException("Netwerkmap klopt niet, bijv. \\\\server\\share\\map")
+                smb.list(base).size
+            }
+            runOnUiThread {
+                smbStatus.text = r.exceptionOrNull()?.let { "Lukt niet: ${it.message ?: it.javaClass.simpleName}" }
+                    ?: "Verbonden ✓  ${r.getOrNull()} mappen/nummers gevonden."
+            }
+        }
+    }
+
+    private fun musicTile(second: Boolean): View = LinearLayout(this).apply {
+        orientation = LinearLayout.VERTICAL
+        gravity = Gravity.CENTER
+        addView(ImageView(this@MainActivity).apply {
+            setImageResource(R.drawable.ic_folder_music)
+            setColorFilter(Color.WHITE)
+            layoutParams = LinearLayout.LayoutParams(dp(40), dp(40))
+        })
+        addView(TextView(this@MainActivity).apply {
+            text = "Mijn muziek"
+            textSize = 17f
+            setTextColor(Color.WHITE)
+            setTypeface(typeface, Typeface.BOLD)
+            gravity = Gravity.CENTER
+        })
+        setupTile(0xFF6D4C41.toInt(), second) { showMusicSheet() }
+    }
+
+    /** Bladeren door de netwerkmap: mappen openen, op een nummer tikken speelt de map vanaf daar. */
+    private fun showMusicSheet() {
+        if ((prefs().getString(KEY_SMB_PASS, "") ?: "").isEmpty()) {
+            AlertDialog.Builder(this)
+                .setTitle("Mijn muziek")
+                .setMessage("Vul eerst het wachtwoord van de netwerkmap in via ⚙ → API's → Muziek (netwerkmap).")
+                .setPositiveButton("Naar instellingen") { _, _ -> showSettings(true); showSettingsPage(PAGE_MUSIC) }
+                .setNegativeButton("Annuleren", null)
+                .show()
+            return
+        }
+        val dialog = Dialog(this)
+        val content = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(16), dp(12), dp(16), dp(16))
+        }
+        val title = TextView(this).apply {
+            text = "Mijn muziek"
+            textSize = 19f
+            setTextColor(Color.WHITE)
+            setTypeface(typeface, Typeface.BOLD)
+        }
+        val status = TextView(this).apply {
+            textSize = 13f
+            setTextColor(0xFFAAAAAA.toInt())
+            setPadding(0, dp(4), 0, dp(8))
+        }
+        val list = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        content.addView(title)
+        content.addView(status)
+        content.addView(ScrollView(this).apply {
+            addView(list)
+            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(460))
+        })
+
+        fun row(icon: String, text: String, accent: Boolean = false, onClick: () -> Unit) = TextView(this).apply {
+            this.text = "$icon   $text"
+            textSize = 15f
+            setTextColor(if (accent) Color.BLACK else Color.WHITE)
+            if (accent) setTypeface(typeface, Typeface.BOLD)
+            maxLines = 2
+            ellipsize = android.text.TextUtils.TruncateAt.END
+            setPadding(dp(12), dp(14), dp(12), dp(14))
+            background = GradientDrawable().apply {
+                setColor(if (accent) 0xFFFFB300.toInt() else 0xFF2A2A2A.toInt()); cornerRadius = dp(10).toFloat()
+            }
+            layoutParams = LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT
+            ).apply { bottomMargin = dp(6) }
+            isClickable = true
+            setOnClickListener { onClick() }
+        }
+
+        var seq = 0
+        lateinit var open: (String) -> Unit
+        open = { path ->
+            val my = ++seq
+            status.text = "Laden…"
+            list.removeAllViews()
+            thread {
+                val base = smbConfigure()
+                val r = runCatching { smb.list(path) }
+                runOnUiThread {
+                    if (my != seq) return@runOnUiThread
+                    val entries = r.getOrNull()
+                    title.text = if (path == base || path.isEmpty()) "Mijn muziek" else path.substringAfterLast('\\')
+                    if (entries == null) {
+                        status.text = "Netwerkmap niet bereikbaar: ${r.exceptionOrNull()?.message}"
+                        return@runOnUiThread
+                    }
+                    if (path != base) {
+                        val up = if (path.contains('\\')) path.substringBeforeLast('\\') else ""
+                        list.addView(row("←", "Omhoog") { open(up) })
+                    }
+                    val tracks = entries.filter { !it.isDir }
+                    status.text = "${entries.count { it.isDir }} mappen · ${tracks.size} nummers"
+                    if (tracks.isNotEmpty()) {
+                        list.addView(row("▶", "Speel deze map af (${tracks.size} nummers)", accent = true) {
+                            dialog.dismiss(); chooseMusicTarget(tracks, 0)
+                        })
+                    }
+                    entries.forEach { e ->
+                        if (e.isDir) list.addView(row("📁", e.name) { open(e.path) })
+                        else list.addView(row("🎵", e.name.substringBeforeLast('.')) {
+                            dialog.dismiss(); chooseMusicTarget(tracks, tracks.indexOf(e))
+                        })
+                    }
+                }
+            }
+        }
+
+        dialog.setContentView(content)
+        dialog.window?.apply {
+            setBackgroundDrawable(GradientDrawable().apply {
+                setColor(0xFF1E1E1E.toInt())
+                cornerRadii = floatArrayOf(dp(22).toFloat(), dp(22).toFloat(), dp(22).toFloat(), dp(22).toFloat(), 0f, 0f, 0f, 0f)
+            })
+            setGravity(Gravity.BOTTOM)
+            setLayout(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
+        }
+        dialog.show()
+        thread {
+            val base = smbConfigure() ?: ""
+            runOnUiThread { open(base) }
+        }
+    }
+
+    private fun chooseMusicTarget(tracks: List<SmbMusic.Entry>, startAt: Int) {
+        AlertDialog.Builder(this)
+            .setTitle("Afspelen op")
+            .setItems(MUSIC_TARGETS.map { it.first }.toTypedArray()) { _, i ->
+                startMusicQueue(tracks, startAt, MUSIC_TARGETS[i].second, MUSIC_TARGETS[i].third)
+            }
+            .setNegativeButton("Annuleren", null)
+            .show()
+    }
+
+    // Wachtrij: de app speelt het volgende nummer af zodra de Chromecast klaar is met het vorige
+    @Volatile private var musicQueue: List<SmbMusic.Entry> = emptyList()
+    @Volatile private var musicIndex = 0
+    @Volatile private var musicTarget = ""
+    @Volatile private var musicUrl: String? = null
+    @Volatile private var musicRun = 0
+
+    private fun startMusicQueue(tracks: List<SmbMusic.Entry>, startAt: Int, entity: String, source: String) {
+        musicQueue = tracks
+        musicIndex = startAt
+        musicTarget = entity
+        val run = ++musicRun
+        mediaStatus.text = "Muziek klaarzetten…"
+        thread {
+            if (source == "GoogleTV Box") prepareWatching(SOURCE_APPS) else prepareReceiver(source)
+            playMusicTrack(run)
+            // Volgen: is het nummer afgelopen (idle), dan het volgende
+            var started = false
+            while (run == musicRun) {
+                Thread.sleep(2_500)
+                val st = stateOf(musicTarget)
+                val state = st?.optString("state")
+                val id = attr(st, "media_content_id")
+                if (state == "playing" || state == "paused" || state == "buffering") {
+                    if (id != null && musicUrl != null && id != musicUrl) { musicRun++; break }  // iets anders gestart
+                    started = true
+                } else if (started && (state == "idle" || state == "off")) {
+                    started = false
+                    if (musicIndex + 1 < musicQueue.size) {
+                        musicIndex++
+                        playMusicTrack(run)
+                    } else {
+                        runOnUiThread { mediaStatus.text = "Klaar met afspelen" }
+                        musicRun++
+                    }
+                }
+            }
+        }
+    }
+
+    private fun playMusicTrack(run: Int) {
+        if (run != musicRun) return
+        val e = musicQueue.getOrNull(musicIndex) ?: return
+        val r = runCatching {
+            val url = smb.urlFor(e.path)
+            musicUrl = url
+            quietService(
+                "media_player/play_media",
+                JSONObject().put("entity_id", musicTarget)
+                    .put("media_content_id", url)
+                    .put("media_content_type", SmbMusic.mimeOf(e.name) ?: "music")
+                    .put("extra", JSONObject().put("metadata", JSONObject()
+                        .put("metadataType", 3)
+                        .put("title", e.name.substringBeforeLast('.'))
+                        .put("albumName", e.path.substringBeforeLast('\\').substringAfterLast('\\'))))
+            )
+        }
+        runOnUiThread {
+            mediaStatus.text = r.exceptionOrNull()?.let { "Afspelen mislukt: ${it.message}" }
+                ?: "🎵 ${e.name.substringBeforeLast('.')} (${musicIndex + 1}/${musicQueue.size})"
+        }
     }
 
     // ================= Spotify (zoeken en afspelen op een apparaat) =================
@@ -3707,7 +3972,9 @@ class MainActivity : Activity() {
                 val c = stateOf(CHROMECAST_AUDIO)
                 val sp = stateOf(SPOTIFY)
                 // Speelt Spotify? Dan die gegevens gebruiken; anders wat de Chromecast zelf meldt
-                val spActive = sp?.optString("state") in listOf("playing", "paused")
+                // Speelt de Chromecast zelf (bijv. muziek van de netwerkmap), dan heeft die voorrang
+                val spActive = sp?.optString("state") == "playing" ||
+                    (sp?.optString("state") == "paused" && !isPlaying(c))
                 if (spActive) NowInfo(
                     title = "Chromecast Audio",
                     sub = joinNonEmpty(attr(sp, "media_artist"), attr(sp, "media_title")).ifEmpty { "Spotify" },

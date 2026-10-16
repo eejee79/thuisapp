@@ -364,6 +364,19 @@
                         android:textColor="#FFFFFF"
                         android:textSize="17sp" />
 
+                    <TextView
+                        android:id="@+id/menuMusic"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:layout_marginBottom="12dp"
+                        android:background="#1E1E1E"
+                        android:drawablePadding="16dp"
+                        android:gravity="center_vertical"
+                        android:padding="18dp"
+                        android:text="Muziek (netwerkmap)"
+                        android:textColor="#FFFFFF"
+                        android:textSize="17sp" />
+
                 </LinearLayout>
 
                 <!-- Onderdeel: Home Assistant -->
@@ -598,6 +611,75 @@
 
                     <TextView
                         android:id="@+id/spStatus"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:layout_marginTop="16dp"
+                        android:textColor="#B0B0B0"
+                        android:textSize="15sp" />
+                </LinearLayout>
+
+                <!-- Onderdeel: Muziek (SMB) -->
+                <LinearLayout
+                    android:id="@+id/musicSection"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:orientation="vertical"
+                    android:visibility="gone">
+
+                    <TextView
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:text="Netwerkmap"
+                        android:textColor="#B0B0B0" />
+
+                    <EditText
+                        android:id="@+id/smbPathInput"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:hint="\\\\192.168.1.10\\muziek"
+                        android:inputType="textUri"
+                        android:textColor="#FFFFFF"
+                        android:textColorHint="#666666" />
+
+                    <TextView
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:layout_marginTop="8dp"
+                        android:text="Gebruiker"
+                        android:textColor="#B0B0B0" />
+
+                    <EditText
+                        android:id="@+id/smbUserInput"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:inputType="text"
+                        android:textColor="#FFFFFF"
+                        android:textColorHint="#666666" />
+
+                    <TextView
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:layout_marginTop="8dp"
+                        android:text="Wachtwoord"
+                        android:textColor="#B0B0B0" />
+
+                    <EditText
+                        android:id="@+id/smbPassInput"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:inputType="textPassword"
+                        android:textColor="#FFFFFF"
+                        android:textColorHint="#666666" />
+
+                    <Button
+                        android:id="@+id/saveMusic"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:layout_marginTop="24dp"
+                        android:text="Opslaan en testen" />
+
+                    <TextView
+                        android:id="@+id/smbStatus"
                         android:layout_width="match_parent"
                         android:layout_height="wrap_content"
                         android:layout_marginTop="16dp"
