@@ -1906,6 +1906,12 @@ class MainActivity : Activity() {
         status.addView(carBattery)
         status.addView(carState)
         fritzList.addView(status)
+        // Laadlimiet van de auto (verhuisd van het Dashboard)
+        (chargeCard.root.parent as? ViewGroup)?.removeView(chargeCard.root)
+        chargeCard.root.layoutParams = LinearLayout.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT
+        ).apply { bottomMargin = dp(12) }
+        fritzList.addView(chargeCard.root)
 
         // Laadvenster
         val win = card()
@@ -2030,6 +2036,8 @@ class MainActivity : Activity() {
             }
             val bat = stateOf(DASH_CAR_BATTERY)
             val swState = sw?.let { stateOf(it) }
+            val limit = stateOf(DASH_CHARGE_LIMIT)
+            runOnUiThread { showCharge(limit, bat) }
             val auto = stateOf(CAR_AUTOMATION_ENTITY)
             val cfg = runCatching {
                 JSONObject(haRequest("GET", "/api/config/automation/config/$CAR_AUTOMATION_ID", null))
@@ -2587,7 +2595,7 @@ class MainActivity : Activity() {
             haService("number", "set_value", JSONObject().put("entity_id", DASH_CHARGE_LIMIT).put("value", v))
         }
         chargeSlider.setRange(50.0, 100.0, 10.0)
-        dashList.addView(chargeCard.root)
+        // De laadlimiet staat op het tabblad Auto (zie buildCar)
     }
 
     private fun refreshDashboard() {
