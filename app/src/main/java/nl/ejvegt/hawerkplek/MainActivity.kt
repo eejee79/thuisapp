@@ -7506,20 +7506,23 @@ class MainActivity : Activity() {
 
 /**
  * Onderblad dat je kunt vegen: omhoog = [onUp], omlaag = [onDown]. Tijdens omlaag vegen schuift het mee.
- * Veegt niet als je in [noIntercept] begint (die lijst scrolt zelf).
+ * Het vegen wordt hier vóór de knoppen en de scroll-lijst afgehandeld (dispatchTouchEvent), zodat een
+ * ScrollView of knop het gebaar niet kan "inpikken". Omlaag vegen gaat pas als [scroller] bovenaan staat;
+ * in [noIntercept] (bijv. de wachtrij) wordt niet geveegd.
  */
 class SwipeSheet(
     ctx: Context, child: View, private val noIntercept: View?,
     private val onUp: () -> Unit, private val onDown: () -> Unit,
-    /** Scrollbare inhoud: omlaag vegen sluit alleen als die bovenaan staat. */
     private val scroller: View? = null,
     private val canSwipeUp: Boolean = true,
 ) : android.widget.FrameLayout(ctx) {
-    private val slop = android.view.ViewConfiguration.get(ctx).scaledTouchSlop * 2
+    private val slop = android.view.ViewConfiguration.get(ctx).scaledTouchSlop
     private val density = ctx.resources.displayMetrics.density
     private var downX = 0f
     private var downY = 0f
     private var dragging = false
+    private var blocked = false     // dit gebaar hoort bij de lijst/knoppen, niet bij het vegen
+    private var velocity: android.view.VelocityTracker? = null
     private val content = child
 
     init { addView(child) }
@@ -7533,44 +7536,61 @@ class SwipeSheet(
         return ax >= loc[0] && ax <= loc[0] + v.width && ay >= loc[1] && ay <= loc[1] + v.height
     }
 
-    override fun onInterceptTouchEvent(ev: android.view.MotionEvent): Boolean {
+    override fun dispatchTouchEvent(ev: android.view.MotionEvent): Boolean {
         when (ev.actionMasked) {
             android.view.MotionEvent.ACTION_DOWN -> {
                 downX = ev.x; downY = ev.y; dragging = false
+                blocked = inNoIntercept(ev.x, ev.y)
+                velocity?.recycle(); velocity = android.view.VelocityTracker.obtain()
+                velocity?.addMovement(ev)
+                super.dispatchTouchEvent(ev)
+                return true   // altijd de rest van het gebaar blijven ontvangen
             }
             android.view.MotionEvent.ACTION_MOVE -> {
+                velocity?.addMovement(ev)
                 val dy = ev.y - downY
                 val dx = ev.x - downX
-                if (!inNoIntercept(downX, downY) && kotlin.math.abs(dy) > slop && kotlin.math.abs(dy) > kotlin.math.abs(dx) * 1.5f) {
+                if (!dragging && !blocked && kotlin.math.abs(dy) > slop && kotlin.math.abs(dy) > kotlin.math.abs(dx)) {
                     val down = dy > 0
-                    if (down && (scroller?.canScrollVertically(-1) == true)) return false   // eerst omhoog scrollen
-                    if (!down && !canSwipeUp) return false
-                    dragging = true
+                    val ok = if (down) scroller?.canScrollVertically(-1) != true else canSwipeUp
+                    if (ok) {
+                        dragging = true
+                        // Knoppen/lijst laten weten dat dit gebaar niet voor hen is
+                        val cancel = android.view.MotionEvent.obtain(ev).apply { action = android.view.MotionEvent.ACTION_CANCEL }
+                        super.dispatchTouchEvent(cancel)
+                        cancel.recycle()
+                    } else blocked = true   // bijv. lijst scrollt: die mag het gebaar hebben
+                }
+                if (dragging) {
+                    content.translationY = if (dy > 0) dy else dy / 4
                     return true
                 }
             }
-        }
-        return false
-    }
-
-    @android.annotation.SuppressLint("ClickableViewAccessibility")
-    override fun onTouchEvent(ev: android.view.MotionEvent): Boolean {
-        when (ev.actionMasked) {
-            android.view.MotionEvent.ACTION_DOWN -> { downX = ev.x; downY = ev.y; return true }
-            android.view.MotionEvent.ACTION_MOVE -> {
-                val dy = ev.y - downY
-                content.translationY = if (dy > 0) dy else dy / 4
-                return true
-            }
             android.view.MotionEvent.ACTION_UP, android.view.MotionEvent.ACTION_CANCEL -> {
-                val dy = ev.y - downY
-                content.animate().translationY(0f).setDuration(150).start()
-                if (dy > 110 * density) onDown()
-                else if (dy < -50 * density) onUp()
-                dragging = false
-                return true
+                if (dragging) {
+                    velocity?.addMovement(ev)
+                    velocity?.computeCurrentVelocity(1000)
+                    val vy = velocity?.yVelocity ?: 0f
+                    val dy = ev.y - downY
+                    dragging = false
+                    val fling = 900 * density
+                    when {
+                        ev.actionMasked == android.view.MotionEvent.ACTION_UP && (dy > 90 * density || (dy > 24 * density && vy > fling)) -> {
+                            onDown()   // sluiten (of de wachtrij inklappen)
+                            content.animate().translationY(0f).setDuration(150).start()
+                        }
+                        ev.actionMasked == android.view.MotionEvent.ACTION_UP && (dy < -40 * density || (dy < -16 * density && vy < -fling)) -> {
+                            content.animate().translationY(0f).setDuration(150).start()
+                            onUp()
+                        }
+                        else -> content.animate().translationY(0f).setDuration(150).start()
+                    }
+                    velocity?.recycle(); velocity = null
+                    return true
+                }
+                velocity?.recycle(); velocity = null
             }
         }
-        return super.onTouchEvent(ev)
+        return super.dispatchTouchEvent(ev)
     }
 }
