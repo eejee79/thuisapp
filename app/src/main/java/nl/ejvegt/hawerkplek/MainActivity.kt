@@ -4127,9 +4127,11 @@ class MainActivity : Activity() {
                     runOnUiThread {
                         entity = "local"
                         box.visibility = if (e != null) View.VISIBLE else View.GONE
-                        title.text = e?.name?.substringBeforeLast('.') ?: ""
-                        sub.text = "Deze telefoon · ${localIndex + 1}/${localQueue.size}"
-                        art.setImageDrawable(null)
+                        val tg = e?.let { tagCache[it.path] }
+                        if (e != null && tg == null) readTags(e) {}
+                        title.text = tg?.title ?: e?.name?.substringBeforeLast('.') ?: ""
+                        sub.text = joinNonEmpty(tg?.artist, "Deze telefoon · ${localIndex + 1}/${localQueue.size}")
+                        if (tg?.art != null) art.setImageBitmap(tg.art) else art.setImageDrawable(null)
                         playing = pl; pos = p; dur = d
                         render()
                     }
@@ -5239,6 +5241,104 @@ class MainActivity : Activity() {
     @Volatile private var localQueue: List<SmbMusic.Entry> = emptyList()
     @Volatile private var localIndex = 0
 
+    // ---------- Tags (titel, artiest, album, hoes) uit de muziekbestanden zelf ----------
+
+    private class Tags(val title: String?, val artist: String?, val album: String?, val art: android.graphics.Bitmap?)
+    private val tagCache = ConcurrentHashMap<String, Tags>()
+    private val tagPool = java.util.concurrent.Executors.newFixedThreadPool(2)
+
+    /** Tags van een nummer op de netwerkmap lezen (alleen het begin van het bestand wordt opgehaald). */
+    private fun readTags(e: SmbMusic.Entry, cb: (Tags) -> Unit) {
+        tagCache[e.path]?.let { cb(it); return }
+        tagPool.execute {
+            val t = runCatching {
+                smbConfigure()
+                val url = smb.urlFor(e.path)
+                val mmr = android.media.MediaMetadataRetriever()
+                try {
+                    mmr.setDataSource(url, HashMap())
+                    val pic = mmr.embeddedPicture?.let { bytes ->
+                        val o = android.graphics.BitmapFactory.Options().apply { inJustDecodeBounds = true }
+                        android.graphics.BitmapFactory.decodeByteArray(bytes, 0, bytes.size, o)
+                        var sample = 1
+                        while (o.outWidth / (sample * 2) >= 160) sample *= 2
+                        android.graphics.BitmapFactory.decodeByteArray(bytes, 0, bytes.size,
+                            android.graphics.BitmapFactory.Options().apply { inSampleSize = sample })
+                    }
+                    Tags(
+                        mmr.extractMetadata(android.media.MediaMetadataRetriever.METADATA_KEY_TITLE)?.trim()?.ifEmpty { null },
+                        mmr.extractMetadata(android.media.MediaMetadataRetriever.METADATA_KEY_ARTIST)?.trim()?.ifEmpty { null },
+                        mmr.extractMetadata(android.media.MediaMetadataRetriever.METADATA_KEY_ALBUM)?.trim()?.ifEmpty { null },
+                        pic,
+                    )
+                } finally {
+                    runCatching { mmr.release() }
+                }
+            }.getOrElse { Tags(null, null, null, null) }
+            tagCache[e.path] = t
+            runOnUiThread { cb(t) }
+        }
+    }
+
+    /**
+     * Regel in een wachtrij voor een nummer van de netwerkmap: eerst de bestandsnaam, zodra de tags
+     * binnen zijn titel, artiest en hoes. [now] = speelt nu; [curTitle] = titel die de speler meldt.
+     */
+    private fun tagRow(e: SmbMusic.Entry, nr: Int, now: Boolean, curTitle: String?, done: Boolean, onClick: () -> Unit): View {
+        val img = ImageView(this).apply {
+            scaleType = ImageView.ScaleType.CENTER_CROP
+            clipToOutline = true
+            background = GradientDrawable().apply { setColor(0xFF3A3A3A.toInt()); cornerRadius = dp(6).toFloat() }
+            layoutParams = LinearLayout.LayoutParams(dp(40), dp(40)).apply { marginEnd = dp(10) }
+        }
+        val t = TextView(this).apply {
+            text = "$nr.  " + e.name.substringBeforeLast('.')
+            textSize = 14f
+            setTypeface(typeface, Typeface.BOLD)
+            maxLines = 1
+            ellipsize = android.text.TextUtils.TruncateAt.END
+        }
+        val sub = TextView(this).apply {
+            textSize = 12f
+            setTextColor(0xFFA0A0A0.toInt())
+            maxLines = 1
+            ellipsize = android.text.TextUtils.TruncateAt.END
+            visibility = View.GONE
+        }
+        val bg = GradientDrawable().apply { cornerRadius = dp(10).toFloat() }
+        val row = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            setPadding(dp(6), dp(6), dp(6), dp(6))
+            background = bg
+            layoutParams = LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT
+            ).apply { bottomMargin = dp(5) }
+            addView(img)
+            addView(LinearLayout(this@MainActivity).apply {
+                orientation = LinearLayout.VERTICAL
+                layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
+                addView(t)
+                addView(sub)
+            })
+            isClickable = true
+            setOnClickListener { onClick() }
+        }
+        fun style(on: Boolean) {
+            bg.setColor(if (on) 0xFF2E2610.toInt() else 0xFF262626.toInt())
+            t.setTextColor(if (on) 0xFFFFB300.toInt() else if (done) 0xFF8A8A8A.toInt() else Color.WHITE)
+        }
+        style(now)
+        readTags(e) { tags ->
+            tags.title?.let { t.text = "$nr.  $it" }
+            val s2 = joinNonEmpty(tags.artist, tags.album)
+            if (s2.isNotEmpty()) { sub.text = s2; sub.visibility = View.VISIBLE }
+            tags.art?.let { img.setImageBitmap(it) }
+            if (!now && curTitle != null && tags.title != null && tags.title.equals(curTitle, true)) style(true)
+        }
+        return row
+    }
+
     // ---------- Geluid op deze telefoon: andere apps stil zetten ----------
 
     private val audioManager by lazy { getSystemService(Context.AUDIO_SERVICE) as android.media.AudioManager }
@@ -5448,24 +5548,7 @@ class MainActivity : Activity() {
             queueList.removeAllViews()
             shownIndex = localIndex
             localQueue.forEachIndexed { i, e ->
-                val now = i == localIndex
-                queueList.addView(TextView(this).apply {
-                    text = "${i + 1}.  ${e.name.substringBeforeLast('.')}"
-                    textSize = 14f
-                    setTextColor(if (now) 0xFFFFB300.toInt() else if (i < localIndex) 0xFF8A8A8A.toInt() else Color.WHITE)
-                    if (now) setTypeface(typeface, Typeface.BOLD)
-                    maxLines = 1
-                    ellipsize = android.text.TextUtils.TruncateAt.END
-                    setPadding(dp(12), dp(12), dp(12), dp(12))
-                    background = GradientDrawable().apply {
-                        setColor(if (now) 0xFF2E2610.toInt() else 0xFF262626.toInt()); cornerRadius = dp(10).toFloat()
-                    }
-                    layoutParams = LinearLayout.LayoutParams(
-                        ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT
-                    ).apply { bottomMargin = dp(5) }
-                    isClickable = true
-                    setOnClickListener { playLocalAt(i) }
-                })
+                queueList.addView(tagRow(e, i + 1, i == localIndex, null, i < localIndex) { playLocalAt(i) })
             }
         }
         var queueOpen = false
@@ -5483,8 +5566,17 @@ class MainActivity : Activity() {
                 val e = localQueue.getOrNull(localIndex)
                 if (e == null) { title.text = "Niets aan het spelen"; sub.text = "" }
                 else {
-                    title.text = e.name.substringBeforeLast('.')
-                    sub.text = e.path.substringBeforeLast('\\').substringAfterLast('\\') + "  ·  ${localIndex + 1}/${localQueue.size}"
+                    val tg = tagCache[e.path]
+                    if (tg == null) readTags(e) {}
+                    title.text = tg?.title ?: e.name.substringBeforeLast('.')
+                    sub.text = (joinNonEmpty(tg?.artist, tg?.album).ifEmpty { e.path.substringBeforeLast('\\').substringAfterLast('\\') }) +
+                        "  ·  ${localIndex + 1}/${localQueue.size}"
+                    if (tg?.art != null && cover.tag !== tg.art) {
+                        cover.tag = tg.art
+                        cover.text = ""
+                        cover.background = android.graphics.drawable.BitmapDrawable(resources, tg.art)
+                        cover.clipToOutline = true
+                    }
                 }
                 val p = runCatching { lp?.currentPosition ?: 0 }.getOrDefault(0)
                 val d = runCatching { lp?.duration ?: 0 }.getOrDefault(0)
@@ -5957,10 +6049,9 @@ class MainActivity : Activity() {
                 folder.third.forEachIndexed { i, e ->
                     val stem = e.name.substringBeforeLast('.')
                     val now = cur.isNotEmpty() && (stem.lowercase(NL).contains(cur) || cur.contains(stem.lowercase(NL)))
-                    val v = queueRow(stem, "", null, now)
-                    v.isClickable = true
-                    v.setOnClickListener { playFolderOnMa(folder.third.drop(i), folder.first, folder.second) }
-                    queueList.addView(v)
+                    queueList.addView(tagRow(e, i + 1, now, title.text.toString().ifEmpty { null }, false) {
+                        playFolderOnMa(folder.third.drop(i), folder.first, folder.second)
+                    })
                 }
                 return
             }
