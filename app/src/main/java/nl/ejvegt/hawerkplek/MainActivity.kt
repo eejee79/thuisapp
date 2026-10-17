@@ -175,7 +175,7 @@ class MainActivity : Activity() {
         private const val KEY_TILE_ORDER = "tile_order"
         private const val KEY_ZONE_UP = "zone_up"
         private const val KEY_KPN_INFO_KEY = "kpn_info_key"
-        private const val KEY_KPN_SKIP_SEC = "kpn_skip_sec"
+        private const val KEY_KPN_SKIP_SEC = "kpn_skip_sec_v2"
         private const val KEY_TMDB = "tmdb_key"
         private const val KEY_T_MUSIC = "target_music"
         private const val KEY_CAR_SWITCH = "car_charge_switch"
@@ -6867,16 +6867,16 @@ class MainActivity : Activity() {
                 isClickable = true
                 setOnClickListener {
                     alpha = 0.5f; postDelayed({ alpha = 1f }, 300)
-                    val step = prefs().getInt(KEY_KPN_SKIP_SEC, 30).coerceAtLeast(5)
+                    val step = prefs().getInt(KEY_KPN_SKIP_SEC, 10).coerceAtLeast(5)
                     val n = (180 + step - 1) / step
                     thread {
                         quietService("remote/send_command", JSONObject().put("entity_id", remote)
-                            .put("command", key).put("num_repeats", n).put("delay_secs", 0.35))
+                            .put("command", key).put("num_repeats", n).put("delay_secs", 0.25))
                     }
                 }
                 setOnLongClickListener {
                     val opts = listOf(10, 15, 30, 60)
-                    val cur = prefs().getInt(KEY_KPN_SKIP_SEC, 30)
+                    val cur = prefs().getInt(KEY_KPN_SKIP_SEC, 10)
                     AlertDialog.Builder(this@MainActivity)
                         .setTitle("Hoeveel springt één druk op pijl links/rechts?")
                         .setItems(opts.map { (if (it == cur) "✓  " else "     ") + "$it seconden" }.toTypedArray()) { _, i ->
