@@ -6805,7 +6805,8 @@ class MainActivity : Activity() {
                 thread {
                     val uri = runCatching { spotify.findAlbumUri(curAlbum, ar) }.getOrNull()
                     if (uri != null) runOnUiThread {
-                        maStarted = Triple(entity, label, SpotifyApi.Item(curAlbum, "", uri, "album"))
+                        // "guess": door de app geraden, wordt hieronder nog gecontroleerd
+                        maStarted = Triple(entity, label, SpotifyApi.Item(curAlbum, "guess", uri, "album"))
                         if (queueOpen) loadQueue()
                     }
                 }
@@ -6816,6 +6817,29 @@ class MainActivity : Activity() {
                 queueList.addView(TextView(this).apply { text = "Laden…"; setTextColor(0xFF9A9A9A.toInt()); setPadding(dp(4), dp(8), 0, dp(8)) })
                 thread {
                     val r = runCatching { spotify.contextTracks(started.third.uri) }
+                    // Geraden album controleren: klopt het volgende nummer van Music Assistant met het album?
+                    // Zo niet (bijv. een playlist of jaaroverzicht), dan is het geen album en tonen we alleen "volgende".
+                    if (started.third.sub == "guess") {
+                        val tracks = r.getOrNull().orEmpty()
+                        fun norm(x: String) = x.lowercase(NL).replace(Regex("\\s+-\\s+.*$"), "").replace(Regex("[^a-z0-9]"), "")
+                        val cur = norm(title.text.toString())
+                        val idx = tracks.indexOfFirst { norm(it.name) == cur }
+                        val maNext = runCatching {
+                            val resp = JSONObject(haRequest("POST", "/api/services/music_assistant/get_queue?return_response",
+                                JSONObject().put("entity_id", entity).toString()))
+                            val n = resp.optJSONObject("service_response")?.optJSONObject(entity)?.optJSONObject("next_item")
+                            n?.optJSONObject("media_item")?.optString("name")?.ifEmpty { null } ?: n?.optString("name")
+                        }.getOrNull()
+                        val albumNext = tracks.getOrNull(idx + 1)?.name
+                        val fits = idx >= 0 && (maNext == null || albumNext == null || norm(maNext) == norm(albumNext))
+                        if (!fits) {
+                            runOnUiThread {
+                                maStarted = null
+                                if (queueOpen) loadQueue()
+                            }
+                            return@thread
+                        }
+                    }
                     runOnUiThread {
                         queueList.removeAllViews()
                         val tracks = r.getOrNull()
