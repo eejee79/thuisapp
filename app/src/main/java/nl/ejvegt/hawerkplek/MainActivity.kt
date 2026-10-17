@@ -5771,8 +5771,25 @@ class MainActivity : Activity() {
                 list.firstOrNull { isThisPhone(it) } ?: list.firstOrNull { it.type.equals("Smartphone", true) }
             }
             var phone = findPhone()
+            var openedApp = false
             if (phone == null) {
-                // Spotify-app wakker maken; daarna meldt de telefoon zich als apparaat
+                // Spotify op de achtergrond wekken met een "afspelen"-knopdruk (zoals een koptelefoonknop):
+                // de app komt dan niet in beeld, maar meldt zich wel als apparaat
+                for (code in listOf(KeyEvent.ACTION_DOWN, KeyEvent.ACTION_UP)) {
+                    runCatching {
+                        sendBroadcast(Intent(Intent.ACTION_MEDIA_BUTTON).setPackage("com.spotify.music")
+                            .putExtra(Intent.EXTRA_KEY_EVENT, KeyEvent(code, KeyEvent.KEYCODE_MEDIA_PLAY)))
+                    }
+                }
+                for (t in 0 until 6) {
+                    Thread.sleep(1_000)
+                    phone = findPhone()
+                    if (phone != null) break
+                }
+            }
+            if (phone == null) {
+                // Lukt dat niet: de app toch even openen, en daarna Thuisbasis weer naar voren halen
+                openedApp = true
                 runOnUiThread {
                     runCatching {
                         startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(item.uri)).setPackage("com.spotify.music"))
@@ -5782,6 +5799,11 @@ class MainActivity : Activity() {
                     Thread.sleep(1_000)
                     phone = findPhone()
                     if (phone != null) break
+                }
+            }
+            if (openedApp) runOnUiThread {
+                runCatching {
+                    startActivity(Intent(this, MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_REORDER_TO_FRONT))
                 }
             }
             val dev = phone
