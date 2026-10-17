@@ -5042,7 +5042,19 @@ class MainActivity : Activity() {
     /** Laatste map die naar een Music Assistant-speler ging: (speler, naam, nummers), voor de wachtrij. */
     @Volatile private var maFolder: Triple<String, String, List<SmbMusic.Entry>>? = null
     /** Laatste album/playlist (Spotify) dat naar een Music Assistant-speler ging: (speler, naam, item). */
-    @Volatile private var maStarted: Triple<String, String, SpotifyApi.Item>? = null
+    private var maStarted: Triple<String, String, SpotifyApi.Item>?
+        get() = runCatching {
+            val o = JSONObject(prefs().getString("ma_started", null) ?: return null)
+            Triple(o.getString("e"), o.getString("n"),
+                SpotifyApi.Item(o.getString("name"), "", o.getString("uri"), o.optString("type")))
+        }.getOrNull()
+        // Bewaard, zodat de wachtrij ook na een app-update of herstart nog klopt
+        set(v) {
+            prefs().edit().putString("ma_started", v?.let {
+                JSONObject().put("e", it.first).put("n", it.second).put("name", it.third.name)
+                    .put("uri", it.third.uri).put("type", it.third.type).toString()
+            }).apply()
+        }
 
     /** Nummers uit de map afspelen op de vaste speler van Mijn muziek (eerst kiezen als die er nog niet is). */
     private fun playMusicFolder(tracks: List<SmbMusic.Entry>, startAt: Int, btn: TextView?) {
