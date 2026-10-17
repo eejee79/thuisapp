@@ -597,10 +597,22 @@ class MainActivity : Activity() {
         }
     }
 
+    /** Dialoog/onderblad waarin de volumeknoppen van de telefoon gewoon de receiver blijven regelen. */
+    private fun sheet(): Dialog = object : Dialog(this) {
+        override fun dispatchKeyEvent(event: KeyEvent): Boolean {
+            if (event.keyCode == KeyEvent.KEYCODE_VOLUME_UP || event.keyCode == KeyEvent.KEYCODE_VOLUME_DOWN) {
+                return this@MainActivity.dispatchKeyEvent(event)
+            }
+            return super.dispatchKeyEvent(event)
+        }
+    }
+
     override fun dispatchKeyEvent(event: KeyEvent): Boolean {
         val up = event.keyCode == KeyEvent.KEYCODE_VOLUME_UP
         val down = event.keyCode == KeyEvent.KEYCODE_VOLUME_DOWN
-        if ((up || down) && settingsPanel.visibility != View.VISIBLE && recOn == true && recVol != null) {
+        // Speelt er muziek op deze telefoon zelf, dan regelen de knoppen gewoon het telefoonvolume
+        val phonePlaying = runCatching { localPlayer?.isPlaying == true }.getOrDefault(false)
+        if ((up || down) && !phonePlaying && settingsPanel.visibility != View.VISIBLE && recOn == true && recVol != null) {
             if (event.action == KeyEvent.ACTION_DOWN) {
                 val v = ((recVol ?: 0.0) + if (up) 0.02 else -0.02).coerceIn(0.0, 1.0)
                 recVol = v
@@ -3876,7 +3888,7 @@ class MainActivity : Activity() {
 
     /** Onderblad-dialoog in dezelfde stijl als Mijn muziek. */
     private fun sheetDialog(content: View): Dialog {
-        val dialog = Dialog(this)
+        val dialog = sheet()
         dialog.setContentView(content)
         dialog.window?.apply {
             setBackgroundDrawable(GradientDrawable().apply {
@@ -4811,7 +4823,7 @@ class MainActivity : Activity() {
                 .show()
             return
         }
-        val dialog = Dialog(this)
+        val dialog = sheet()
         val content = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             setPadding(dp(16), dp(12), dp(16), dp(16))
@@ -5457,7 +5469,7 @@ class MainActivity : Activity() {
 
     /** Zoekscherm voor een muziekbron: eerst recent, dan zoeken tijdens het typen, artiestpagina's. */
     private fun showMusicSearch(src: MusicSource) {
-        val dialog = Dialog(this)
+        val dialog = sheet()
         val content = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             setPadding(dp(16), dp(12), dp(16), dp(16))
@@ -6030,7 +6042,7 @@ class MainActivity : Activity() {
 
     /** Bediening voor muziek van de netwerkmap op deze telefoon: voortgang, spoelen, wachtrij (veegbaar). */
     private fun showLocalSheet() {
-        val dialog = Dialog(this)
+        val dialog = sheet()
         val content = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             setPadding(dp(20), dp(10), dp(20), dp(22))
@@ -6326,7 +6338,7 @@ class MainActivity : Activity() {
 
     /** Keuzescherm dat van onderen omhoog komt: favorieten, alle zenders, zappen en nummer. */
     private fun showChannelSheet() {
-        val dialog = Dialog(this)
+        val dialog = sheet()
         val content = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             setPadding(dp(16), dp(10), dp(16), dp(18))
@@ -6447,7 +6459,7 @@ class MainActivity : Activity() {
     /** Afstandsbediening voor de GoogleTV-box of de TV+-box (via remote.send_command). */
     /** Bediening voor een mediaspeler in HA (Chromecast Audio, PiCore, Spotify…): voortgang, spoelen, vorige/volgende. */
     private fun showMediaSheet(entity: String, label: String) {
-        val dialog = Dialog(this)
+        val dialog = sheet()
         val content = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             setPadding(dp(20), dp(10), dp(20), dp(22))
@@ -6757,7 +6769,7 @@ class MainActivity : Activity() {
     }
 
     private fun showRemoteSheet(remote: String, kpn: Boolean) {
-        val dialog = Dialog(this)
+        val dialog = sheet()
         val content = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             setPadding(dp(20), dp(10), dp(20), dp(22))
