@@ -197,7 +197,7 @@
                     android:layout_height="wrap_content"
                     android:layout_marginTop="8dp"
                     android:layout_marginBottom="16dp"
-                    android:text="Auto"
+                    android:text="Škoda"
                     android:textColor="#FFFFFF"
                     android:textSize="28sp"
                     android:textStyle="bold" />
@@ -1157,15 +1157,15 @@
                 android:layout_height="30dp"
                 android:layout_marginBottom="2dp"
                 android:adjustViewBounds="true"
-                android:contentDescription="Auto"
+                android:contentDescription="Škoda"
                 android:scaleType="fitCenter"
-                android:src="@drawable/ic_car" />
+                android:src="@drawable/logo_skoda" />
 
             <TextView
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
                 android:layout_marginTop="2dp"
-                android:text="Auto"
+                android:text="Škoda"
                 android:textColor="#FFFFFF"
                 android:textSize="11sp" />
         </LinearLayout>
