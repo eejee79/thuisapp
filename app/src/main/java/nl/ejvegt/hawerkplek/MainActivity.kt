@@ -175,6 +175,9 @@ class MainActivity : Activity() {
         private const val KEY_TILE_ORDER = "tile_order"
         private const val KEY_ZONE_UP = "zone_up"
         private const val KEY_TMDB = "tmdb_key"
+        private const val KEY_T_MUSIC = "target_music"
+        private const val KEY_T_MA = "target_ma"
+        private const val KEY_T_SPOTIFY = "target_spotify"
         const val KODI_DEFAULT_HOST = "192.168.50.140"
         private const val KEY_KODI_HOST = "kodi_host"
         private const val KEY_KODI_PORT = "kodi_port"
@@ -3899,6 +3902,278 @@ class MainActivity : Activity() {
         load()
     }
 
+    // ================= Vaste speler per bron + mini-speler in de bladerschermen =================
+
+    /** Waar muziek speelt: "phone" (deze telefoon), "ma" (Music Assistant-speler) of "sp" (Spotify Connect). */
+    private class Target(val kind: String, val id: String, val name: String) {
+        fun save() = "$kind|$id|$name"
+        companion object {
+            fun load(s: String?): Target? {
+                val p = s?.split('|') ?: return null
+                return if (p.size >= 3) Target(p[0], p[1], p.drop(2).joinToString("|")) else null
+            }
+        }
+    }
+
+    private fun savedTarget(key: String) = Target.load(prefs().getString(key, null))
+    private fun saveTarget(key: String, t: Target) = prefs().edit().putString(key, t.save()).apply()
+
+    /**
+     * Speler kiezen (lijst met ✓ bij de huidige). [spotify]: ook Spotify Connect-apparaten;
+     * [phone]: "Deze telefoon" aanbieden.
+     */
+    private fun pickTarget(key: String, withSp: Boolean, phone: Boolean, onChosen: (Target) -> Unit) {
+        mediaStatus.text = "Spelers zoeken…"
+        thread {
+            val ma = runCatching {
+                val tpl = "{% for e in integration_entities('music_assistant') if e.startswith('media_player.') %}" +
+                    "{{ e }}|{{ state_attr(e, 'friendly_name') }}|{{ states(e) }}\n{% endfor %}"
+                haRequest("POST", "/api/template", JSONObject().put("template", tpl).toString())
+                    .lines().filter { it.contains('|') }.map { it.split('|') }
+                    .filter { it.getOrNull(2) != "unavailable" }
+                    .map { Triple(it[0], it[1], it.getOrNull(2) ?: "") }
+            }.getOrDefault(emptyList())
+            val sp = if (withSp) runCatching { spotify.devices() }.getOrDefault(emptyList()).filterNot { isThisPhone(it) } else emptyList()
+            // Music Assistant-spelers die Spotify zelf ook al kent niet dubbel tonen
+            val maShown = if (withSp) ma.filter { (_, n, _) ->
+                sp.none { d -> d.name.equals(n, true) || d.name.contains(n, true) || n.contains(d.name, true) }
+            } else ma
+            val options = ArrayList<Target>()
+            val labels = ArrayList<String>()
+            val cur = savedTarget(key)
+            fun add(t: Target, label: String) {
+                options.add(t)
+                labels.add((if (cur != null && cur.kind == t.kind && cur.id == t.id) "✓  " else "     ") + label)
+            }
+            if (phone) add(Target("phone", "", "Deze telefoon"), "📱  Deze telefoon")
+            sp.forEach { add(Target("sp", it.id, it.name), it.name + if (it.active) "  (speelt)" else "") }
+            maShown.forEach { (e, n, st) ->
+                add(Target("ma", e, n), n + (if (withSp) "  (via Music Assistant)" else "") + if (st == "playing") "  (speelt)" else "")
+            }
+            runOnUiThread {
+                mediaStatus.text = ""
+                if (options.isEmpty()) {
+                    AlertDialog.Builder(this).setTitle("Afspelen op").setMessage("Geen spelers gevonden.")
+                        .setPositiveButton("OK", null).show()
+                    return@runOnUiThread
+                }
+                AlertDialog.Builder(this)
+                    .setTitle("Afspelen op")
+                    .setItems(labels.toTypedArray()) { _, i ->
+                        saveTarget(key, options[i])
+                        onChosen(options[i])
+                    }
+                    .setNegativeButton("Annuleren", null)
+                    .show()
+            }
+        }
+    }
+
+    /** Knop "Afspelen op: … ▾" bovenin een bladerscherm. */
+    private fun targetButton(key: String, withSp: Boolean, phone: Boolean, accent: Int): TextView {
+        val b = TextView(this)
+        fun refresh() {
+            val t = savedTarget(key)
+            b.text = "Afspelen op:  " + (t?.name ?: "kies een speler") + "  ▾"
+        }
+        b.apply {
+            textSize = 14f
+            setTextColor(Color.WHITE)
+            setTypeface(typeface, Typeface.BOLD)
+            gravity = Gravity.CENTER_VERTICAL
+            minHeight = dp(44)
+            setPadding(dp(14), 0, dp(14), 0)
+            background = GradientDrawable().apply {
+                setColor(0xFF262626.toInt()); cornerRadius = dp(22).toFloat(); setStroke(dp(1), accent)
+            }
+            layoutParams = LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT
+            ).apply { topMargin = dp(8); bottomMargin = dp(4) }
+            isClickable = true
+            setOnClickListener { pickTarget(key, withSp, phone) { refresh() } }
+        }
+        refresh()
+        return b
+    }
+
+    /** Gekozen speler gebruiken, of eerst laten kiezen als er nog geen is. */
+    private fun withTarget(key: String, withSp: Boolean, phone: Boolean, button: TextView?, go: (Target) -> Unit) {
+        val t = savedTarget(key)
+        if (t != null && (phone || t.kind != "phone")) go(t)
+        else pickTarget(key, withSp, phone) { chosen ->
+            button?.text = "Afspelen op:  ${chosen.name}  ▾"
+            go(chosen)
+        }
+    }
+
+    /**
+     * Mini-speler onderin een bladerscherm: wat er op de gekozen speler speelt, met ⏯ en ⏭.
+     * Tik erop voor de volledige bediening.
+     */
+    private fun miniPlayer(dialog: Dialog, key: String, accent: Int): View {
+        val title = TextView(this).apply {
+            textSize = 14f
+            setTextColor(Color.WHITE)
+            setTypeface(typeface, Typeface.BOLD)
+            maxLines = 1
+            ellipsize = android.text.TextUtils.TruncateAt.END
+        }
+        val sub = TextView(this).apply {
+            textSize = 12f
+            setTextColor(0xFFA8A8A8.toInt())
+            maxLines = 1
+            ellipsize = android.text.TextUtils.TruncateAt.END
+        }
+        val art = ImageView(this).apply {
+            scaleType = ImageView.ScaleType.CENTER_CROP
+            clipToOutline = true
+            background = GradientDrawable().apply { setColor(0xFF3A3A3A.toInt()); cornerRadius = dp(8).toFloat() }
+            layoutParams = LinearLayout.LayoutParams(dp(44), dp(44)).apply { marginEnd = dp(10) }
+        }
+        val prog = View(this).apply { background = GradientDrawable().apply { setColor(accent); cornerRadius = dp(2).toFloat() } }
+        val progTrack = android.widget.FrameLayout(this).apply {
+            background = GradientDrawable().apply { setColor(0xFF444444.toInt()); cornerRadius = dp(2).toFloat() }
+            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(3)).apply {
+                topMargin = dp(6); marginStart = dp(4); marginEnd = dp(4)
+            }
+            addView(prog, android.widget.FrameLayout.LayoutParams(0, ViewGroup.LayoutParams.MATCH_PARENT))
+        }
+        var entity: String? = null     // HA-entiteit, of "local" voor deze telefoon
+        var playing = false
+        var pos = 0.0
+        var dur = 0.0
+        var lastArt: String? = null
+        var lastFetch = 0L
+        val playBtn = TextView(this).apply {
+            textSize = 18f
+            setTextColor(Color.BLACK)
+            gravity = Gravity.CENTER
+            background = GradientDrawable().apply { setColor(Color.WHITE); shape = GradientDrawable.OVAL }
+            layoutParams = LinearLayout.LayoutParams(dp(44), dp(44))
+            contentDescription = "Afspelen of pauzeren"
+            isClickable = true
+        }
+        val nextBtn = TextView(this).apply {
+            text = "⏭︎"
+            textSize = 20f
+            setTextColor(Color.WHITE)
+            gravity = Gravity.CENTER
+            layoutParams = LinearLayout.LayoutParams(dp(44), dp(44))
+            contentDescription = "Volgende"
+            isClickable = true
+        }
+        val box = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(8), dp(8), dp(8), dp(8))
+            background = GradientDrawable().apply { setColor(0xFF2B2B2B.toInt()); cornerRadius = dp(14).toFloat() }
+            layoutParams = LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT
+            ).apply { topMargin = dp(8) }
+            visibility = View.GONE
+            addView(LinearLayout(this@MainActivity).apply {
+                orientation = LinearLayout.HORIZONTAL
+                gravity = Gravity.CENTER_VERTICAL
+                addView(art)
+                addView(LinearLayout(this@MainActivity).apply {
+                    orientation = LinearLayout.VERTICAL
+                    layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
+                    addView(title)
+                    addView(sub)
+                })
+                addView(playBtn)
+                addView(nextBtn)
+            })
+            addView(progTrack)
+        }
+        fun render() {
+            playBtn.text = if (playing) "⏸︎" else "▶︎"
+            val w = progTrack.width
+            (prog.layoutParams as android.widget.FrameLayout.LayoutParams).width =
+                if (dur > 0 && w > 0) (w * (pos / dur).coerceIn(0.0, 1.0)).toInt() else 0
+            prog.requestLayout()
+        }
+        fun svc(service: String) {
+            val e = entity ?: return
+            if (e == "local") {
+                if (service == "media_play_pause") toggleLocal()
+                else if (localIndex + 1 < localQueue.size) playLocalAt(localIndex + 1)
+            } else thread { quietService("media_player/$service", JSONObject().put("entity_id", e)) }
+            lastFetch = System.currentTimeMillis() - 2_300   // zo meteen opnieuw ophalen
+        }
+        playBtn.setOnClickListener { playing = !playing; render(); svc("media_play_pause") }
+        nextBtn.setOnClickListener { svc("media_next_track") }
+        box.setOnClickListener {
+            val e = entity ?: return@setOnClickListener
+            if (e != "local") showMediaSheet(e, savedTarget(key)?.name ?: "Speler")
+        }
+        fun fetch() {
+            val t = savedTarget(key)
+            thread {
+                // Deze telefoon met muziek van de netwerkmap: de eigen speler
+                val lp = localPlayer
+                if ((t == null || t.kind == "phone") && lp != null) {
+                    val e = localQueue.getOrNull(localIndex)
+                    val pl = runCatching { lp.isPlaying }.getOrDefault(false)
+                    val p = runCatching { lp.currentPosition / 1000.0 }.getOrDefault(0.0)
+                    val d = runCatching { lp.duration / 1000.0 }.getOrDefault(0.0)
+                    runOnUiThread {
+                        entity = "local"
+                        box.visibility = if (e != null) View.VISIBLE else View.GONE
+                        title.text = e?.name?.substringBeforeLast('.') ?: ""
+                        sub.text = "Deze telefoon · ${localIndex + 1}/${localQueue.size}"
+                        art.setImageDrawable(null)
+                        playing = pl; pos = p; dur = d
+                        render()
+                    }
+                    return@thread
+                }
+                val ent = when (t?.kind) {
+                    "ma" -> t.id
+                    "sp", "phone" -> SPOTIFY
+                    else -> null
+                } ?: run { runOnUiThread { box.visibility = View.GONE }; return@thread }
+                val st = stateOf(ent)
+                val a = st?.optJSONObject("attributes")
+                val s = st?.optString("state")
+                val active = s == "playing" || s == "paused"
+                var p = a?.optDouble("media_position", 0.0) ?: 0.0
+                if (s == "playing") runCatching {
+                    p += (System.currentTimeMillis() - OffsetDateTime.parse(a!!.optString("media_position_updated_at"))
+                        .toInstant().toEpochMilli()) / 1000.0
+                }
+                val pic = attr(st, "entity_picture")?.let { if (it.startsWith("http")) it else haBase() + it }
+                runOnUiThread {
+                    if (!dialog.isShowing) return@runOnUiThread
+                    entity = ent
+                    box.visibility = if (active) View.VISIBLE else View.GONE
+                    title.text = attr(st, "media_title") ?: ""
+                    sub.text = joinNonEmpty(attr(st, "media_artist"), t?.name)
+                    playing = s == "playing"
+                    pos = if (p.isNaN()) 0.0 else p
+                    dur = a?.optDouble("media_duration", 0.0)?.takeIf { !it.isNaN() } ?: 0.0
+                    if (pic != null && pic != lastArt) { lastArt = pic; loadImage(art, pic) }
+                    if (pic == null) { lastArt = null; art.setImageDrawable(null) }
+                    render()
+                }
+            }
+        }
+        val ticker = object : Runnable {
+            override fun run() {
+                if (playing && entity != "local") pos += 1.0
+                render()
+                val now = System.currentTimeMillis()
+                if (now - lastFetch > 2_500) { lastFetch = now; fetch() }
+                handler.postDelayed(this, 1_000)
+            }
+        }
+        handler.post(ticker)
+        box.addOnAttachStateChangeListener(object : View.OnAttachStateChangeListener {
+            override fun onViewAttachedToWindow(v: View) {}
+            override fun onViewDetachedFromWindow(v: View) { handler.removeCallbacks(ticker) }
+        })
+        return box
+    }
+
     // ================= Muziek van de netwerkmap (SMB) =================
 
     private fun smbPath() = prefs().getString(KEY_SMB_PATH, null)?.ifBlank { null } ?: SMB_DEFAULT_PATH
@@ -3980,6 +4255,8 @@ class MainActivity : Activity() {
         }
         val list = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
         content.addView(title)
+        val tBtn = targetButton(KEY_T_MUSIC, false, true, 0xFFFFB300.toInt())
+        content.addView(tBtn)
         content.addView(status)
         val scroll = ScrollView(this).apply {
             addView(list)
@@ -4039,7 +4316,7 @@ class MainActivity : Activity() {
             }
         }
         val listArea = android.widget.FrameLayout(this).apply {
-            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(460))
+            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(400))
             addView(LinearLayout(this@MainActivity).apply {
                 orientation = LinearLayout.HORIZONTAL
                 addView(scroll)
@@ -4048,6 +4325,21 @@ class MainActivity : Activity() {
             addView(bubble, android.widget.FrameLayout.LayoutParams(dp(64), dp(64), Gravity.CENTER))
         }
         content.addView(listArea)
+        content.addView(miniPlayer(dialog, KEY_T_MUSIC, 0xFFFFB300.toInt()))
+        // Het nummer dat je net startte oplichten; je blijft gewoon in de map
+        val trackRows = HashMap<String, TextView>()
+        fun styleRow(v: TextView, on: Boolean) {
+            v.setTextColor(if (on) 0xFFFFB300.toInt() else Color.WHITE)
+            v.setTypeface(null, if (on) Typeface.BOLD else Typeface.NORMAL)
+            v.background = GradientDrawable().apply {
+                setColor(if (on) 0xFF2E2610.toInt() else 0xFF2A2A2A.toInt()); cornerRadius = dp(10).toFloat()
+                if (on) setStroke(dp(1), 0xFFFFB300.toInt())
+            }
+        }
+        fun markPlaying(path: String) {
+            musicPlayingPath = path
+            trackRows.forEach { (p, v) -> styleRow(v, p == path) }
+        }
 
         fun row(icon: String, text: String, accent: Boolean = false, onClick: () -> Unit) = TextView(this).apply {
             this.text = "$icon   $text"
@@ -4079,6 +4371,7 @@ class MainActivity : Activity() {
             status.text = "Laden…"
             list.removeAllViews()
             firstRow.clear()
+            trackRows.clear()
             thread {
                 val base = smbConfigure()
                 val r = runCatching { smb.list(path) }
@@ -4103,13 +4396,17 @@ class MainActivity : Activity() {
                     scroll.post { scroll.scrollTo(0, y) }
                     if (tracks.isNotEmpty()) {
                         list.addView(row("▶", "Speel deze map af (${tracks.size} nummers)", accent = true) {
-                            dialog.dismiss(); chooseMusicTarget(tracks, 0)
+                            playMusicFolder(tracks, 0, tBtn); markPlaying(tracks[0].path)
                         })
                     }
                     entries.forEach { e ->
                         val v = if (e.isDir) row("📁", e.name) { open(e.path) }
                         else row("🎵", e.name.substringBeforeLast('.')) {
-                            dialog.dismiss(); chooseMusicTarget(tracks, tracks.indexOf(e))
+                            playMusicFolder(tracks, tracks.indexOf(e), tBtn); markPlaying(e.path)
+                        }
+                        if (!e.isDir) {
+                            trackRows[e.path] = v
+                            if (e.path == musicPlayingPath) styleRow(v, true)
                         }
                         list.addView(v)
                         val c = e.name.firstOrNull()?.uppercaseChar()
@@ -4134,6 +4431,29 @@ class MainActivity : Activity() {
             val base = smbConfigure() ?: ""
             runOnUiThread { open(base) }
         }
+    }
+
+    @Volatile private var musicPlayingPath: String? = null
+
+    /** Nummers uit de map afspelen op de vaste speler van Mijn muziek (eerst kiezen als die er nog niet is). */
+    private fun playMusicFolder(tracks: List<SmbMusic.Entry>, startAt: Int, btn: TextView?) {
+        withTarget(KEY_T_MUSIC, false, true, btn) { t ->
+            when (t.kind) {
+                "phone" -> playLocal(tracks, startAt)
+                else -> playFolderOnMa(tracks.drop(startAt), t.id, t.name)
+            }
+        }
+    }
+
+    /** Uit een zoekscherm afspelen op de vaste speler van die bron. */
+    private fun playFromSearch(src: MusicSource, item: SpotifyApi.Item, btn: TextView?) {
+        if (src === spotifySource) withTarget(KEY_T_SPOTIFY, true, true, btn) { t ->
+            when (t.kind) {
+                "phone" -> playSpotifyHere(item)
+                "sp" -> playSpotify(item, SpotifyApi.Device(t.id, t.name, "", false))
+                else -> playOnMa(item, t.id, t.name)
+            }
+        } else withTarget(KEY_T_MA, false, false, btn) { t -> playOnMa(item, t.id, t.name) }
     }
 
     /** Map afspelen via Music Assistant op een gekozen speler (mappen zoals op schijf, geen tags). */
@@ -4571,6 +4891,11 @@ class MainActivity : Activity() {
             setTextColor(Color.WHITE)
             setTypeface(typeface, Typeface.BOLD)
         })
+        val isSp = src === spotifySource
+        val tKey = if (isSp) KEY_T_SPOTIFY else KEY_T_MA
+        val tAccent = if (isSp) 0xFF1DB954.toInt() else 0xFFFFB300.toInt()
+        val tBtn = targetButton(tKey, isSp, isSp, tAccent)
+        content.addView(tBtn)
         val input = EditText(this).apply {
             hint = "Artiest, nummer, album of playlist"
             setTextColor(Color.WHITE)
@@ -4589,9 +4914,23 @@ class MainActivity : Activity() {
         val results = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
         val scroll = ScrollView(this).apply {
             addView(results)
-            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(420))
+            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(360))
         }
         content.addView(scroll)
+        content.addView(miniPlayer(dialog, tKey, tAccent))
+        // Wat je net startte licht op; het scherm blijft open
+        val pickedRows = HashMap<String, View>()
+        var pickedUri: String? = null
+        fun stylePicked(v: View, on: Boolean) {
+            v.background = GradientDrawable().apply {
+                setColor(if (on) 0xFF13301F.toInt() else 0xFF2A2A2A.toInt()); cornerRadius = dp(12).toFloat()
+                if (on) setStroke(dp(1), tAccent)
+            }
+        }
+        fun markPicked(uri: String) {
+            pickedUri = uri
+            pickedRows.forEach { (u, v) -> stylePicked(v, u == uri) }
+        }
 
         var searchSeq = 0
         lateinit var showArtist: (SpotifyApi.Item) -> Unit
@@ -4657,13 +4996,18 @@ class MainActivity : Activity() {
                         setPadding(0, dp(12), 0, dp(4))
                     })
                 }
-                results.addView(row(
+                val v = row(
                     item.name, if (item.type == "artist") "Artiest" else item.sub,
                     image = item.image, round = item.type == "artist", art = true,
                 ) {
                     if (item.type == "artist") showArtist(item)
-                    else { dialog.dismiss(); src.pick(item) }
-                })
+                    else { playFromSearch(src, item, tBtn); markPicked(item.uri) }
+                }
+                if (item.type != "artist") {
+                    pickedRows[item.uri] = v
+                    if (item.uri == pickedUri) stylePicked(v, true)
+                }
+                results.addView(v)
             }
         }
 
@@ -4710,7 +5054,7 @@ class MainActivity : Activity() {
                         if (input.text.isNullOrBlank()) showRecent() else doSearch()
                     })
                     results.addView(row("▶  Alles van ${artist.name} afspelen", null, accent = true) {
-                        dialog.dismiss(); src.pick(artist)
+                        playFromSearch(src, artist, tBtn)
                     })
                     val releases = rel.getOrNull()
                     if (releases == null) {
