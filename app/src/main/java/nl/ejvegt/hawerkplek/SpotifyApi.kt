@@ -299,6 +299,15 @@ class SpotifyApi(private val context: Context) {
 
     class Track(val name: String, val artists: String, val uri: String, val image: String?)
 
+    /** Spotify-adres van een album op naam + artiest (null = niet gevonden). */
+    fun findAlbumUri(album: String, artist: String?): String? {
+        val q = URLEncoder.encode("album:$album" + (artist?.let { " artist:$it" } ?: ""), "UTF-8")
+        val arr = JSONObject(call("GET", "/search?q=$q&type=album&limit=5")).optJSONObject("albums")?.optJSONArray("items") ?: return null
+        fun norm(x: String) = x.lowercase().replace(Regex("[^a-z0-9]"), "")
+        val items = (0 until arr.length()).map { arr.getJSONObject(it) }
+        return (items.firstOrNull { norm(it.optString("name")) == norm(album) } ?: items.firstOrNull())?.optString("uri")
+    }
+
     /** Nummers van een album of playlist (voor de wachtrij als Music Assistant het afspeelt). */
     fun contextTracks(uri: String): List<Track> {
         val parts = uri.split(':')

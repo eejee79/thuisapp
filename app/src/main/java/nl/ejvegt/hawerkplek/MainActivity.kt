@@ -6664,6 +6664,9 @@ class MainActivity : Activity() {
         var playing = false
         var dragging = false
         var lastFetch = 0L
+        var curAlbumName: String? = null
+        var curArtistName: String? = null
+        var albumTried = ""
         var lastArt: String? = null
         fun render() {
             if (curDur <= 0) { progBox.visibility = View.GONE; return }
@@ -6774,6 +6777,7 @@ class MainActivity : Activity() {
                 })
             })
         }
+        var queueOpen = false
         fun loadQueue() {
             // Map van Mijn muziek op deze speler: de hele map als wachtrij, tik = vanaf daar spelen
             val folder = maFolder
@@ -6791,6 +6795,21 @@ class MainActivity : Activity() {
             }
             // Spotify-album of -playlist via Music Assistant: de hele lijst ophalen bij Spotify
             val started = maStarted
+            val startedOk = started != null && started.first == entity && started.third.uri.startsWith("spotify:")
+            // Niet via de app gestart (of onbekend)? Album van het huidige nummer bij Spotify opzoeken
+            val curAlbum = curAlbumName
+            if (!startedOk && entity != SPOTIFY && curAlbum != null && spotify.isLoggedIn() && spotify.blockedFor() == 0L &&
+                albumTried != "$entity|$curAlbum") {
+                albumTried = "$entity|$curAlbum"
+                val ar = curArtistName
+                thread {
+                    val uri = runCatching { spotify.findAlbumUri(curAlbum, ar) }.getOrNull()
+                    if (uri != null) runOnUiThread {
+                        maStarted = Triple(entity, label, SpotifyApi.Item(curAlbum, "", uri, "album"))
+                        if (queueOpen) loadQueue()
+                    }
+                }
+            }
             if (started != null && started.first == entity && started.third.uri.startsWith("spotify:") &&
                 (started.third.uri.contains(":album:") || started.third.uri.contains(":playlist:"))) {
                 queueList.removeAllViews()
@@ -6878,7 +6897,6 @@ class MainActivity : Activity() {
                 }
             }
         }
-        var queueOpen = false
         fun setQueue(open: Boolean) {
             queueOpen = open
             queueScroll.visibility = if (open) View.VISIBLE else View.GONE
@@ -6913,6 +6931,8 @@ class MainActivity : Activity() {
                             val changed = newTitle != title.text.toString()
                             title.text = newTitle
                             // Ander nummer terwijl de wachtrij open staat: wachtrij opnieuw laden
+                            curAlbumName = attr(st, "media_album_name")
+                            curArtistName = attr(st, "media_artist")
                             if (changed && queueOpen) loadQueue()
                             lyricsBar.load(attr(st, "media_artist"), attr(st, "media_title"), attr(st, "media_album_name"),
                                 a.optDouble("media_duration", 0.0).takeIf { !it.isNaN() })
