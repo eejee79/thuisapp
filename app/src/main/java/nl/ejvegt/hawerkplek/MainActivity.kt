@@ -6897,7 +6897,11 @@ class MainActivity : Activity() {
                         val pic = attr(st, "entity_picture")?.let { if (it.startsWith("http")) it else haBase() + it }
                         runOnUiThread {
                             if (!dialog.isShowing) return@runOnUiThread
-                            title.text = attr(st, "media_title") ?: "Niets aan het spelen"
+                            val newTitle = attr(st, "media_title") ?: "Niets aan het spelen"
+                            val changed = newTitle != title.text.toString()
+                            title.text = newTitle
+                            // Ander nummer terwijl de wachtrij open staat: wachtrij opnieuw laden
+                            if (changed && queueOpen) loadQueue()
                             lyricsBar.load(attr(st, "media_artist"), attr(st, "media_title"), attr(st, "media_album_name"),
                                 a.optDouble("media_duration", 0.0).takeIf { !it.isNaN() })
                             artist.text = joinNonEmpty(attr(st, "media_artist"), attr(st, "media_album_name"))
