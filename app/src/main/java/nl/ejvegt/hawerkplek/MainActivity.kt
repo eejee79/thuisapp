@@ -176,6 +176,7 @@ class MainActivity : Activity() {
         private const val KEY_ZONE_UP = "zone_up"
         private const val KEY_TMDB = "tmdb_key"
         private const val KEY_T_MUSIC = "target_music"
+        private const val KEY_CAR_SWITCH = "car_charge_switch"
         private const val KEY_T_MA = "target_ma"
         private const val KEY_T_SPOTIFY = "target_spotify"
         const val KODI_DEFAULT_HOST = "192.168.50.140"
@@ -491,6 +492,7 @@ class MainActivity : Activity() {
         menuItem(R.id.menuHa, R.drawable.ic_tab_ha, PAGE_HA)
         menuItem(R.id.menuPve, R.drawable.ic_tab_pve, PAGE_PVE)
         menuItem(R.id.menuFritz, R.drawable.ic_tab_fritz, PAGE_FRITZ)
+        findViewById<View>(R.id.menuFritz).visibility = View.GONE   // Fritzbox-tab is vervangen door Auto
         menuItem(R.id.menuSpotify, R.drawable.ic_music, PAGE_SPOTIFY)
         menuItem(R.id.menuMusic, R.drawable.ic_folder_music, PAGE_MUSIC)
         findViewById<Button>(R.id.saveMusic).setOnClickListener { saveMusicSettings() }
@@ -654,7 +656,7 @@ class MainActivity : Activity() {
             1 -> refreshPve()
             TAB_DASH -> refreshDashboard()
             TAB_MEDIA -> refreshMedia()
-            else -> if (force || System.currentTimeMillis() - lastFritzRefresh > FRITZ_REFRESH_MS) refreshFritz()
+            else -> refreshCar()
         }
     }
 
@@ -1829,6 +1831,279 @@ class MainActivity : Activity() {
         if (onClick != null) root.setOnClickListener { onClick() }
         fritzList.addView(root)
         return FritzRow(t, s, trailing as? TextView)
+    }
+
+    // ================= Auto: laden alleen binnen een tijdvenster =================
+    //
+    // De regel draait als automatisering in Home Assistant (ook als de app dicht is):
+    //  - op de begintijd: laden aan
+    //  - op de eindtijd: laden uit
+    //  - gaat laden buiten het venster toch aan (bijv. na insteken): meteen weer uit
+    //  - stekker erin binnen het venster: laden aan
+
+    private val CAR_AUTOMATION_ID = "thuisbasis_laadvenster"
+    private val CAR_AUTOMATION_ENTITY = "automation.thuisbasis_laadvenster"
+    @Volatile private var carBuilt = false
+    private lateinit var carBattery: TextView
+    private lateinit var carState: TextView
+    private lateinit var carSwitchLabel: TextView
+    private lateinit var carEnabled: Switch
+    private lateinit var carFrom: Button
+    private lateinit var carTo: Button
+    private lateinit var carSave: Button
+    private lateinit var carInfo: TextView
+    private var carFromMin = 23 * 60
+    private var carToMin = 7 * 60
+    private var carDirty = false      // tijden gewijzigd maar nog niet opgeslagen
+    private var carUpdating = false   // schakelaar wordt door de app zelf gezet
+
+    private fun hhmm(m: Int) = "%02d:%02d".format(m / 60, m % 60)
+
+    /** Schakelaar waarmee laden aan/uit gaat (zelf gezocht, of eerder gekozen). */
+    private fun carChargeSwitch(): String? = prefs().getString(KEY_CAR_SWITCH, null)?.ifBlank { null }
+
+    private fun buildCar() {
+        if (carBuilt) return
+        carBuilt = true
+        fritzList.removeAllViews()
+        fun card() = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(16), dp(14), dp(16), dp(16))
+            background = GradientDrawable().apply { setColor(0xFF1E1E1E.toInt()); cornerRadius = dp(14).toFloat() }
+            layoutParams = LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT
+            ).apply { bottomMargin = dp(12) }
+        }
+        fun label(t: String) = TextView(this).apply { text = t; textSize = 13f; setTextColor(0xFFB0B0B0.toInt()) }
+
+        // Status
+        val status = card()
+        status.addView(label("🚗  Škoda Elroq"))
+        carBattery = TextView(this).apply {
+            textSize = 34f; setTextColor(Color.WHITE); setTypeface(typeface, Typeface.BOLD); text = "—"
+        }
+        carState = TextView(this).apply { textSize = 14f; setTextColor(0xFFB0B0B0.toInt()) }
+        status.addView(carBattery)
+        status.addView(carState)
+        fritzList.addView(status)
+
+        // Laadvenster
+        val win = card()
+        win.addView(LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            addView(TextView(this@MainActivity).apply {
+                text = "Alleen laden tussen"
+                textSize = 17f
+                setTextColor(Color.WHITE)
+                setTypeface(typeface, Typeface.BOLD)
+                layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
+            })
+            carEnabled = Switch(this@MainActivity)
+            addView(carEnabled)
+        })
+        fun timeBtn(onPick: (Int) -> Unit, get: () -> Int) = Button(this).apply {
+            textSize = 26f
+            setTextColor(Color.WHITE)
+            background = GradientDrawable().apply { setColor(0xFF2A2A2A.toInt()); cornerRadius = dp(12).toFloat() }
+            layoutParams = LinearLayout.LayoutParams(0, dp(72), 1f)
+            setOnClickListener {
+                val m = get()
+                android.app.TimePickerDialog(this@MainActivity, { _, h, min -> onPick(h * 60 + min) }, m / 60, m % 60, true).show()
+            }
+        }
+        carFrom = timeBtn({ carFromMin = it; carFrom.text = hhmm(it); carDirty = true; carInfo.text = "Nog niet opgeslagen" }) { carFromMin }
+        carTo = timeBtn({ carToMin = it; carTo.text = hhmm(it); carDirty = true; carInfo.text = "Nog niet opgeslagen" }) { carToMin }
+        win.addView(LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            setPadding(0, dp(12), 0, dp(4))
+            addView(LinearLayout(this@MainActivity).apply {
+                orientation = LinearLayout.VERTICAL
+                layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
+                addView(label("van"))
+                addView(carFrom.apply { layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(72)) })
+            })
+            addView(View(this@MainActivity), LinearLayout.LayoutParams(dp(12), 1))
+            addView(LinearLayout(this@MainActivity).apply {
+                orientation = LinearLayout.VERTICAL
+                layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
+                addView(label("tot"))
+                addView(carTo.apply { layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(72)) })
+            })
+        })
+        carInfo = TextView(this).apply { textSize = 13f; setTextColor(0xFF9A9A9A.toInt()); setPadding(0, dp(8), 0, dp(8)) }
+        win.addView(carInfo)
+        carSave = Button(this).apply {
+            text = "Opslaan"
+            setOnClickListener { saveCarWindow() }
+        }
+        win.addView(carSave)
+        carSwitchLabel = TextView(this).apply {
+            textSize = 12f
+            setTextColor(0xFF777777.toInt())
+            setPadding(0, dp(10), 0, 0)
+            isClickable = true
+            setOnClickListener { chooseCarSwitch {} }
+        }
+        win.addView(carSwitchLabel)
+        fritzList.addView(win)
+        carEnabled.setOnCheckedChangeListener { _, on ->
+            if (carUpdating) return@setOnCheckedChangeListener
+            if (on) saveCarWindow()
+            else {
+                carInfo.text = "Uitgezet: de auto laadt weer wanneer hij wil."
+                haService("automation", "turn_off", JSONObject().put("entity_id", CAR_AUTOMATION_ENTITY))
+            }
+        }
+        carFrom.text = hhmm(carFromMin)
+        carTo.text = hhmm(carToMin)
+    }
+
+    /** Laad-schakelaars in HA zoeken; bij precies één (van de Škoda) die nemen, anders laten kiezen. */
+    private fun chooseCarSwitch(onChosen: (String) -> Unit) {
+        thread {
+            val tpl = "{% for s in states.switch if ('charg' in s.entity_id or 'laad' in s.entity_id) %}" +
+                "{{ s.entity_id }}|{{ s.name }}\n{% endfor %}"
+            val found = runCatching {
+                haRequest("POST", "/api/template", JSONObject().put("template", tpl).toString())
+                    .lines().filter { it.contains('|') }.map { it.substringBefore('|') to it.substringAfter('|') }
+            }.getOrDefault(emptyList())
+            runOnUiThread {
+                if (found.isEmpty()) {
+                    AlertDialog.Builder(this).setTitle("Geen laadschakelaar gevonden")
+                        .setMessage("In Home Assistant staat geen schakelaar om laden aan/uit te zetten (bijv. switch.skoda_elroq_charging van de MySkoda-integratie).")
+                        .setPositiveButton("OK", null).show()
+                    return@runOnUiThread
+                }
+                AlertDialog.Builder(this)
+                    .setTitle("Welke schakelaar zet het laden aan/uit?")
+                    .setItems(found.map { "${it.second}\n${it.first}" }.toTypedArray()) { _, i ->
+                        prefs().edit().putString(KEY_CAR_SWITCH, found[i].first).apply()
+                        carSwitchLabel.text = "Laadschakelaar: ${found[i].first}  (tik om te wijzigen)"
+                        onChosen(found[i].first)
+                    }
+                    .setNegativeButton("Annuleren", null)
+                    .show()
+            }
+        }
+    }
+
+    private fun refreshCar() {
+        buildCar()
+        thread {
+            // Schakelaar automatisch vinden als er nog geen gekozen is
+            if (carChargeSwitch() == null) {
+                val tpl = "{% for s in states.switch if 'charg' in s.entity_id and ('skoda' in s.entity_id or 'elroq' in s.entity_id) %}" +
+                    "{{ s.entity_id }}\n{% endfor %}"
+                val found = runCatching {
+                    haRequest("POST", "/api/template", JSONObject().put("template", tpl).toString()).lines().filter { it.isNotBlank() }
+                }.getOrDefault(emptyList())
+                if (found.size == 1) prefs().edit().putString(KEY_CAR_SWITCH, found[0].trim()).apply()
+            }
+            val sw = carChargeSwitch()
+            val bat = stateOf(DASH_CAR_BATTERY)
+            val swState = sw?.let { stateOf(it) }
+            val plugTpl = "{% for s in states.binary_sensor if ('skoda' in s.entity_id or 'elroq' in s.entity_id) and " +
+                "('plug' in s.entity_id or 'connected' in s.entity_id) %}{{ s.entity_id }}|{{ s.state }}\n{% endfor %}"
+            val plug = runCatching {
+                haRequest("POST", "/api/template", JSONObject().put("template", plugTpl).toString())
+                    .lines().firstOrNull { it.contains('|') }
+            }.getOrNull()
+            val auto = stateOf(CAR_AUTOMATION_ENTITY)
+            val cfg = runCatching {
+                JSONObject(haRequest("GET", "/api/config/automation/config/$CAR_AUTOMATION_ID", null))
+            }.getOrNull()
+            runOnUiThread {
+                val b = bat?.optString("state")?.toDoubleOrNull()
+                carBattery.text = if (b != null) "${b.toInt()}%" else "—"
+                val charging = swState?.optString("state") == "on"
+                val plugged = plug?.substringAfter('|')?.let { it == "on" }
+                carState.text = listOfNotNull(
+                    if (charging) "⚡ Aan het laden" else "Laadt niet",
+                    plugged?.let { if (it) "stekker erin" else "stekker eruit" },
+                ).joinToString("  ·  ")
+                carSwitchLabel.text = if (sw != null) "Laadschakelaar: $sw  (tik om te wijzigen)" else "Laadschakelaar kiezen…"
+                // Opgeslagen venster uit de automatisering halen
+                if (!carDirty) cfg?.optString("description")?.let { d ->
+                    Regex("(\\d{2}):(\\d{2})-(\\d{2}):(\\d{2})").find(d)?.let { m ->
+                        val (h1, m1, h2, m2) = m.destructured
+                        carFromMin = h1.toInt() * 60 + m1.toInt(); carToMin = h2.toInt() * 60 + m2.toInt()
+                        carFrom.text = hhmm(carFromMin); carTo.text = hhmm(carToMin)
+                    }
+                }
+                val active = auto?.optString("state") == "on"
+                carUpdating = true
+                carEnabled.isChecked = active
+                carUpdating = false
+                if (!carDirty) carInfo.text = when {
+                    cfg == null -> "Nog niet ingesteld. Kies de tijden en tik op Opslaan."
+                    active -> "Actief: de auto laadt alleen tussen ${hhmm(carFromMin)} en ${hhmm(carToMin)}. Dit regelt Home Assistant, ook als de app dicht is."
+                    else -> "Staat uit: de auto laadt wanneer hij wil."
+                }
+            }
+        }
+    }
+
+    /** Automatisering in HA aanmaken/bijwerken en aanzetten. */
+    private fun saveCarWindow() {
+        val sw = carChargeSwitch()
+        if (sw == null) { chooseCarSwitch { saveCarWindow() }; return }
+        val from = hhmm(carFromMin) + ":00"
+        val to = hhmm(carToMin) + ":00"
+        val inWindow = JSONObject().put("condition", "time").put("after", from).put("before", to)
+        val turnOn = JSONArray().put(JSONObject().put("action", "switch.turn_on").put("target", JSONObject().put("entity_id", sw)))
+        val turnOff = JSONArray().put(JSONObject().put("action", "switch.turn_off").put("target", JSONObject().put("entity_id", sw)))
+        fun trig(id: String) = JSONObject().put("condition", "trigger").put("id", id)
+        carInfo.text = "Opslaan…"
+        thread {
+            val r = runCatching {
+                // Stekker-sensor (indien aanwezig): insteken binnen het venster = laden aan
+                val plugTpl = "{% for s in states.binary_sensor if ('skoda' in s.entity_id or 'elroq' in s.entity_id) and " +
+                    "('plug' in s.entity_id or 'connected' in s.entity_id) %}{{ s.entity_id }}\n{% endfor %}"
+                val plug = runCatching {
+                    haRequest("POST", "/api/template", JSONObject().put("template", plugTpl).toString()).lines().firstOrNull { it.isNotBlank() }?.trim()
+                }.getOrNull()
+                val triggers = JSONArray()
+                    .put(JSONObject().put("trigger", "time").put("at", from).put("id", "start"))
+                    .put(JSONObject().put("trigger", "time").put("at", to).put("id", "stop"))
+                    .put(JSONObject().put("trigger", "state").put("entity_id", sw).put("to", "on").put("id", "aan"))
+                    .put(JSONObject().put("trigger", "homeassistant").put("event", "start").put("id", "herstart"))
+                if (plug != null) triggers.put(JSONObject().put("trigger", "state").put("entity_id", plug).put("to", "on")
+                    .put("for", JSONObject().put("seconds", 30)).put("id", "stekker"))
+                val choose = JSONArray()
+                    .put(JSONObject().put("conditions", JSONArray().put(trig("start"))).put("sequence", turnOn))
+                    .put(JSONObject().put("conditions", JSONArray().put(trig("stop"))).put("sequence", turnOff))
+                    .put(JSONObject().put("conditions", JSONArray().put(trig("stekker")).put(inWindow)).put("sequence", turnOn))
+                    .put(JSONObject().put("conditions", JSONArray().put(
+                        JSONObject().put("condition", "not").put("conditions", JSONArray().put(inWindow))
+                    ).put(JSONObject().put("condition", "state").put("entity_id", sw).put("state", "on"))).put("sequence", turnOff))
+                val cfg = JSONObject()
+                    .put("id", CAR_AUTOMATION_ID)
+                    .put("alias", "Thuisbasis laadvenster")
+                    .put("description", "Auto alleen laden ${hhmm(carFromMin)}-${hhmm(carToMin)} (ingesteld via de Thuisbasis-app)")
+                    .put("mode", "queued")
+                    .put("triggers", triggers)
+                    .put("conditions", JSONArray())
+                    .put("actions", JSONArray().put(JSONObject().put("choose", choose)))
+                haRequest("POST", "/api/config/automation/config/$CAR_AUTOMATION_ID", cfg.toString())
+                Thread.sleep(1_500)   // HA laadt de automatiseringen opnieuw
+                quietService("automation/turn_on", JSONObject().put("entity_id", CAR_AUTOMATION_ENTITY))
+                // Meteen toepassen: laadt hij nu buiten het venster, dan direct uit
+                val nowMin = java.time.LocalTime.now().let { it.hour * 60 + it.minute }
+                val inside = if (carFromMin <= carToMin) nowMin in carFromMin until carToMin
+                    else nowMin >= carFromMin || nowMin < carToMin
+                if (!inside && stateOf(sw)?.optString("state") == "on") {
+                    quietService("switch/turn_off", JSONObject().put("entity_id", sw))
+                }
+            }
+            runOnUiThread {
+                if (r.isSuccess) carDirty = false
+                carInfo.text = r.exceptionOrNull()?.let { "Opslaan mislukt: ${it.message}" }
+                    ?: "Opgeslagen ✓ De auto laadt alleen tussen ${hhmm(carFromMin)} en ${hhmm(carToMin)}."
+                handler.postDelayed({ refreshCar() }, 1_500)
+            }
+        }
     }
 
     private fun refreshFritz() {
