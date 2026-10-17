@@ -4737,8 +4737,27 @@ class MainActivity : Activity() {
                     playing = s == "playing"
                     pos = if (p.isNaN()) 0.0 else p
                     dur = a?.optDouble("media_duration", 0.0)?.takeIf { !it.isNaN() } ?: 0.0
-                    if (pic != null && pic != lastArt) { lastArt = pic; loadImage(art, pic) }
-                    if (pic == null) { lastArt = null; art.setImageDrawable(null) }
+                    val tKey = "cover:" + (attr(st, "media_title") ?: "")
+                    if (pic != null && pic != lastArt && lastArt != tKey) {
+                        lastArt = pic
+                        val ar0 = attr(st, "media_artist"); val al0 = attr(st, "media_album_name"); val ti0 = attr(st, "media_title")
+                        loadImage(art, pic) {
+                            lastArt = tKey
+                            if (ti0 != null) thread {
+                                val bmp = coverForPlaying(ent, ar0, al0, ti0)
+                                runOnUiThread { if (bmp != null && lastArt == tKey) { art.tag = null; art.setImageBitmap(bmp) } }
+                            }
+                        }
+                    }
+                    if (pic == null && lastArt != tKey) {
+                        lastArt = tKey
+                        art.setImageDrawable(null)
+                        val ar = attr(st, "media_artist"); val al = attr(st, "media_album_name"); val ti = attr(st, "media_title")
+                        if (ti != null) thread {
+                            val bmp = coverForPlaying(ent, ar, al, ti)
+                            runOnUiThread { if (bmp != null && lastArt == tKey) art.setImageBitmap(bmp) }
+                        }
+                    }
                     render()
                 }
             }
@@ -5411,7 +5430,7 @@ class MainActivity : Activity() {
     }
     private val imagePool = java.util.concurrent.Executors.newFixedThreadPool(4)
 
-    private fun loadImage(view: ImageView, url: String) {
+    private fun loadImage(view: ImageView, url: String, onFail: (() -> Unit)? = null) {
         view.tag = url
         imageCache.get(url)?.let { view.setImageBitmap(it); return }
         imagePool.execute {
@@ -5421,7 +5440,7 @@ class MainActivity : Activity() {
                     readTimeout = 10_000
                     inputStream.use { android.graphics.BitmapFactory.decodeStream(it) }
                 }
-            }.getOrNull() ?: return@execute
+            }.getOrNull() ?: run { onFail?.let { runOnUiThread { if (view.tag == url) it() } }; return@execute }
             imageCache.put(url, bmp)
             runOnUiThread { if (view.tag == url) view.setImageBitmap(bmp) }
         }
@@ -5892,10 +5911,10 @@ class MainActivity : Activity() {
     }
 
     /** Hoes zoeken: eerst cover.jpg/folder.jpg in de map, anders online (iTunes) op artiest + album. */
-    private fun findCover(e: SmbMusic.Entry, artist: String?, album: String?, title: String?): android.graphics.Bitmap? {
-        val dir = e.path.substringBeforeLast('\\', "")
-        coverCache["dir:$dir"]?.let { if (it.isPresent) return it.get() }
-        if (!coverCache.containsKey("dir:$dir")) {
+    private fun findCover(e: SmbMusic.Entry?, artist: String?, album: String?, title: String?): android.graphics.Bitmap? {
+        val dir = e?.path?.substringBeforeLast('\\', "")
+        if (dir != null) coverCache["dir:$dir"]?.let { if (it.isPresent) return it.get() }
+        if (dir != null && !coverCache.containsKey("dir:$dir")) {
             val names = listOf("cover.jpg", "folder.jpg", "front.jpg", "Cover.jpg", "Folder.jpg", "Front.jpg", "cover.png", "folder.png", "AlbumArt.jpg")
             val found = names.firstNotNullOfOrNull { n ->
                 smb.readSmall(if (dir.isEmpty()) n else "$dir\\$n")?.let { decodeCover(it) }
@@ -5920,6 +5939,21 @@ class MainActivity : Activity() {
         }.getOrNull()
         coverCache[key] = java.util.Optional.ofNullable(bmp)
         return bmp
+    }
+
+    /**
+     * Hoes voor wat een speler (bijv. Music Assistant op de Chromecast) nu speelt als die zelf geen
+     * plaatje meegeeft: via de map die we daar afspelen, anders online op artiest/album/titel.
+     */
+    private fun coverForPlaying(entity: String, artist: String?, album: String?, title: String?): android.graphics.Bitmap? {
+        val f = maFolder
+        val entry = if (f != null && f.first == entity && title != null) {
+            val t = title.lowercase(NL)
+            f.third.firstOrNull { e -> tagCache[e.path]?.title?.equals(title, true) == true }
+                ?: f.third.firstOrNull { e -> e.name.lowercase(NL).contains(t) }
+        } else null
+        entry?.let { tagCache[it.path]?.art }?.let { return it }
+        return findCover(entry, artist, album, title)
     }
 
     /**
@@ -6779,10 +6813,39 @@ class MainActivity : Activity() {
                             playing = isPl
                             curDur = a.optDouble("media_duration", 0.0).takeIf { !it.isNaN() } ?: 0.0
                             if (!dragging) curPos = if (p.isNaN()) 0.0 else p
-                            if (pic != null && pic != lastArt) {
+                            val tKey = "cover:" + title.text
+                            val ar = attr(st, "media_artist"); val al = attr(st, "media_album_name"); val ti = attr(st, "media_title")
+                            fun lookup() {
+                                lastArt = tKey
+                                thread {
+                                    val bmp = coverForPlaying(entity, ar, al, ti)
+                                    runOnUiThread {
+                                        if (bmp != null && lastArt == tKey) {
+                                            art.tag = null
+                                            art.setImageBitmap(bmp)
+                                            if (!queueOpen) art.visibility = View.VISIBLE
+                                        }
+                                    }
+                                }
+                            }
+                            if (pic != null && pic != lastArt && lastArt != tKey) {
                                 lastArt = pic
                                 if (!queueOpen) art.visibility = View.VISIBLE
-                                loadImage(art, pic)
+                                // Plaatje van de speler laadt niet (bijv. geen hoes in het bestand): zelf zoeken
+                                loadImage(art, pic) { lookup() }
+                            }
+                            // Geen plaatje van de speler: zelf zoeken (map of online), één keer per nummer
+                            if (pic == null && lastArt != tKey && title.text.isNotEmpty()) {
+                                lastArt = tKey
+                                thread {
+                                    val bmp = coverForPlaying(entity, ar, al, ti)
+                                    runOnUiThread {
+                                        if (bmp != null && lastArt == tKey) {
+                                            art.setImageBitmap(bmp)
+                                            if (!queueOpen) art.visibility = View.VISIBLE
+                                        }
+                                    }
+                                }
                             }
                             render()
                         }
