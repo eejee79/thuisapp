@@ -174,6 +174,7 @@ class MainActivity : Activity() {
         const val KODI_PKG = "org.xbmc.kodi"
         private const val KEY_TILE_ORDER = "tile_order"
         private const val KEY_ZONE_UP = "zone_up"
+        private const val KEY_KPN_INFO_KEY = "kpn_info_key"
         private const val KEY_TMDB = "tmdb_key"
         private const val KEY_T_MUSIC = "target_music"
         private const val KEY_CAR_SWITCH = "car_charge_switch"
@@ -6860,7 +6861,37 @@ class MainActivity : Activity() {
             ))
             content.addView(row(
                 btn("▼ CH−", "CHANNEL_DOWN"),
-                btn("ℹ Info", "INFO"),
+                // Info: de KPN-box gebruikt de standaard INFO-toets voor de gids. Welke toets wél info geeft,
+                // kun je kiezen door de knop ingedrukt te houden (wordt onthouden).
+                btn("ℹ Info", null).apply {
+                    background = GradientDrawable().apply { setColor(0xFF2A2A2A.toInt()); cornerRadius = dp(14).toFloat() }
+                    isClickable = true
+                    setOnClickListener {
+                        alpha = 0.5f; postDelayed({ alpha = 1f }, 150)
+                        send(prefs().getString(KEY_KPN_INFO_KEY, null) ?: "DPAD_CENTER")
+                    }
+                    setOnLongClickListener {
+                        val keys = listOf(
+                            "DPAD_CENTER" to "OK (toont vaak de info-balk)",
+                            "DPAD_UP" to "Pijl omhoog",
+                            "DPAD_DOWN" to "Pijl omlaag",
+                            "MENU" to "Menu",
+                            "INFO" to "Info (standaard; op KPN = gids)",
+                            "PROG_BLUE" to "Blauwe knop",
+                            "CAPTIONS" to "Ondertiteling",
+                        )
+                        val cur = prefs().getString(KEY_KPN_INFO_KEY, null) ?: "DPAD_CENTER"
+                        AlertDialog.Builder(this@MainActivity)
+                            .setTitle("Welke toets voor Info?")
+                            .setItems(keys.map { (k, l) -> (if (k == cur) "✓  " else "     ") + l }.toTypedArray()) { _, i ->
+                                prefs().edit().putString(KEY_KPN_INFO_KEY, keys[i].first).apply()
+                                send(keys[i].first)   // meteen proberen
+                            }
+                            .setNegativeButton("Annuleren", null)
+                            .show()
+                        true
+                    }
+                },
                 btn("▲ CH+", "CHANNEL_UP"),
             ))
         }
