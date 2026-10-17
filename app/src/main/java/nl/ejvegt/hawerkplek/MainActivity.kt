@@ -1858,9 +1858,12 @@ class MainActivity : Activity() {
     private var carFromMin = 23 * 60
     private var carToMin = 7 * 60
     private var carDirty = false      // tijden gewijzigd maar nog niet opgeslagen
+    @Volatile private var carNeedsRewrite = false   // automatisering gebruikte de verkeerde schakelaar
     private var carUpdating = false   // schakelaar wordt door de app zelf gezet
 
     private fun hhmm(m: Int) = "%02d:%02d".format(m / 60, m % 60)
+
+    private fun isPhaseSwitch(e: String) = listOf("phase", "fase", "single", "enkel").any { it in e.lowercase(NL) }
 
     /** Entiteiten van de Peblar-laadpaal: (schakelaar laden, status-sensor, vermogen-sensor). */
     private fun peblarEntities(): Triple<String?, String?, String?> {
@@ -1869,7 +1872,8 @@ class MainActivity : Activity() {
             haRequest("POST", "/api/template", JSONObject().put("template", tpl).toString())
                 .lines().filter { it.contains('|') }.map { it.split('|') }
         }.getOrDefault(emptyList())
-        val sw = rows.map { it[0] }.firstOrNull { it.startsWith("switch.") && "phase" !in it && "single" !in it }
+        // Fase-schakelaar ("dwing enkelvoudige fase af" / force single phase) NOOIT gebruiken
+        val sw = rows.map { it[0] }.firstOrNull { it.startsWith("switch.") && !isPhaseSwitch(it) }
         // Status: de sensor met waarden als charging / suspended / no_ev_connected
         val st = rows.firstOrNull {
             it[0].startsWith("sensor.") && (it.getOrNull(2) in listOf("charging", "suspended", "no_ev_connected", "error", "fault", "invalid")
@@ -2001,6 +2005,7 @@ class MainActivity : Activity() {
             val found = runCatching {
                 haRequest("POST", "/api/template", JSONObject().put("template", tpl).toString())
                     .lines().filter { it.contains('|') }.map { it.substringBefore('|') to it.substringAfter('|') }
+                    .filterNot { isPhaseSwitch(it.first) }
             }.getOrDefault(emptyList())
             runOnUiThread {
                 if (found.isEmpty()) {
@@ -2028,7 +2033,13 @@ class MainActivity : Activity() {
             // Laden gaat via de Peblar-laadpaal: die schakelaar nemen (ook als eerder iets anders gekozen was)
             val (pSw, pState, pPower) = peblarEntities()
             val saved = carChargeSwitch()
-            if (pSw != null && (saved == null || !saved.contains("peblar") && !prefs().getBoolean(KEY_CAR_SWITCH_MANUAL, false))) {
+            if (saved != null && isPhaseSwitch(saved)) {
+                // Eerder per ongeluk de fase-schakelaar gekozen: terug naar 3 fasen en die nooit meer gebruiken
+                quietService("switch/turn_off", JSONObject().put("entity_id", saved))
+                prefs().edit().remove(KEY_CAR_SWITCH).remove(KEY_CAR_SWITCH_MANUAL).apply()
+                carNeedsRewrite = true
+            }
+            if (pSw != null && (carChargeSwitch() == null || !carChargeSwitch()!!.contains("peblar") && !prefs().getBoolean(KEY_CAR_SWITCH_MANUAL, false))) {
                 prefs().edit().putString(KEY_CAR_SWITCH, pSw).apply()
             }
             val sw = carChargeSwitch()
@@ -2074,6 +2085,12 @@ class MainActivity : Activity() {
                 }
                 val active = auto?.optString("state") == "on"
                 carArmed = active
+                if (carNeedsRewrite) {
+                    carNeedsRewrite = false
+                    // Automatisering opnieuw schrijven met de juiste laadschakelaar (of uitzetten)
+                    if (carChargeSwitch() != null) saveCarWindow(arm = active)
+                    else quietService("automation/turn_off", JSONObject().put("entity_id", CAR_AUTOMATION_ENTITY))
+                }
                 carArm.text = if (active) "■  Laadopdracht intrekken" else "⚡  Laden in dit tijdvak"
                 (carArm.background as? GradientDrawable)?.setColor(if (active) 0xFFFFB300.toInt() else 0xFF4FC3F7.toInt())
                 if (!carDirty) carInfo.text = when {
