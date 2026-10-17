@@ -172,6 +172,7 @@ class MainActivity : Activity() {
         private const val KEY_MA_LAST_PLAYER = "ma_last_player"
         /** Kodi op de GoogleTV-box (JSON-RPC via http). Wachtwoord vul je in de app in. */
         const val KODI_PKG = "org.xbmc.kodi"
+        const val YOUTUBE_PKG = "com.google.android.youtube.tv"
         private const val KEY_TILE_ORDER = "tile_order"
         private const val KEY_ZONE_UP = "zone_up"
         private const val KEY_KPN_INFO_KEY = "kpn_info_key"
@@ -3395,6 +3396,56 @@ class MainActivity : Activity() {
 
     @Volatile private var tileMoved = false
 
+    /** YouTube-tegel: zoekterm intypen en de resultaten meteen op de tv openen (of gewoon YouTube openen). */
+    private fun showYoutubeSearch(app: MediaApp) {
+        val input = EditText(this).apply {
+            hint = "Zoeken op YouTube"
+            setSingleLine()
+            imeOptions = android.view.inputmethod.EditorInfo.IME_ACTION_SEARCH
+            setPadding(dp(20), dp(14), dp(20), dp(14))
+        }
+        val d = AlertDialog.Builder(this)
+            .setTitle("YouTube")
+            .setView(input)
+            .setPositiveButton("Zoeken op tv", null)
+            .setNeutralButton("Alleen openen") { _, _ -> launchApp(app) }
+            .setNegativeButton("Annuleren", null)
+            .create()
+        fun go() {
+            val q = input.text.toString().trim()
+            if (q.isEmpty()) return
+            d.dismiss()
+            youtubeSearchOnTv(q)
+        }
+        d.setOnShowListener {
+            d.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener { go() }
+            input.requestFocus()
+        }
+        input.setOnEditorActionListener { _, _, _ -> go(); true }
+        d.window?.setSoftInputMode(android.view.WindowManager.LayoutParams.SOFT_INPUT_STATE_VISIBLE)
+        d.show()
+    }
+
+    private fun youtubeSearchOnTv(query: String) {
+        val clean = query.replace(Regex("[\\\\'\"`$;&|<>()]"), " ").replace(Regex("\\s+"), " ").trim()
+        mediaStatus.text = "\"$clean\" zoeken op YouTube…"
+        thread { prepareWatching(SOURCE_APPS) }
+        thread {
+            quietService("remote/turn_on", JSONObject().put("entity_id", MEDIA_REMOTE))
+            Thread.sleep(1_500)
+            // Zoekopdracht rechtstreeks in de YouTube-app op de box (twee manieren; de werkende wint)
+            quietService("androidtv/adb_command", JSONObject().put("entity_id", MEDIA_ADB).put("command",
+                "am start -a android.intent.action.SEARCH --es query '$clean' $YOUTUBE_PKG"))
+            Thread.sleep(1_200)
+            quietService("androidtv/adb_command", JSONObject().put("entity_id", MEDIA_ADB).put("command",
+                "am start -a android.intent.action.VIEW -d 'https://www.youtube.com/results?search_query=${Uri.encode(clean)}' $YOUTUBE_PKG"))
+            runOnUiThread {
+                mediaStatus.text = "\"$clean\" staat klaar op YouTube"
+                handler.postDelayed({ refreshMedia() }, 2_500)
+            }
+        }
+    }
+
     /** Kodi vastgelopen? Geforceerd stoppen (en desgewenst opnieuw starten) via ADB. */
     private fun kodiTileMenu() {
         AlertDialog.Builder(this)
@@ -3483,7 +3534,13 @@ class MainActivity : Activity() {
             }
         }
         return tile.apply {
-            setupTile(app.color, second) { if (app.pkg == KODI_PKG) showKodiSheet() else launchApp(app) }
+            setupTile(app.color, second) {
+                when (app.pkg) {
+                    KODI_PKG -> showKodiSheet()
+                    YOUTUBE_PKG -> showYoutubeSearch(app)
+                    else -> launchApp(app)
+                }
+            }
         }
     }
 
