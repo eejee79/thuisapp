@@ -5522,7 +5522,8 @@ class MainActivity : Activity() {
         val results = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
         val scroll = ScrollView(this).apply {
             addView(results)
-            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(360))
+            // Neemt de ruimte die overblijft: met toetsenbord kleiner, zodat de mini-speler zichtbaar blijft
+            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f)
         }
         content.addView(scroll)
         content.addView(miniPlayer(dialog, tKey, tAccent))
@@ -5715,14 +5716,24 @@ class MainActivity : Activity() {
         })
         dialog.setOnDismissListener { handler.removeCallbacks(typed) }
 
-        dialog.setContentView(content)
+        // Blad over (bijna) het hele scherm; met het toetsenbord open krimpt alleen de lijst,
+        // zodat de mini-speler gewoon boven het toetsenbord blijft staan
+        content.background = GradientDrawable().apply {
+            setColor(0xFF1E1E1E.toInt())
+            cornerRadii = floatArrayOf(dp(22).toFloat(), dp(22).toFloat(), dp(22).toFloat(), dp(22).toFloat(), 0f, 0f, 0f, 0f)
+        }
+        val topGap = (resources.displayMetrics.heightPixels * 0.12).toInt()
+        dialog.setContentView(android.widget.FrameLayout(this).apply {
+            setOnClickListener { dialog.dismiss() }   // tik boven het blad = sluiten
+            addView(content, android.widget.FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT
+            ).apply { topMargin = topGap })
+            content.isClickable = true
+        })
         dialog.window?.apply {
-            setBackgroundDrawable(GradientDrawable().apply {
-                setColor(0xFF1E1E1E.toInt())
-                cornerRadii = floatArrayOf(dp(22).toFloat(), dp(22).toFloat(), dp(22).toFloat(), dp(22).toFloat(), 0f, 0f, 0f, 0f)
-            })
+            setBackgroundDrawable(android.graphics.drawable.ColorDrawable(Color.TRANSPARENT))
             setGravity(Gravity.BOTTOM)
-            setLayout(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
+            setLayout(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT)
             setSoftInputMode(android.view.WindowManager.LayoutParams.SOFT_INPUT_STATE_VISIBLE or
                 android.view.WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE)
         }
