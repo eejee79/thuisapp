@@ -1852,6 +1852,8 @@ class MainActivity : Activity() {
     private lateinit var carFrom: Button
     private lateinit var carTo: Button
     private lateinit var carSave: Button
+    private lateinit var carArm: Button
+    private var carArmed = false
     private lateinit var carInfo: TextView
     private var carFromMin = 23 * 60
     private var carToMin = 7 * 60
@@ -1919,13 +1921,13 @@ class MainActivity : Activity() {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
             addView(TextView(this@MainActivity).apply {
-                text = "Alleen laden tussen"
+                text = "Laden tussen"
                 textSize = 17f
                 setTextColor(Color.WHITE)
                 setTypeface(typeface, Typeface.BOLD)
                 layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
             })
-            carEnabled = Switch(this@MainActivity)
+            carEnabled = Switch(this@MainActivity).apply { visibility = View.GONE }
             addView(carEnabled)
         })
         fun timeBtn(onPick: (Int) -> Unit, get: () -> Int) = Button(this).apply {
@@ -1960,9 +1962,20 @@ class MainActivity : Activity() {
         })
         carInfo = TextView(this).apply { textSize = 13f; setTextColor(0xFF9A9A9A.toInt()); setPadding(0, dp(8), 0, dp(8)) }
         win.addView(carInfo)
+        // Grote knop: laadopdracht geven of intrekken. Zonder opdracht laadt de paal niet.
+        carArm = Button(this).apply {
+            textSize = 17f
+            setTextColor(Color.BLACK)
+            setTypeface(typeface, Typeface.BOLD)
+            background = GradientDrawable().apply { setColor(0xFF4FC3F7.toInt()); cornerRadius = dp(14).toFloat() }
+            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(60)).apply { topMargin = dp(4) }
+            text = "⚡  Laden in dit tijdvak"
+            setOnClickListener { if (carArmed) disarmCar() else saveCarWindow(arm = true) }
+        }
+        win.addView(carArm)
         carSave = Button(this).apply {
-            text = "Opslaan"
-            setOnClickListener { saveCarWindow() }
+            text = "Alleen tijden opslaan"
+            setOnClickListener { saveCarWindow(arm = carArmed) }
         }
         win.addView(carSave)
         carSwitchLabel = TextView(this).apply {
@@ -1974,16 +1987,7 @@ class MainActivity : Activity() {
         }
         win.addView(carSwitchLabel)
         fritzList.addView(win)
-        carEnabled.setOnCheckedChangeListener { _, on ->
-            if (carUpdating) return@setOnCheckedChangeListener
-            if (on) saveCarWindow()
-            else {
-                carInfo.text = "Uitgezet: de laadpaal laadt weer altijd."
-                haService("automation", "turn_off", JSONObject().put("entity_id", CAR_AUTOMATION_ENTITY))
-                // Laden weer toestaan, anders blijft de laadpaal uit staan
-                carChargeSwitch()?.let { haService("switch", "turn_on", JSONObject().put("entity_id", it)) }
-            }
-        }
+
         carFrom.text = hhmm(carFromMin)
         carTo.text = hhmm(carToMin)
     }
@@ -2069,22 +2073,37 @@ class MainActivity : Activity() {
                     }
                 }
                 val active = auto?.optString("state") == "on"
-                carUpdating = true
-                carEnabled.isChecked = active
-                carUpdating = false
+                carArmed = active
+                carArm.text = if (active) "■  Laadopdracht intrekken" else "⚡  Laden in dit tijdvak"
+                (carArm.background as? GradientDrawable)?.setColor(if (active) 0xFFFFB300.toInt() else 0xFF4FC3F7.toInt())
                 if (!carDirty) carInfo.text = when {
-                    cfg == null -> "Nog niet ingesteld. Kies de tijden en tik op Opslaan."
-                    active -> "Actief: de auto laadt alleen tussen ${hhmm(carFromMin)} en ${hhmm(carToMin)}. Dit regelt Home Assistant, ook als de app dicht is."
-                    else -> "Staat uit: de laadpaal laadt altijd."
+                    active && charging -> "Laadopdracht actief: laadt nu, stopt om ${hhmm(carToMin)}."
+                    active -> "Laadopdracht actief: laadt tussen ${hhmm(carFromMin)} en ${hhmm(carToMin)} en stopt daarna vanzelf. Dit regelt Home Assistant, ook als de app dicht is."
+                    else -> "Geen laadopdracht: de laadpaal laadt niet. Tik op de knop om binnen het tijdvak te laden."
                 }
             }
         }
     }
 
     /** Automatisering in HA aanmaken/bijwerken en aanzetten. */
-    private fun saveCarWindow() {
+    /** Laadopdracht intrekken: automatisering uit en laadpaal uit. */
+    private fun disarmCar() {
         val sw = carChargeSwitch()
-        if (sw == null) { chooseCarSwitch { saveCarWindow() }; return }
+        carInfo.text = "Laadopdracht intrekken…"
+        thread {
+            quietService("automation/turn_off", JSONObject().put("entity_id", CAR_AUTOMATION_ENTITY))
+            sw?.let { quietService("switch/turn_off", JSONObject().put("entity_id", it)) }
+            runOnUiThread { handler.postDelayed({ refreshCar() }, 1_200) }
+        }
+    }
+
+    /**
+     * Automatisering in HA aanmaken/bijwerken. [arm] = laadopdracht geven: binnen het tijdvak laden,
+     * daarbuiten niet; na de eindtijd vervalt de opdracht vanzelf.
+     */
+    private fun saveCarWindow(arm: Boolean) {
+        val sw = carChargeSwitch()
+        if (sw == null) { chooseCarSwitch { saveCarWindow(arm) }; return }
         val from = hhmm(carFromMin) + ":00"
         val to = hhmm(carToMin) + ":00"
         val inWindow = JSONObject().put("condition", "time").put("after", from).put("before", to)
@@ -2108,7 +2127,9 @@ class MainActivity : Activity() {
                     .put("to", "charging").put("id", "laadt"))
                 val choose = JSONArray()
                     .put(JSONObject().put("conditions", JSONArray().put(trig("start"))).put("sequence", turnOn))
-                    .put(JSONObject().put("conditions", JSONArray().put(trig("stop"))).put("sequence", turnOff))
+                    .put(JSONObject().put("conditions", JSONArray().put(trig("stop"))).put("sequence", JSONArray(turnOff.toString())
+                        // Eindtijd: laden uit en de opdracht vervalt (volgende keer opnieuw op de knop)
+                        .put(JSONObject().put("action", "automation.turn_off").put("target", JSONObject().put("entity_id", CAR_AUTOMATION_ENTITY)))))
                     .put(JSONObject().put("conditions", JSONArray().put(trig("stekker")).put(inWindow)).put("sequence", turnOn))
                     .put(JSONObject().put("conditions", JSONArray().put(
                         JSONObject().put("condition", "not").put("conditions", JSONArray().put(inWindow))
@@ -2116,26 +2137,29 @@ class MainActivity : Activity() {
                 val cfg = JSONObject()
                     .put("id", CAR_AUTOMATION_ID)
                     .put("alias", "Thuisbasis laadvenster")
-                    .put("description", "Auto alleen laden ${hhmm(carFromMin)}-${hhmm(carToMin)} via de Peblar-laadpaal (ingesteld via de Thuisbasis-app)")
+                    .put("description", "Laadopdracht ${hhmm(carFromMin)}-${hhmm(carToMin)} via de Peblar-laadpaal (Thuisbasis-app). Aan = opdracht actief; na de eindtijd gaat hij vanzelf uit.")
                     .put("mode", "queued")
                     .put("triggers", triggers)
                     .put("conditions", JSONArray())
                     .put("actions", JSONArray().put(JSONObject().put("choose", choose)))
                 haRequest("POST", "/api/config/automation/config/$CAR_AUTOMATION_ID", cfg.toString())
                 Thread.sleep(1_500)   // HA laadt de automatiseringen opnieuw
-                quietService("automation/turn_on", JSONObject().put("entity_id", CAR_AUTOMATION_ENTITY))
-                // Meteen toepassen: laadt hij nu buiten het venster, dan direct uit
                 val nowMin = java.time.LocalTime.now().let { it.hour * 60 + it.minute }
                 val inside = if (carFromMin <= carToMin) nowMin in carFromMin until carToMin
                     else nowMin >= carFromMin || nowMin < carToMin
-                if (!inside && stateOf(sw)?.optString("state") == "on") {
-                    quietService("switch/turn_off", JSONObject().put("entity_id", sw))
+                if (arm) {
+                    quietService("automation/turn_on", JSONObject().put("entity_id", CAR_AUTOMATION_ENTITY))
+                    // Meteen toepassen: binnen het tijdvak nu laden, erbuiten (nog) niet
+                    quietService(if (inside) "switch/turn_on" else "switch/turn_off", JSONObject().put("entity_id", sw))
+                } else {
+                    // Alleen tijden opgeslagen: geen opdracht, dus niet laden
+                    quietService("automation/turn_off", JSONObject().put("entity_id", CAR_AUTOMATION_ENTITY))
                 }
             }
             runOnUiThread {
                 if (r.isSuccess) carDirty = false
                 carInfo.text = r.exceptionOrNull()?.let { "Opslaan mislukt: ${it.message}" }
-                    ?: "Opgeslagen ✓ De auto laadt alleen tussen ${hhmm(carFromMin)} en ${hhmm(carToMin)}."
+                    ?: if (arm) "Laadopdracht gegeven ✓ Laadt tussen ${hhmm(carFromMin)} en ${hhmm(carToMin)}." else "Tijden opgeslagen ✓"
                 handler.postDelayed({ refreshCar() }, 1_500)
             }
         }
