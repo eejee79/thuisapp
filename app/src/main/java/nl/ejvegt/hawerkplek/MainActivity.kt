@@ -5294,7 +5294,11 @@ class MainActivity : Activity() {
             haRequest("POST", "/api/template", JSONObject().put("template", tpl).toString())
                 .lines().filter { it.contains('|') }.map { it.substringBefore('|') to it.substringAfter('|').lowercase(NL) }
         }.getOrDefault(emptyList())
-        return active.firstOrNull { (_, n) -> "google" in n || "tv" in n || "woonkamer" in n }?.first
+        // Staat er een gewone app open op de box (YouTube, Netflix, Kodi…), dan speelt Music Assistant daar niet
+        val app = boxApp
+        if (app != null && MEDIA_APPS.any { it.pkg == app }) return null
+        // Alleen de speler van de box zelf, niet bijv. "Audio Woonkamer" (de Chromecast Audio)
+        return active.firstOrNull { (_, n) -> ("google" in n || Regex("\\btv\\b").containsMatchIn(n)) && "audio" !in n && "chromecast" !in n }?.first
     }
 
     private fun maPlayers(): List<Pair<String, String>> {
