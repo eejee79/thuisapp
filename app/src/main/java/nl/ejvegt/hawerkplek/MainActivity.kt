@@ -6860,37 +6860,37 @@ class MainActivity : Activity() {
                 btn("", "PROG_BLUE", 0xFF1976D2.toInt()),
                 height = 40,
             ))
-            // 3 minuten terug/vooruit bij terugkijken: een aantal keer pijl links/rechts.
-            // Hoeveel seconden één druk springt verschilt per box: ingedrukt houden om dat in te stellen.
-            fun jumpBtn(label: String, key: String) = btn(label, null, size = 15f).apply {
+            // Spoelen bij terugkijken zoals op de KPN-afstandsbediening: tijd intoetsen (mmss, 600 = 6 min)
+            // en dan ⏪/⏩. Meerdere tikken tellen op (2× "3 min" = 6 min); verstuurd na een korte pauze.
+            val jumpPending = intArrayOf(0, 0)   // minuten terug, vooruit
+            val jumpSend = arrayOfNulls<Runnable>(2)
+            fun jumpBtn(minutes: Int, forward: Boolean) = btn(if (forward) "${minutes}m ⏩" else "⏪ ${minutes}m", null, size = 15f).apply {
                 background = GradientDrawable().apply { setColor(0xFF263238.toInt()); cornerRadius = dp(14).toFloat() }
                 isClickable = true
+                val d = if (forward) 1 else 0
                 setOnClickListener {
-                    alpha = 0.5f; postDelayed({ alpha = 1f }, 300)
-                    val step = prefs().getInt(KEY_KPN_SKIP_SEC, 10).coerceAtLeast(5)
-                    val n = (180 + step - 1) / step
-                    thread {
-                        quietService("remote/send_command", JSONObject().put("entity_id", remote)
-                            .put("command", key).put("num_repeats", n).put("delay_secs", 0.25))
-                    }
-                }
-                setOnLongClickListener {
-                    val opts = listOf(10, 15, 30, 60)
-                    val cur = prefs().getInt(KEY_KPN_SKIP_SEC, 10)
-                    AlertDialog.Builder(this@MainActivity)
-                        .setTitle("Hoeveel springt één druk op pijl links/rechts?")
-                        .setItems(opts.map { (if (it == cur) "✓  " else "     ") + "$it seconden" }.toTypedArray()) { _, i ->
-                            prefs().edit().putInt(KEY_KPN_SKIP_SEC, opts[i]).apply()
+                    alpha = 0.5f; postDelayed({ alpha = 1f }, 200)
+                    jumpPending[d] += minutes
+                    mediaStatus.text = (if (forward) "Vooruit " else "Terug ") + "${jumpPending[d]} min…"
+                    jumpSend[d]?.let { handler.removeCallbacks(it) }
+                    val r = Runnable {
+                        val total = jumpPending[d]
+                        jumpPending[d] = 0
+                        if (total <= 0) return@Runnable
+                        val digits = "${total}00".map { it.toString() }
+                        val keys = JSONArray(digits).put(if (forward) "MEDIA_FAST_FORWARD" else "MEDIA_REWIND")
+                        mediaStatus.text = (if (forward) "⏩ " else "⏪ ") + "$total min"
+                        thread {
+                            quietService("remote/send_command", JSONObject().put("entity_id", remote)
+                                .put("command", keys).put("delay_secs", 0.3))
                         }
-                        .setNegativeButton("Annuleren", null)
-                        .show()
-                    true
+                    }
+                    jumpSend[d] = r
+                    handler.postDelayed(r, 1_200)
                 }
             }
-            content.addView(row(
-                jumpBtn("⏪  3 min terug", "DPAD_LEFT"),
-                jumpBtn("3 min vooruit  ⏩", "DPAD_RIGHT"),
-            ))
+            content.addView(row(jumpBtn(1, false), jumpBtn(3, false), jumpBtn(10, false)))
+            content.addView(row(jumpBtn(1, true), jumpBtn(3, true), jumpBtn(10, true)))
             content.addView(row(
                 btn("▼ CH−", "CHANNEL_DOWN"),
                 btn("▲ CH+", "CHANNEL_UP"),
