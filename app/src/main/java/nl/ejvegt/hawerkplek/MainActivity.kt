@@ -3379,8 +3379,36 @@ class MainActivity : Activity() {
         }
     }
 
+    @Volatile private var tileMoved = false
+
+    /** Kodi vastgelopen? Geforceerd stoppen (en desgewenst opnieuw starten) via ADB. */
+    private fun kodiTileMenu() {
+        AlertDialog.Builder(this)
+            .setTitle("Kodi")
+            .setItems(arrayOf("⏹  Kodi geforceerd stoppen", "↻  Kodi herstarten")) { _, i ->
+                mediaStatus.text = if (i == 0) "Kodi stoppen…" else "Kodi herstarten…"
+                thread {
+                    quietService("androidtv/adb_command", JSONObject().put("entity_id", MEDIA_ADB)
+                        .put("command", "am force-stop $KODI_PKG"))
+                    if (i == 1) {
+                        Thread.sleep(1_500)
+                        quietService("androidtv/adb_command", JSONObject().put("entity_id", MEDIA_ADB).put(
+                            "command", "monkey -p $KODI_PKG -c android.intent.category.LEANBACK_LAUNCHER -c android.intent.category.LAUNCHER 1"
+                        ))
+                    }
+                    runOnUiThread {
+                        mediaStatus.text = if (i == 0) "Kodi is gestopt" else "Kodi is opnieuw gestart"
+                        handler.postDelayed({ refreshMedia() }, 2_000)
+                    }
+                }
+            }
+            .setNegativeButton("Annuleren", null)
+            .show()
+    }
+
     private fun makeDraggable(v: View, key: String) {
         v.setOnLongClickListener {
+            tileMoved = false
             v.performHapticFeedback(android.view.HapticFeedbackConstants.LONG_PRESS)
             v.startDragAndDrop(android.content.ClipData.newPlainText("tegel", key), View.DragShadowBuilder(v), key, 0)
             v.alpha = 0.3f
@@ -3397,6 +3425,7 @@ class MainActivity : Activity() {
                 android.view.DragEvent.ACTION_DROP -> {
                     val from = e.localState as? String
                     if (from != null && from != key) {
+                        tileMoved = true
                         val order = tileOrder().toMutableList()
                         val toIdx = order.indexOf(key)
                         val fromIdx = order.indexOf(from)
@@ -3409,6 +3438,8 @@ class MainActivity : Activity() {
                 android.view.DragEvent.ACTION_DRAG_ENDED -> {
                     target.scaleX = 1f; target.scaleY = 1f
                     if (target === v && e.localState == key) {
+                        // Kodi ingedrukt gehouden en losgelaten zonder te verslepen: Kodi-menu
+                        if (!tileMoved && key == KODI_PKG) tileGrid.post { kodiTileMenu() }
                         // Na het slepen alles opnieuw tekenen in de nieuwe volgorde
                         v.alpha = 1f
                         tileGrid.post { buildTiles() }
