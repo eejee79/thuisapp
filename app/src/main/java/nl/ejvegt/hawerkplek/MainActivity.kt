@@ -5041,6 +5041,8 @@ class MainActivity : Activity() {
     @Volatile private var musicPlayingPath: String? = null
     /** Laatste map die naar een Music Assistant-speler ging: (speler, naam, nummers), voor de wachtrij. */
     @Volatile private var maFolder: Triple<String, String, List<SmbMusic.Entry>>? = null
+    /** Laatste album/playlist (Spotify) dat naar een Music Assistant-speler ging: (speler, naam, item). */
+    @Volatile private var maStarted: Triple<String, String, SpotifyApi.Item>? = null
 
     /** Nummers uit de map afspelen op de vaste speler van Mijn muziek (eerst kiezen als die er nog niet is). */
     private fun playMusicFolder(tracks: List<SmbMusic.Entry>, startAt: Int, btn: TextView?) {
@@ -5075,6 +5077,7 @@ class MainActivity : Activity() {
     private fun playFolderOnMa(tracks: List<SmbMusic.Entry>, entity: String, name: String) {
         silencePhone()
         maFolder = Triple(entity, name, tracks)
+        maStarted = null
         zoneUp = "picore" in name.lowercase(NL)
         musicRun++   // oude wachtrij via de telefoon stoppen
         mediaStatus.text = "${tracks.size} nummers op $name…"
@@ -5353,6 +5356,8 @@ class MainActivity : Activity() {
 
     private fun playOnMa(item: SpotifyApi.Item, entity: String, name: String) {
         silencePhone()
+        maStarted = Triple(entity, name, item)
+        maFolder = null
         zoneUp = "picore" in name.lowercase(NL)
         prefs().edit().putString(KEY_MA_LAST_PLAYER, entity).apply()
         musicRun++   // eventuele oude wachtrij van de netwerkmap stoppen
@@ -6769,6 +6774,50 @@ class MainActivity : Activity() {
                     queueList.addView(tagRow(e, i + 1, now, title.text.toString().ifEmpty { null }, false) {
                         playFolderOnMa(folder.third.drop(i), folder.first, folder.second)
                     })
+                }
+                return
+            }
+            // Spotify-album of -playlist via Music Assistant: de hele lijst ophalen bij Spotify
+            val started = maStarted
+            if (started != null && started.first == entity && started.third.uri.startsWith("spotify:") &&
+                (started.third.uri.contains(":album:") || started.third.uri.contains(":playlist:"))) {
+                queueList.removeAllViews()
+                queueList.addView(TextView(this).apply { text = "Laden…"; setTextColor(0xFF9A9A9A.toInt()); setPadding(dp(4), dp(8), 0, dp(8)) })
+                thread {
+                    val r = runCatching { spotify.contextTracks(started.third.uri) }
+                    runOnUiThread {
+                        queueList.removeAllViews()
+                        val tracks = r.getOrNull()
+                        if (tracks.isNullOrEmpty()) {
+                            queueList.addView(TextView(this).apply {
+                                text = r.exceptionOrNull()?.message?.let { "Wachtrij niet beschikbaar ($it)" } ?: "Geen nummers gevonden"
+                                setTextColor(0xFF9A9A9A.toInt()); setPadding(dp(4), dp(8), 0, dp(8))
+                            })
+                            return@runOnUiThread
+                        }
+                        queueList.addView(TextView(this).apply {
+                            text = started.third.name.uppercase(NL)
+                            textSize = 12f
+                            setTextColor(0xFF1DB954.toInt())
+                            setTypeface(typeface, Typeface.BOLD)
+                            setPadding(dp(2), dp(4), 0, dp(6))
+                        })
+                        val cur = title.text.toString()
+                        tracks.forEachIndexed { i, t ->
+                            val now = t.name.equals(cur, true)
+                            val v = queueRow("${i + 1}.  ${t.name}", t.artists, t.image, now)
+                            v.isClickable = true
+                            v.setOnClickListener {
+                                // Vanaf dit nummer verder spelen (rest van het album/de playlist erachter)
+                                thread {
+                                    quietService("music_assistant/play_media", JSONObject().put("entity_id", entity)
+                                        .put("media_id", JSONArray(tracks.drop(i).map { it.uri }))
+                                        .put("media_type", "track").put("enqueue", "replace"))
+                                }
+                            }
+                            queueList.addView(v)
+                        }
+                    }
                 }
                 return
             }

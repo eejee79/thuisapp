@@ -297,6 +297,31 @@ class SpotifyApi(private val context: Context) {
         }.filter { it.id.isNotEmpty() }
     }
 
+    class Track(val name: String, val artists: String, val uri: String, val image: String?)
+
+    /** Nummers van een album of playlist (voor de wachtrij als Music Assistant het afspeelt). */
+    fun contextTracks(uri: String): List<Track> {
+        val parts = uri.split(':')
+        val type = parts.getOrNull(1) ?: return emptyList()
+        val id = parts.lastOrNull() ?: return emptyList()
+        fun artists(t: JSONObject) = t.optJSONArray("artists")?.let { a -> (0 until a.length()).joinToString(", ") { a.getJSONObject(it).optString("name") } }.orEmpty()
+        return when (type) {
+            "album" -> {
+                val al = JSONObject(call("GET", "/albums/$id"))
+                val cover = img(al)
+                val arr = al.optJSONObject("tracks")?.optJSONArray("items") ?: JSONArray()
+                (0 until arr.length()).map { arr.getJSONObject(it) }.map { Track(it.optString("name"), artists(it), it.optString("uri"), cover) }
+            }
+            "playlist" -> {
+                val arr = JSONObject(call("GET", "/playlists/$id/tracks?limit=100")).optJSONArray("items") ?: JSONArray()
+                (0 until arr.length()).mapNotNull { arr.getJSONObject(it).optJSONObject("track") }
+                    .map { Track(it.optString("name"), artists(it), it.optString("uri"), img(it.optJSONObject("album"))) }
+            }
+            "track" -> emptyList()
+            else -> emptyList()
+        }
+    }
+
     /** Wachtrij van wat er nu speelt: (titel, artiest, hoes). */
     fun queue(): List<Triple<String, String, String?>> {
         val arr = JSONObject(call("GET", "/me/player/queue")).optJSONArray("queue") ?: JSONArray()
