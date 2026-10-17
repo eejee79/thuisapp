@@ -2725,7 +2725,7 @@ class MainActivity : Activity() {
             setPadding(dp(12), 0, dp(12), 0)
             setOnClickListener {
                 val e = nowEntity ?: return@setOnClickListener
-                text = if (text.toString() == "⏸") "▶" else "⏸"
+                text = if (text.toString() == "❚❚") "▶" else "❚❚"
                 if (e == "local") toggleLocal()
                 else haService("media_player", "media_play_pause", JSONObject().put("entity_id", e))
             }
@@ -4094,7 +4094,7 @@ class MainActivity : Activity() {
             addView(progTrack)
         }
         fun render() {
-            playBtn.text = if (playing) "⏸︎" else "▶︎"
+            playBtn.text = if (playing) "❚❚" else "▶︎"
             val w = progTrack.width
             (prog.layoutParams as android.widget.FrameLayout.LayoutParams).width =
                 if (dur > 0 && w > 0) (w * (pos / dur).coerceIn(0.0, 1.0)).toInt() else 0
@@ -5664,11 +5664,122 @@ class MainActivity : Activity() {
             addView(ctl("⏭\uFE0E") { call("media_next_track") })
         })
 
+        // Wachtrij: omhoog vegen (of tikken) klapt hem uit, omlaag vegen klapt in / sluit
+        val queueHint = TextView(this).apply {
+            text = "▲  Wachtrij"
+            textSize = 13f
+            setTextColor(0xFF9A9A9A.toInt())
+            gravity = Gravity.CENTER
+            setPadding(0, dp(8), 0, dp(4))
+            isClickable = true
+        }
+        content.addView(queueHint)
+        val queueList = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        val queueScroll = ScrollView(this).apply {
+            addView(queueList)
+            visibility = View.GONE
+            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(320))
+        }
+        content.addView(queueScroll)
+        fun queueRow(t: String, sub: String, img: String?, now: Boolean) = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            setPadding(dp(6), dp(6), dp(6), dp(6))
+            background = GradientDrawable().apply {
+                setColor(if (now) 0xFF1F3326.toInt() else 0xFF262626.toInt()); cornerRadius = dp(10).toFloat()
+            }
+            layoutParams = LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT
+            ).apply { bottomMargin = dp(5) }
+            val iv = ImageView(this@MainActivity).apply {
+                scaleType = ImageView.ScaleType.CENTER_CROP
+                clipToOutline = true
+                background = GradientDrawable().apply { setColor(0xFF3A3A3A.toInt()); cornerRadius = dp(6).toFloat() }
+                layoutParams = LinearLayout.LayoutParams(dp(40), dp(40)).apply { marginEnd = dp(10) }
+            }
+            img?.let { loadImage(iv, it) }
+            addView(iv)
+            addView(LinearLayout(this@MainActivity).apply {
+                orientation = LinearLayout.VERTICAL
+                layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
+                addView(TextView(this@MainActivity).apply {
+                    text = t
+                    textSize = 14f
+                    setTextColor(if (now) 0xFF7CE3A0.toInt() else Color.WHITE)
+                    setTypeface(typeface, Typeface.BOLD)
+                    maxLines = 1
+                    ellipsize = android.text.TextUtils.TruncateAt.END
+                })
+                if (sub.isNotEmpty()) addView(TextView(this@MainActivity).apply {
+                    text = sub
+                    textSize = 12f
+                    setTextColor(0xFFA0A0A0.toInt())
+                    maxLines = 1
+                    ellipsize = android.text.TextUtils.TruncateAt.END
+                })
+            })
+        }
+        fun loadQueue() {
+            queueList.removeAllViews()
+            queueList.addView(TextView(this).apply { text = "Laden…"; setTextColor(0xFF9A9A9A.toInt()); setPadding(dp(4), dp(8), 0, dp(8)) })
+            thread {
+                // Spotify: volledige wachtrij via de Web API; Music Assistant: huidig en volgend nummer
+                val r: Result<List<Triple<String, String, String?>>> = runCatching {
+                    if (entity == SPOTIFY) spotify.queue()
+                    else {
+                        val resp = JSONObject(haRequest("POST", "/api/services/music_assistant/get_queue?return_response",
+                            JSONObject().put("entity_id", entity).toString()))
+                        val q = resp.optJSONObject("service_response")?.optJSONObject(entity) ?: JSONObject()
+                        fun item(o: JSONObject?): Triple<String, String, String?>? {
+                            if (o == null) return null
+                            val mi = o.optJSONObject("media_item")
+                            val name = mi?.optString("name")?.ifEmpty { null } ?: o.optString("name")
+                            val artists = mi?.optJSONArray("artists")?.let { a ->
+                                (0 until a.length()).joinToString(", ") { a.optJSONObject(it)?.optString("name").orEmpty() }
+                            }.orEmpty()
+                            val image = mi?.optString("image")?.takeIf { it.startsWith("http") }
+                                ?: o.optString("image").takeIf { it.startsWith("http") }
+                            return Triple(name, artists, image)
+                        }
+                        listOfNotNull(item(q.optJSONObject("next_item"))).ifEmpty { throw IOException("Geen volgend nummer bekend") }
+                    }
+                }
+                runOnUiThread {
+                    queueList.removeAllViews()
+                    val items = r.getOrNull()
+                    if (items.isNullOrEmpty()) {
+                        queueList.addView(TextView(this).apply {
+                            text = r.exceptionOrNull()?.message?.let { "Wachtrij niet beschikbaar ($it)" } ?: "De wachtrij is leeg"
+                            setTextColor(0xFF9A9A9A.toInt()); setPadding(dp(4), dp(8), 0, dp(8))
+                        })
+                        return@runOnUiThread
+                    }
+                    queueList.addView(TextView(this).apply {
+                        text = if (entity == SPOTIFY) "HIERNA" else "VOLGENDE"
+                        textSize = 12f
+                        setTextColor(0xFF1DB954.toInt())
+                        setTypeface(typeface, Typeface.BOLD)
+                        setPadding(dp(2), dp(4), 0, dp(6))
+                    })
+                    items.forEach { (t, a, img) -> queueList.addView(queueRow(t, a, img, false)) }
+                }
+            }
+        }
+        var queueOpen = false
+        fun setQueue(open: Boolean) {
+            queueOpen = open
+            queueScroll.visibility = if (open) View.VISIBLE else View.GONE
+            art.visibility = if (open || lastArt == null) View.GONE else View.VISIBLE
+            queueHint.text = if (open) "▼  Wachtrij inklappen" else "▲  Wachtrij"
+            if (open) loadQueue()
+        }
+        queueHint.setOnClickListener { setQueue(!queueOpen) }
+
         val ticker = object : Runnable {
             override fun run() {
                 if (playing && !dragging) curPos += 1.0
                 render()
-                playBtn.text = if (playing) "⏸\uFE0E" else "▶\uFE0E"
+                playBtn.text = if (playing) "❚❚" else "▶\uFE0E"
                 val now = System.currentTimeMillis()
                 if (now - lastFetch > 4_000) {
                     lastFetch = now
@@ -5691,7 +5802,7 @@ class MainActivity : Activity() {
                             if (!dragging) curPos = if (p.isNaN()) 0.0 else p
                             if (pic != null && pic != lastArt) {
                                 lastArt = pic
-                                art.visibility = View.VISIBLE
+                                if (!queueOpen) art.visibility = View.VISIBLE
                                 loadImage(art, pic)
                             }
                             render()
@@ -5701,7 +5812,9 @@ class MainActivity : Activity() {
                 handler.postDelayed(this, 1_000)
             }
         }
-        dialog.setContentView(ScrollView(this).apply { addView(content) })
+        dialog.setContentView(SwipeSheet(this, content, noIntercept = queueScroll,
+            onUp = { if (!queueOpen) setQueue(true) },
+            onDown = { if (queueOpen) setQueue(false) else dialog.dismiss() }))
         dialog.setOnKeyListener { _, _, event ->
             if (event.keyCode == KeyEvent.KEYCODE_VOLUME_UP || event.keyCode == KeyEvent.KEYCODE_VOLUME_DOWN) {
                 dispatchKeyEvent(event)
@@ -6359,7 +6472,7 @@ class MainActivity : Activity() {
         // Typen kan alleen op de GoogleTV-box (via ADB)
         nowKeyboardBtn.visibility = if (info.remote == MEDIA_REMOTE) View.VISIBLE else View.GONE
         nowSubsBtn.visibility = if (info.remote == MEDIA_REMOTE && boxApp == KODI_PKG) View.VISIBLE else View.GONE
-        nowPlayPause.text = if (info.playing) "⏸" else "▶"
+        nowPlayPause.text = if (info.playing) "❚❚" else "▶"
     }
 
     // ================= Hulpjes =================
@@ -6383,5 +6496,70 @@ class MainActivity : Activity() {
             h > 0 -> "${h}u ${m}m"
             else -> "${m}m"
         }
+    }
+}
+
+/**
+ * Onderblad dat je kunt vegen: omhoog = [onUp], omlaag = [onDown]. Tijdens omlaag vegen schuift het mee.
+ * Veegt niet als je in [noIntercept] begint (die lijst scrolt zelf).
+ */
+class SwipeSheet(
+    ctx: Context, child: View, private val noIntercept: View?,
+    private val onUp: () -> Unit, private val onDown: () -> Unit,
+) : android.widget.FrameLayout(ctx) {
+    private val slop = android.view.ViewConfiguration.get(ctx).scaledTouchSlop * 2
+    private val density = ctx.resources.displayMetrics.density
+    private var downX = 0f
+    private var downY = 0f
+    private var dragging = false
+    private val content = child
+
+    init { addView(child) }
+
+    private fun inNoIntercept(x: Float, y: Float): Boolean {
+        val v = noIntercept ?: return false
+        if (v.visibility != View.VISIBLE) return false
+        val loc = IntArray(2); v.getLocationOnScreen(loc)
+        val me = IntArray(2); getLocationOnScreen(me)
+        val ax = x + me[0]; val ay = y + me[1]
+        return ax >= loc[0] && ax <= loc[0] + v.width && ay >= loc[1] && ay <= loc[1] + v.height
+    }
+
+    override fun onInterceptTouchEvent(ev: android.view.MotionEvent): Boolean {
+        when (ev.actionMasked) {
+            android.view.MotionEvent.ACTION_DOWN -> {
+                downX = ev.x; downY = ev.y; dragging = false
+            }
+            android.view.MotionEvent.ACTION_MOVE -> {
+                val dy = ev.y - downY
+                val dx = ev.x - downX
+                if (!inNoIntercept(downX, downY) && kotlin.math.abs(dy) > slop && kotlin.math.abs(dy) > kotlin.math.abs(dx) * 1.5f) {
+                    dragging = true
+                    return true
+                }
+            }
+        }
+        return false
+    }
+
+    @android.annotation.SuppressLint("ClickableViewAccessibility")
+    override fun onTouchEvent(ev: android.view.MotionEvent): Boolean {
+        when (ev.actionMasked) {
+            android.view.MotionEvent.ACTION_DOWN -> { downX = ev.x; downY = ev.y; return true }
+            android.view.MotionEvent.ACTION_MOVE -> {
+                val dy = ev.y - downY
+                content.translationY = if (dy > 0) dy else dy / 4
+                return true
+            }
+            android.view.MotionEvent.ACTION_UP, android.view.MotionEvent.ACTION_CANCEL -> {
+                val dy = ev.y - downY
+                content.animate().translationY(0f).setDuration(150).start()
+                if (dy > 110 * density) onDown()
+                else if (dy < -50 * density) onUp()
+                dragging = false
+                return true
+            }
+        }
+        return super.onTouchEvent(ev)
     }
 }

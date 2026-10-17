@@ -297,6 +297,16 @@ class SpotifyApi(private val context: Context) {
         }.filter { it.id.isNotEmpty() }
     }
 
+    /** Wachtrij van wat er nu speelt: (titel, artiest, hoes). */
+    fun queue(): List<Triple<String, String, String?>> {
+        val arr = JSONObject(call("GET", "/me/player/queue")).optJSONArray("queue") ?: JSONArray()
+        return (0 until minOf(arr.length(), 30)).map { arr.getJSONObject(it) }.map { t ->
+            val artists = t.optJSONArray("artists")?.let { a -> (0 until a.length()).joinToString(", ") { a.getJSONObject(it).optString("name") } }
+                ?: t.optJSONObject("show")?.optString("name").orEmpty()
+            Triple(t.optString("name"), artists, img(t.optJSONObject("album")))
+        }
+    }
+
     /** Afspelen op een apparaat: een nummer direct, de rest (artiest/album/playlist) als context. */
     fun play(deviceId: String, item: Item) {
         val body = if (item.type == "track") JSONObject().put("uris", JSONArray().put(item.uri))
