@@ -5928,10 +5928,15 @@ class MainActivity : Activity() {
         val bmp = runCatching {
             val term = java.net.URLEncoder.encode("$artist ${album ?: title ?: ""}".trim(), "UTF-8")
             val entity = if (album != null) "album" else "song"
-            val conn = URL("https://itunes.apple.com/search?term=$term&entity=$entity&limit=1&country=NL").openConnection() as HttpURLConnection
+            val conn = URL("https://itunes.apple.com/search?term=$term&entity=$entity&limit=15&country=NL").openConnection() as HttpURLConnection
             conn.connectTimeout = 6_000; conn.readTimeout = 8_000
             val res = JSONObject(conn.inputStream.bufferedReader().use { it.readText() }).optJSONArray("results")
-            val art = res?.optJSONObject(0)?.optString("artworkUrl100")?.takeIf { it.startsWith("http") }
+            val items = (0 until (res?.length() ?: 0)).mapNotNull { res!!.optJSONObject(it) }
+            // Het album dat echt zo heet (anders zou bijv. een ander album van dezelfde artiest gekozen kunnen worden)
+            fun norm(x: String) = x.lowercase(NL).replace(Regex("[^a-z0-9]"), "")
+            val best = album?.let { al -> items.firstOrNull { norm(it.optString("collectionName")) == norm(al) }
+                ?: items.firstOrNull { norm(it.optString("collectionName")).startsWith(norm(al)) } } ?: items.firstOrNull()
+            val art = best?.optString("artworkUrl100")?.takeIf { it.startsWith("http") }
                 ?.replace("100x100bb", "300x300bb") ?: return@runCatching null
             val c2 = URL(art).openConnection() as HttpURLConnection
             c2.connectTimeout = 6_000; c2.readTimeout = 10_000
@@ -6118,6 +6123,23 @@ class MainActivity : Activity() {
         if (had) dropAudioFocus()
     }
 
+    /** Hele songtekst in een scrollbaar venster. */
+    private fun showLyricsText(title: String, text: String) {
+        AlertDialog.Builder(this)
+            .setTitle(title)
+            .setView(ScrollView(this).apply {
+                addView(TextView(this@MainActivity).apply {
+                    this.text = text
+                    textSize = 16f
+                    setTextColor(Color.WHITE)
+                    setLineSpacing(0f, 1.2f)
+                    setPadding(dp(22), dp(8), dp(22), dp(16))
+                })
+            })
+            .setPositiveButton("Sluiten", null)
+            .show()
+    }
+
     /** Bediening voor muziek van de netwerkmap op deze telefoon: voortgang, spoelen, wachtrij (veegbaar). */
     private fun showLocalSheet() {
         val dialog = sheet()
@@ -6155,6 +6177,8 @@ class MainActivity : Activity() {
         }
         content.addView(title)
         content.addView(sub)
+        val lyricsBar = LyricsBar(this, 0xFFFFC94D.toInt()) { showLyricsText(title.text.toString(), it) }
+        content.addView(lyricsBar)
         val bar = SeekBar(this).apply {
             max = 1000
             progressTintList = ColorStateList.valueOf(0xFFFFB300.toInt())
@@ -6257,6 +6281,8 @@ class MainActivity : Activity() {
                 val p = runCatching { lp?.currentPosition ?: 0 }.getOrDefault(0)
                 val d = runCatching { lp?.duration ?: 0 }.getOrDefault(0)
                 if (!dragging && d > 0) { bar.progress = (p.toLong() * 1000 / d).toInt(); pos.text = fmtSec(p / 1000.0) }
+                e?.let { tagCache[it.path] }?.let { tg -> lyricsBar.load(tg.artist, tg.title, tg.album, if (d > 0) d / 1000.0 else null) }
+                lyricsBar.update(p / 1000.0)
                 dur.text = if (d > 0) fmtSec(d / 1000.0) else ""
                 playBtn.text = if (runCatching { lp?.isPlaying == true }.getOrDefault(false)) "❚❚" else "▶\uFE0E"
                 if (queueOpen && shownIndex != localIndex) fillQueue()
@@ -6583,6 +6609,8 @@ class MainActivity : Activity() {
         }
         content.addView(title)
         content.addView(artist)
+        val lyricsBar = LyricsBar(this, 0xFF7CE3A0.toInt()) { showLyricsText(title.text.toString(), it) }
+        content.addView(lyricsBar)
         val bar = SeekBar(this).apply {
             max = 1000
             progressTintList = ColorStateList.valueOf(0xFF1DB954.toInt())
@@ -6791,6 +6819,7 @@ class MainActivity : Activity() {
         val ticker = object : Runnable {
             override fun run() {
                 if (playing && !dragging) curPos += 1.0
+                lyricsBar.update(curPos)
                 render()
                 playBtn.text = if (playing) "❚❚" else "▶\uFE0E"
                 val now = System.currentTimeMillis()
@@ -6809,6 +6838,8 @@ class MainActivity : Activity() {
                         runOnUiThread {
                             if (!dialog.isShowing) return@runOnUiThread
                             title.text = attr(st, "media_title") ?: "Niets aan het spelen"
+                            lyricsBar.load(attr(st, "media_artist"), attr(st, "media_title"), attr(st, "media_album_name"),
+                                a.optDouble("media_duration", 0.0).takeIf { !it.isNaN() })
                             artist.text = joinNonEmpty(attr(st, "media_artist"), attr(st, "media_album_name"))
                             playing = isPl
                             curDur = a.optDouble("media_duration", 0.0).takeIf { !it.isNaN() } ?: 0.0
