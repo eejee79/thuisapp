@@ -6430,7 +6430,9 @@ class MainActivity : Activity() {
         keys.addView(key("⌨ Nummer") { dialog.dismiss(); askChannelNumber() })
         content.addView(keys)
 
-        dialog.setContentView(ScrollView(this).apply { addView(content) })
+        val sheetScroll = ScrollView(this).apply { addView(content) }
+        dialog.setContentView(SwipeSheet(this, sheetScroll, noIntercept = null, onUp = {}, onDown = { dialog.dismiss() },
+            scroller = sheetScroll, canSwipeUp = false))
         dialog.window?.apply {
             setBackgroundDrawable(GradientDrawable().apply {
                 setColor(0xFF1E1E1E.toInt())
@@ -6863,15 +6865,19 @@ class MainActivity : Activity() {
             // Spoelen bij terugkijken zoals op de KPN-afstandsbediening: tijd intoetsen (mmss, 600 = 6 min)
             // en dan ⏪/⏩. Meerdere tikken tellen op (2× "3 min" = 6 min); verstuurd na een korte pauze.
             val jumpPending = intArrayOf(0, 0)   // minuten terug, vooruit
+            var jumpStatus: TextView? = null
             val jumpSend = arrayOfNulls<Runnable>(2)
-            fun jumpBtn(minutes: Int, forward: Boolean) = btn(if (forward) "${minutes}m ⏩" else "⏪ ${minutes}m", null, size = 15f).apply {
-                background = GradientDrawable().apply { setColor(0xFF263238.toInt()); cornerRadius = dp(14).toFloat() }
+            fun jumpBtn(minutes: Int, forward: Boolean) = btn((if (forward) "+" else "−") + "$minutes min", null, size = 15f).apply {
+                background = GradientDrawable().apply {
+                    setColor(if (forward) 0xFF1E4D3A.toInt() else 0xFF33414A.toInt()); cornerRadius = dp(12).toFloat()
+                }
                 isClickable = true
                 val d = if (forward) 1 else 0
                 setOnClickListener {
                     alpha = 0.5f; postDelayed({ alpha = 1f }, 200)
                     jumpPending[d] += minutes
-                    mediaStatus.text = (if (forward) "Vooruit " else "Terug ") + "${jumpPending[d]} min…"
+                    jumpStatus?.text = (if (forward) "⏩ vooruit " else "⏪ terug ") + "${jumpPending[d]} min…"
+                    jumpStatus?.setTextColor(if (forward) 0xFF7CE3A0.toInt() else 0xFFB0C4CE.toInt())
                     jumpSend[d]?.let { handler.removeCallbacks(it) }
                     val r = Runnable {
                         val total = jumpPending[d]
@@ -6879,7 +6885,8 @@ class MainActivity : Activity() {
                         if (total <= 0) return@Runnable
                         val digits = "${total}00".map { it.toString() }
                         val keys = JSONArray(digits).put(if (forward) "MEDIA_FAST_FORWARD" else "MEDIA_REWIND")
-                        mediaStatus.text = (if (forward) "⏩ " else "⏪ ") + "$total min"
+                        jumpStatus?.text = (if (forward) "⏩ " else "⏪ ") + "$total min verstuurd"
+                        jumpStatus?.postDelayed({ jumpStatus?.text = "Tik vaker om op te tellen"; jumpStatus?.setTextColor(0xFF9FB7C2.toInt()) }, 3_000)
                         thread {
                             quietService("remote/send_command", JSONObject().put("entity_id", remote)
                                 .put("command", keys).put("delay_secs", 0.3))
@@ -6889,8 +6896,53 @@ class MainActivity : Activity() {
                     handler.postDelayed(r, 1_200)
                 }
             }
-            content.addView(row(jumpBtn(1, false), jumpBtn(3, false), jumpBtn(10, false)))
-            content.addView(row(jumpBtn(1, true), jumpBtn(3, true), jumpBtn(10, true)))
+            // Blok "Spoelen bij terugkijken": per richting een rij met label en drie knoppen
+            val jumpInfo = TextView(this).apply {
+                textSize = 12f
+                setTextColor(0xFF9FB7C2.toInt())
+                text = "Tik vaker om op te tellen"
+            }
+            jumpStatus = jumpInfo
+            fun jumpRow(label: String, forward: Boolean) = LinearLayout(this).apply {
+                orientation = LinearLayout.HORIZONTAL
+                gravity = Gravity.CENTER_VERTICAL
+                layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(48)).apply { topMargin = dp(8) }
+                addView(TextView(this@MainActivity).apply {
+                    text = label
+                    textSize = 14f
+                    setTextColor(Color.WHITE)
+                    setTypeface(typeface, Typeface.BOLD)
+                    layoutParams = LinearLayout.LayoutParams(dp(78), ViewGroup.LayoutParams.WRAP_CONTENT)
+                })
+                listOf(1, 3, 10).forEachIndexed { k, m ->
+                    addView(jumpBtn(m, forward).apply {
+                        layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.MATCH_PARENT, 1f)
+                            .apply { if (k > 0) marginStart = dp(8) }
+                    })
+                }
+            }
+            content.addView(LinearLayout(this).apply {
+                orientation = LinearLayout.VERTICAL
+                setPadding(dp(14), dp(12), dp(14), dp(14))
+                background = GradientDrawable().apply { setColor(0xFF1B262C.toInt()); cornerRadius = dp(16).toFloat() }
+                layoutParams = LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT
+                ).apply { bottomMargin = dp(10) }
+                addView(LinearLayout(this@MainActivity).apply {
+                    orientation = LinearLayout.HORIZONTAL
+                    gravity = Gravity.CENTER_VERTICAL
+                    addView(TextView(this@MainActivity).apply {
+                        text = "Spoelen bij terugkijken"
+                        textSize = 15f
+                        setTextColor(Color.WHITE)
+                        setTypeface(typeface, Typeface.BOLD)
+                        layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
+                    })
+                    addView(jumpInfo)
+                })
+                addView(jumpRow("⏪  Terug", false))
+                addView(jumpRow("⏩  Vooruit", true))
+            })
             content.addView(row(
                 btn("▼ CH−", "CHANNEL_DOWN"),
                 btn("▲ CH+", "CHANNEL_UP"),
@@ -6998,7 +7050,9 @@ class MainActivity : Activity() {
         handler.post(ticker)
         dialog.setOnDismissListener { handler.removeCallbacks(ticker) }
 
-        dialog.setContentView(ScrollView(this).apply { addView(content) })
+        val sheetScroll = ScrollView(this).apply { addView(content) }
+        dialog.setContentView(SwipeSheet(this, sheetScroll, noIntercept = null, onUp = {}, onDown = { dialog.dismiss() },
+            scroller = sheetScroll, canSwipeUp = false))
         // Volumeknoppen blijven de receiver regelen terwijl de afstandsbediening open is
         dialog.setOnKeyListener { _, _, event ->
             if (event.keyCode == KeyEvent.KEYCODE_VOLUME_UP || event.keyCode == KeyEvent.KEYCODE_VOLUME_DOWN) {
@@ -7457,6 +7511,9 @@ class MainActivity : Activity() {
 class SwipeSheet(
     ctx: Context, child: View, private val noIntercept: View?,
     private val onUp: () -> Unit, private val onDown: () -> Unit,
+    /** Scrollbare inhoud: omlaag vegen sluit alleen als die bovenaan staat. */
+    private val scroller: View? = null,
+    private val canSwipeUp: Boolean = true,
 ) : android.widget.FrameLayout(ctx) {
     private val slop = android.view.ViewConfiguration.get(ctx).scaledTouchSlop * 2
     private val density = ctx.resources.displayMetrics.density
@@ -7485,6 +7542,9 @@ class SwipeSheet(
                 val dy = ev.y - downY
                 val dx = ev.x - downX
                 if (!inNoIntercept(downX, downY) && kotlin.math.abs(dy) > slop && kotlin.math.abs(dy) > kotlin.math.abs(dx) * 1.5f) {
+                    val down = dy > 0
+                    if (down && (scroller?.canScrollVertically(-1) == true)) return false   // eerst omhoog scrollen
+                    if (!down && !canSwipeUp) return false
                     dragging = true
                     return true
                 }
