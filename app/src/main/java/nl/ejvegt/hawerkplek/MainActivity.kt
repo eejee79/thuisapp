@@ -5863,12 +5863,12 @@ class MainActivity : Activity() {
                         android.graphics.BitmapFactory.decodeByteArray(bytes, 0, bytes.size,
                             android.graphics.BitmapFactory.Options().apply { inSampleSize = sample })
                     }
-                    Tags(
-                        mmr.extractMetadata(android.media.MediaMetadataRetriever.METADATA_KEY_TITLE)?.trim()?.ifEmpty { null },
-                        mmr.extractMetadata(android.media.MediaMetadataRetriever.METADATA_KEY_ARTIST)?.trim()?.ifEmpty { null },
-                        mmr.extractMetadata(android.media.MediaMetadataRetriever.METADATA_KEY_ALBUM)?.trim()?.ifEmpty { null },
-                        pic,
-                    )
+                    val title = mmr.extractMetadata(android.media.MediaMetadataRetriever.METADATA_KEY_TITLE)?.trim()?.ifEmpty { null }
+                    val artist = (mmr.extractMetadata(android.media.MediaMetadataRetriever.METADATA_KEY_ARTIST)
+                        ?: mmr.extractMetadata(android.media.MediaMetadataRetriever.METADATA_KEY_ALBUMARTIST))?.trim()?.ifEmpty { null }
+                    val album = mmr.extractMetadata(android.media.MediaMetadataRetriever.METADATA_KEY_ALBUM)?.trim()?.ifEmpty { null }
+                    // Geen hoes in het bestand: cover.jpg in de map, anders online opzoeken
+                    Tags(title, artist, album, pic ?: findCover(e, artist, album, title))
                 } finally {
                     runCatching { mmr.release() }
                 }
@@ -5876,6 +5876,50 @@ class MainActivity : Activity() {
             tagCache[e.path] = t
             runOnUiThread { cb(t) }
         }
+    }
+
+    /** Gevonden hoesjes per map en per album (null = gezocht, niets gevonden). */
+    private val coverCache = ConcurrentHashMap<String, java.util.Optional<android.graphics.Bitmap>>()
+
+    private fun decodeCover(bytes: ByteArray): android.graphics.Bitmap? {
+        val o = android.graphics.BitmapFactory.Options().apply { inJustDecodeBounds = true }
+        android.graphics.BitmapFactory.decodeByteArray(bytes, 0, bytes.size, o)
+        if (o.outWidth <= 0) return null
+        var sample = 1
+        while (o.outWidth / (sample * 2) >= 160) sample *= 2
+        return android.graphics.BitmapFactory.decodeByteArray(bytes, 0, bytes.size,
+            android.graphics.BitmapFactory.Options().apply { inSampleSize = sample })
+    }
+
+    /** Hoes zoeken: eerst cover.jpg/folder.jpg in de map, anders online (iTunes) op artiest + album. */
+    private fun findCover(e: SmbMusic.Entry, artist: String?, album: String?, title: String?): android.graphics.Bitmap? {
+        val dir = e.path.substringBeforeLast('\\', "")
+        coverCache["dir:$dir"]?.let { if (it.isPresent) return it.get() }
+        if (!coverCache.containsKey("dir:$dir")) {
+            val names = listOf("cover.jpg", "folder.jpg", "front.jpg", "Cover.jpg", "Folder.jpg", "Front.jpg", "cover.png", "folder.png", "AlbumArt.jpg")
+            val found = names.firstNotNullOfOrNull { n ->
+                smb.readSmall(if (dir.isEmpty()) n else "$dir\\$n")?.let { decodeCover(it) }
+            }
+            coverCache["dir:$dir"] = java.util.Optional.ofNullable(found)
+            if (found != null) return found
+        }
+        if (artist == null) return null
+        val key = "web:${artist.lowercase(NL)}|${(album ?: title ?: "").lowercase(NL)}"
+        coverCache[key]?.let { return if (it.isPresent) it.get() else null }
+        val bmp = runCatching {
+            val term = java.net.URLEncoder.encode("$artist ${album ?: title ?: ""}".trim(), "UTF-8")
+            val entity = if (album != null) "album" else "song"
+            val conn = URL("https://itunes.apple.com/search?term=$term&entity=$entity&limit=1&country=NL").openConnection() as HttpURLConnection
+            conn.connectTimeout = 6_000; conn.readTimeout = 8_000
+            val res = JSONObject(conn.inputStream.bufferedReader().use { it.readText() }).optJSONArray("results")
+            val art = res?.optJSONObject(0)?.optString("artworkUrl100")?.takeIf { it.startsWith("http") }
+                ?.replace("100x100bb", "300x300bb") ?: return@runCatching null
+            val c2 = URL(art).openConnection() as HttpURLConnection
+            c2.connectTimeout = 6_000; c2.readTimeout = 10_000
+            decodeCover(c2.inputStream.use { it.readBytes() })
+        }.getOrNull()
+        coverCache[key] = java.util.Optional.ofNullable(bmp)
+        return bmp
     }
 
     /**

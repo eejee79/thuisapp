@@ -97,6 +97,21 @@ class SmbMusic {
             .sortedWith(compareBy<Entry>({ !it.isDir }, { it.name.lowercase() }))
     }
 
+    /** Klein bestand lezen (bijv. cover.jpg); null als het niet bestaat of te groot is. */
+    fun readSmall(path: String, max: Long = 3_000_000): ByteArray? = runCatching {
+        withShare { d ->
+            if (!d.fileExists(path)) return@withShare null
+            d.openFile(
+                path, EnumSet.of(AccessMask.GENERIC_READ), null, SMB2ShareAccess.ALL,
+                SMB2CreateDisposition.FILE_OPEN, null,
+            ).use { f ->
+                val size = f.fileInformation.standardInformation.endOfFile
+                if (size <= 0 || size > max) return@use null
+                f.inputStream.use { it.readBytes() }
+            }
+        }
+    }.getOrNull()
+
     /** Bestand schrijven op de share (bijv. een ondertitel naast de video). */
     fun write(path: String, data: ByteArray) = withShare { d ->
         d.openFile(
