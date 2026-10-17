@@ -177,6 +177,7 @@ class MainActivity : Activity() {
         private const val KEY_TMDB = "tmdb_key"
         private const val KEY_T_MUSIC = "target_music"
         private const val KEY_CAR_SWITCH = "car_charge_switch"
+        private const val KEY_CAR_SWITCH_MANUAL = "car_charge_switch_manual"
         private const val KEY_T_MA = "target_ma"
         private const val KEY_T_SPOTIFY = "target_spotify"
         const val KODI_DEFAULT_HOST = "192.168.50.140"
@@ -1859,6 +1860,25 @@ class MainActivity : Activity() {
 
     private fun hhmm(m: Int) = "%02d:%02d".format(m / 60, m % 60)
 
+    /** Entiteiten van de Peblar-laadpaal: (schakelaar laden, status-sensor, vermogen-sensor). */
+    private fun peblarEntities(): Triple<String?, String?, String?> {
+        val tpl = "{% for e in integration_entities('peblar') %}{{ e }}|{{ state_attr(e, 'unit_of_measurement') }}|{{ states(e) }}\n{% endfor %}"
+        val rows = runCatching {
+            haRequest("POST", "/api/template", JSONObject().put("template", tpl).toString())
+                .lines().filter { it.contains('|') }.map { it.split('|') }
+        }.getOrDefault(emptyList())
+        val sw = rows.map { it[0] }.firstOrNull { it.startsWith("switch.") && "phase" !in it && "single" !in it }
+        // Status: de sensor met waarden als charging / suspended / no_ev_connected
+        val st = rows.firstOrNull {
+            it[0].startsWith("sensor.") && (it.getOrNull(2) in listOf("charging", "suspended", "no_ev_connected", "error", "fault", "invalid")
+                || it[0].endsWith("_state") || "cp_state" in it[0])
+        }?.get(0)
+        val pw = rows.firstOrNull {
+            it[0].startsWith("sensor.") && "power" in it[0] && it.getOrNull(1) in listOf("W", "kW") && "phase" !in it[0]
+        }?.get(0)
+        return Triple(sw, st, pw)
+    }
+
     /** Schakelaar waarmee laden aan/uit gaat (zelf gezocht, of eerder gekozen). */
     private fun carChargeSwitch(): String? = prefs().getString(KEY_CAR_SWITCH, null)?.ifBlank { null }
 
@@ -1952,8 +1972,10 @@ class MainActivity : Activity() {
             if (carUpdating) return@setOnCheckedChangeListener
             if (on) saveCarWindow()
             else {
-                carInfo.text = "Uitgezet: de auto laadt weer wanneer hij wil."
+                carInfo.text = "Uitgezet: de laadpaal laadt weer altijd."
                 haService("automation", "turn_off", JSONObject().put("entity_id", CAR_AUTOMATION_ENTITY))
+                // Laden weer toestaan, anders blijft de laadpaal uit staan
+                carChargeSwitch()?.let { haService("switch", "turn_on", JSONObject().put("entity_id", it)) }
             }
         }
         carFrom.text = hhmm(carFromMin)
@@ -1963,7 +1985,8 @@ class MainActivity : Activity() {
     /** Laad-schakelaars in HA zoeken; bij precies één (van de Škoda) die nemen, anders laten kiezen. */
     private fun chooseCarSwitch(onChosen: (String) -> Unit) {
         thread {
-            val tpl = "{% for s in states.switch if ('charg' in s.entity_id or 'laad' in s.entity_id) %}" +
+            val tpl = "{% set p = integration_entities('peblar') %}" +
+                "{% for s in states.switch if s.entity_id in p or 'peblar' in s.entity_id or 'charg' in s.entity_id or 'laad' in s.entity_id %}" +
                 "{{ s.entity_id }}|{{ s.name }}\n{% endfor %}"
             val found = runCatching {
                 haRequest("POST", "/api/template", JSONObject().put("template", tpl).toString())
@@ -1972,14 +1995,14 @@ class MainActivity : Activity() {
             runOnUiThread {
                 if (found.isEmpty()) {
                     AlertDialog.Builder(this).setTitle("Geen laadschakelaar gevonden")
-                        .setMessage("In Home Assistant staat geen schakelaar om laden aan/uit te zetten (bijv. switch.skoda_elroq_charging van de MySkoda-integratie).")
+                        .setMessage("In Home Assistant staat geen schakelaar van de Peblar-laadpaal. Staat de Peblar-integratie aan?")
                         .setPositiveButton("OK", null).show()
                     return@runOnUiThread
                 }
                 AlertDialog.Builder(this)
                     .setTitle("Welke schakelaar zet het laden aan/uit?")
                     .setItems(found.map { "${it.second}\n${it.first}" }.toTypedArray()) { _, i ->
-                        prefs().edit().putString(KEY_CAR_SWITCH, found[i].first).apply()
+                        prefs().edit().putString(KEY_CAR_SWITCH, found[i].first).putBoolean(KEY_CAR_SWITCH_MANUAL, true).apply()
                         carSwitchLabel.text = "Laadschakelaar: ${found[i].first}  (tik om te wijzigen)"
                         onChosen(found[i].first)
                     }
@@ -1992,24 +2015,21 @@ class MainActivity : Activity() {
     private fun refreshCar() {
         buildCar()
         thread {
-            // Schakelaar automatisch vinden als er nog geen gekozen is
-            if (carChargeSwitch() == null) {
-                val tpl = "{% for s in states.switch if 'charg' in s.entity_id and ('skoda' in s.entity_id or 'elroq' in s.entity_id) %}" +
-                    "{{ s.entity_id }}\n{% endfor %}"
-                val found = runCatching {
-                    haRequest("POST", "/api/template", JSONObject().put("template", tpl).toString()).lines().filter { it.isNotBlank() }
-                }.getOrDefault(emptyList())
-                if (found.size == 1) prefs().edit().putString(KEY_CAR_SWITCH, found[0].trim()).apply()
+            // Laden gaat via de Peblar-laadpaal: die schakelaar nemen (ook als eerder iets anders gekozen was)
+            val (pSw, pState, pPower) = peblarEntities()
+            val saved = carChargeSwitch()
+            if (pSw != null && (saved == null || !saved.contains("peblar") && !prefs().getBoolean(KEY_CAR_SWITCH_MANUAL, false))) {
+                prefs().edit().putString(KEY_CAR_SWITCH, pSw).apply()
             }
             val sw = carChargeSwitch()
+            val pst = pState?.let { stateOf(it) }?.optString("state")
+            val pkw = pPower?.let { stateOf(it) }?.let { o ->
+                val v = o.optString("state").toDoubleOrNull()
+                val unit = o.optJSONObject("attributes")?.optString("unit_of_measurement")
+                v?.let { if (unit == "W") it / 1000 else it }
+            }
             val bat = stateOf(DASH_CAR_BATTERY)
             val swState = sw?.let { stateOf(it) }
-            val plugTpl = "{% for s in states.binary_sensor if ('skoda' in s.entity_id or 'elroq' in s.entity_id) and " +
-                "('plug' in s.entity_id or 'connected' in s.entity_id) %}{{ s.entity_id }}|{{ s.state }}\n{% endfor %}"
-            val plug = runCatching {
-                haRequest("POST", "/api/template", JSONObject().put("template", plugTpl).toString())
-                    .lines().firstOrNull { it.contains('|') }
-            }.getOrNull()
             val auto = stateOf(CAR_AUTOMATION_ENTITY)
             val cfg = runCatching {
                 JSONObject(haRequest("GET", "/api/config/automation/config/$CAR_AUTOMATION_ID", null))
@@ -2017,11 +2037,19 @@ class MainActivity : Activity() {
             runOnUiThread {
                 val b = bat?.optString("state")?.toDoubleOrNull()
                 carBattery.text = if (b != null) "${b.toInt()}%" else "—"
-                val charging = swState?.optString("state") == "on"
-                val plugged = plug?.substringAfter('|')?.let { it == "on" }
+                // Status van de laadpaal zelf (Peblar): laden / gepauzeerd / geen auto
+                val charging = if (pst != null) pst == "charging" else swState?.optString("state") == "on"
                 carState.text = listOfNotNull(
-                    if (charging) "⚡ Aan het laden" else "Laadt niet",
-                    plugged?.let { if (it) "stekker erin" else "stekker eruit" },
+                    when (pst) {
+                        "charging" -> "⚡ Laadt" + (pkw?.takeIf { it > 0.05 }?.let { String.format(NL, " met %.1f kW", it) } ?: "")
+                        "suspended" -> "Stekker erin, laadt niet"
+                        "no_ev_connected" -> "Geen auto aangesloten"
+                        "error", "fault", "invalid" -> "⚠ Laadpaal meldt een fout ($pst)"
+                        null -> if (charging) "⚡ Aan het laden" else "Laadt niet"
+                        else -> pst
+                    },
+                    "Peblar".takeIf { pst != null },
+                    swState?.optString("state")?.let { if (it == "on") "laden toegestaan" else "laden uit" },
                 ).joinToString("  ·  ")
                 carSwitchLabel.text = if (sw != null) "Laadschakelaar: $sw  (tik om te wijzigen)" else "Laadschakelaar kiezen…"
                 // Opgeslagen venster uit de automatisering halen
@@ -2039,7 +2067,7 @@ class MainActivity : Activity() {
                 if (!carDirty) carInfo.text = when {
                     cfg == null -> "Nog niet ingesteld. Kies de tijden en tik op Opslaan."
                     active -> "Actief: de auto laadt alleen tussen ${hhmm(carFromMin)} en ${hhmm(carToMin)}. Dit regelt Home Assistant, ook als de app dicht is."
-                    else -> "Staat uit: de auto laadt wanneer hij wil."
+                    else -> "Staat uit: de laadpaal laadt altijd."
                 }
             }
         }
@@ -2058,30 +2086,29 @@ class MainActivity : Activity() {
         carInfo.text = "Opslaan…"
         thread {
             val r = runCatching {
-                // Stekker-sensor (indien aanwezig): insteken binnen het venster = laden aan
-                val plugTpl = "{% for s in states.binary_sensor if ('skoda' in s.entity_id or 'elroq' in s.entity_id) and " +
-                    "('plug' in s.entity_id or 'connected' in s.entity_id) %}{{ s.entity_id }}\n{% endfor %}"
-                val plug = runCatching {
-                    haRequest("POST", "/api/template", JSONObject().put("template", plugTpl).toString()).lines().firstOrNull { it.isNotBlank() }?.trim()
-                }.getOrNull()
+                // Status van de laadpaal: auto aangesloten binnen het venster = laden aan
+                val plug = peblarEntities().second
                 val triggers = JSONArray()
                     .put(JSONObject().put("trigger", "time").put("at", from).put("id", "start"))
                     .put(JSONObject().put("trigger", "time").put("at", to).put("id", "stop"))
                     .put(JSONObject().put("trigger", "state").put("entity_id", sw).put("to", "on").put("id", "aan"))
                     .put(JSONObject().put("trigger", "homeassistant").put("event", "start").put("id", "herstart"))
-                if (plug != null) triggers.put(JSONObject().put("trigger", "state").put("entity_id", plug).put("to", "on")
-                    .put("for", JSONObject().put("seconds", 30)).put("id", "stekker"))
+                if (plug != null) triggers.put(JSONObject().put("trigger", "state").put("entity_id", plug)
+                    .put("from", "no_ev_connected").put("for", JSONObject().put("seconds", 30)).put("id", "stekker"))
+                // Begint de laadpaal buiten het venster toch te laden: ook dan meteen uit
+                if (plug != null) triggers.put(JSONObject().put("trigger", "state").put("entity_id", plug)
+                    .put("to", "charging").put("id", "laadt"))
                 val choose = JSONArray()
                     .put(JSONObject().put("conditions", JSONArray().put(trig("start"))).put("sequence", turnOn))
                     .put(JSONObject().put("conditions", JSONArray().put(trig("stop"))).put("sequence", turnOff))
                     .put(JSONObject().put("conditions", JSONArray().put(trig("stekker")).put(inWindow)).put("sequence", turnOn))
                     .put(JSONObject().put("conditions", JSONArray().put(
                         JSONObject().put("condition", "not").put("conditions", JSONArray().put(inWindow))
-                    ).put(JSONObject().put("condition", "state").put("entity_id", sw).put("state", "on"))).put("sequence", turnOff))
+                    )).put("sequence", turnOff))
                 val cfg = JSONObject()
                     .put("id", CAR_AUTOMATION_ID)
                     .put("alias", "Thuisbasis laadvenster")
-                    .put("description", "Auto alleen laden ${hhmm(carFromMin)}-${hhmm(carToMin)} (ingesteld via de Thuisbasis-app)")
+                    .put("description", "Auto alleen laden ${hhmm(carFromMin)}-${hhmm(carToMin)} via de Peblar-laadpaal (ingesteld via de Thuisbasis-app)")
                     .put("mode", "queued")
                     .put("triggers", triggers)
                     .put("conditions", JSONArray())
