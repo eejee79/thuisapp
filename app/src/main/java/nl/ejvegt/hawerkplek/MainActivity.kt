@@ -1863,8 +1863,21 @@ class MainActivity : Activity() {
 
     private fun hhmm(m: Int) = "%02d:%02d".format(m / 60, m % 60)
 
+    /** MySkoda: (schakelaar "laden" van de auto, knop "wakker maken"). Om een slapende auto te laten starten. */
+    private fun skodaEntities(): Pair<String?, String?> {
+        val tpl = "{% for e in integration_entities('myskoda') %}{{ e }}\n{% endfor %}"
+        val ids = runCatching {
+            haRequest("POST", "/api/template", JSONObject().put("template", tpl).toString()).lines().map { it.trim() }.filter { it.isNotEmpty() }
+        }.getOrDefault(emptyList())
+        val sw = ids.firstOrNull { it.startsWith("switch.") && it.endsWith("_charging") }
+            ?: ids.firstOrNull { it.startsWith("switch.") && "charg" in it && listOf("care", "reduced", "unlock", "auto").none { x -> x in it } }
+        val wake = ids.firstOrNull { it.startsWith("button.") && "wake" in it }
+        return sw to wake
+    }
+
     /** Keuzelijst "Slim laden" van de Peblar (eigen laadschema van de paal); null = niet gevonden. */
     @Volatile private var peblarSmart: String? = null
+    @Volatile private var carSkoda: Pair<String?, String?> = null to null
 
     private fun isPhaseSwitch(e: String) = listOf("phase", "fase", "single", "enkel").any { it in e.lowercase(NL) }
 
@@ -2036,6 +2049,7 @@ class MainActivity : Activity() {
         thread {
             // Laden gaat via de Peblar-laadpaal: die schakelaar nemen (ook als eerder iets anders gekozen was)
             val (pSw, pState, pPower) = peblarEntities()
+            carSkoda = skodaEntities()
             val saved = carChargeSwitch()
             if (saved != null && isPhaseSwitch(saved)) {
                 // Eerder per ongeluk de fase-schakelaar gekozen: terug naar 3 fasen en die nooit meer gebruiken
@@ -2107,6 +2121,34 @@ class MainActivity : Activity() {
     }
 
     /** Automatisering in HA aanmaken/bijwerken en aanzetten. */
+    /**
+     * Bewaker (staat altijd aan): gaat "Opladen" aan of begint de paal te laden terwijl er geen
+     * laadopdracht is (of buiten het tijdvak), dan meteen weer uit. Zo laadt hij nooit zonder jouw opdracht.
+     */
+    private fun writeCarGuard(sw: String, from: String, to: String) {
+        val status = peblarEntities().second
+        val triggers = JSONArray()
+            .put(JSONObject().put("trigger", "state").put("entity_id", sw).put("to", "on"))
+            .put(JSONObject().put("trigger", "homeassistant").put("event", "start"))
+            .put(JSONObject().put("trigger", "time_pattern").put("minutes", "/15"))
+        if (status != null) triggers.put(JSONObject().put("trigger", "state").put("entity_id", status).put("to", "charging"))
+        val allowed = JSONObject().put("condition", "and").put("conditions", JSONArray()
+            .put(JSONObject().put("condition", "state").put("entity_id", CAR_AUTOMATION_ENTITY).put("state", "on"))
+            .put(JSONObject().put("condition", "time").put("after", from).put("before", to)))
+        val cfg = JSONObject()
+            .put("id", "thuisbasis_laadbewaker")
+            .put("alias", "Thuisbasis laadbewaker")
+            .put("description", "Laadpaal alleen laten laden met een laadopdracht uit de Thuisbasis-app, binnen het tijdvak.")
+            .put("mode", "single")
+            .put("triggers", triggers)
+            .put("conditions", JSONArray()
+                .put(JSONObject().put("condition", "state").put("entity_id", sw).put("state", "on"))
+                .put(JSONObject().put("condition", "not").put("conditions", JSONArray().put(allowed))))
+            .put("actions", JSONArray().put(JSONObject().put("action", "switch.turn_off").put("target", JSONObject().put("entity_id", sw))))
+        haRequest("POST", "/api/config/automation/config/thuisbasis_laadbewaker", cfg.toString())
+        quietService("automation/turn_on", JSONObject().put("entity_id", "automation.thuisbasis_laadbewaker"))
+    }
+
     /** Laadopdracht intrekken: automatisering uit en laadpaal uit. */
     private fun disarmCar() {
         val sw = carChargeSwitch()
@@ -2134,6 +2176,18 @@ class MainActivity : Activity() {
         if (smart != null) turnOn.put(JSONObject().put("action", "select.select_option").put("continue_on_error", true)
             .put("target", JSONObject().put("entity_id", smart)).put("data", JSONObject().put("option", "default")))
         turnOn.put(JSONObject().put("action", "switch.turn_on").put("target", JSONObject().put("entity_id", sw)))
+        // Slapende Škoda wekken en laden laten starten (anders merkt hij niet dat de paal stroom geeft)
+        val (skSw, skWake) = carSkoda
+        if (skWake != null || skSw != null) {
+            turnOn.put(JSONObject().put("delay", JSONObject().put("seconds", 30)))
+            if (skWake != null) turnOn.put(JSONObject().put("action", "button.press").put("continue_on_error", true)
+                .put("target", JSONObject().put("entity_id", skWake)))
+            if (skSw != null) {
+                turnOn.put(JSONObject().put("delay", JSONObject().put("seconds", 45)))
+                turnOn.put(JSONObject().put("action", "switch.turn_on").put("continue_on_error", true)
+                    .put("target", JSONObject().put("entity_id", skSw)))
+            }
+        }
         val turnOff = JSONArray().put(JSONObject().put("action", "switch.turn_off").put("target", JSONObject().put("entity_id", sw)))
         fun trig(id: String) = JSONObject().put("condition", "trigger").put("id", id)
         carInfo.text = "Opslaan…"
@@ -2169,6 +2223,7 @@ class MainActivity : Activity() {
                     .put("conditions", JSONArray())
                     .put("actions", JSONArray().put(JSONObject().put("choose", choose)))
                 haRequest("POST", "/api/config/automation/config/$CAR_AUTOMATION_ID", cfg.toString())
+                writeCarGuard(sw, from, to)
                 Thread.sleep(1_500)   // HA laadt de automatiseringen opnieuw
                 val nowMin = java.time.LocalTime.now().let { it.hour * 60 + it.minute }
                 val inside = if (carFromMin <= carToMin) nowMin in carFromMin until carToMin
@@ -2180,6 +2235,16 @@ class MainActivity : Activity() {
                         quietService("select/select_option", JSONObject().put("entity_id", it).put("option", "default"))
                     }
                     quietService(if (inside) "switch/turn_on" else "switch/turn_off", JSONObject().put("entity_id", sw))
+                    if (inside) {
+                        // Auto wekken en laten starten (op de achtergrond, duurt ruim een minuut)
+                        val (skSw, skWake) = carSkoda
+                        thread {
+                            Thread.sleep(30_000)
+                            skWake?.let { quietService("button/press", JSONObject().put("entity_id", it)) }
+                            Thread.sleep(45_000)
+                            skSw?.let { quietService("switch/turn_on", JSONObject().put("entity_id", it)) }
+                        }
+                    }
                 } else {
                     // Alleen tijden opgeslagen: geen opdracht, dus niet laden
                     quietService("automation/turn_off", JSONObject().put("entity_id", CAR_AUTOMATION_ENTITY))
