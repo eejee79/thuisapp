@@ -4065,7 +4065,15 @@ class MainActivity : Activity() {
         val box = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             setPadding(dp(8), dp(8), dp(8), dp(8))
-            background = GradientDrawable().apply { setColor(0xFF2B2B2B.toInt()); cornerRadius = dp(14).toFloat() }
+            // Licht getint met de kleur van de bron, zodat hij zich onderscheidt van de lijst
+            fun mix(c: Int, base: Int, f: Double) = (base + (c - base) * f).toInt().coerceIn(0, 255)
+            val tint = Color.rgb(
+                mix(Color.red(accent), 0x1E, 0.13), mix(Color.green(accent), 0x1E, 0.13), mix(Color.blue(accent), 0x1E, 0.13),
+            )
+            background = GradientDrawable().apply {
+                setColor(tint); cornerRadius = dp(14).toFloat()
+                setStroke(dp(1), (accent and 0x00FFFFFF) or 0x55000000)
+            }
             layoutParams = LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT
             ).apply { topMargin = dp(8) }
