@@ -1863,6 +1863,9 @@ class MainActivity : Activity() {
 
     private fun hhmm(m: Int) = "%02d:%02d".format(m / 60, m % 60)
 
+    /** Keuzelijst "Slim laden" van de Peblar (eigen laadschema van de paal); null = niet gevonden. */
+    @Volatile private var peblarSmart: String? = null
+
     private fun isPhaseSwitch(e: String) = listOf("phase", "fase", "single", "enkel").any { it in e.lowercase(NL) }
 
     /** Entiteiten van de Peblar-laadpaal: (schakelaar laden, status-sensor, vermogen-sensor). */
@@ -1880,8 +1883,9 @@ class MainActivity : Activity() {
                 || it[0].endsWith("_state") || "cp_state" in it[0])
         }?.get(0)
         val pw = rows.firstOrNull {
-            it[0].startsWith("sensor.") && "power" in it[0] && it.getOrNull(1) in listOf("W", "kW") && "phase" !in it[0]
+            it[0].startsWith("sensor.") && ("power" in it[0] || "vermogen" in it[0]) && it.getOrNull(1) in listOf("W", "kW") && !isPhaseSwitch(it[0])
         }?.get(0)
+        peblarSmart = rows.map { it[0] }.firstOrNull { it.startsWith("select.") && ("slim" in it || "smart" in it) }
         return Triple(sw, st, pw)
     }
 
@@ -2124,7 +2128,12 @@ class MainActivity : Activity() {
         val from = hhmm(carFromMin) + ":00"
         val to = hhmm(carToMin) + ":00"
         val inWindow = JSONObject().put("condition", "time").put("after", from).put("before", to)
-        val turnOn = JSONArray().put(JSONObject().put("action", "switch.turn_on").put("target", JSONObject().put("entity_id", sw)))
+        val smart = peblarSmart
+        val turnOn = JSONArray()
+        // Eigen laadschema van de Peblar uitzetten ("Standaard" = gewoon laden), anders blijft hij gepauzeerd
+        if (smart != null) turnOn.put(JSONObject().put("action", "select.select_option").put("continue_on_error", true)
+            .put("target", JSONObject().put("entity_id", smart)).put("data", JSONObject().put("option", "default")))
+        turnOn.put(JSONObject().put("action", "switch.turn_on").put("target", JSONObject().put("entity_id", sw)))
         val turnOff = JSONArray().put(JSONObject().put("action", "switch.turn_off").put("target", JSONObject().put("entity_id", sw)))
         fun trig(id: String) = JSONObject().put("condition", "trigger").put("id", id)
         carInfo.text = "Opslaan…"
@@ -2167,6 +2176,9 @@ class MainActivity : Activity() {
                 if (arm) {
                     quietService("automation/turn_on", JSONObject().put("entity_id", CAR_AUTOMATION_ENTITY))
                     // Meteen toepassen: binnen het tijdvak nu laden, erbuiten (nog) niet
+                    if (inside) peblarSmart?.let {
+                        quietService("select/select_option", JSONObject().put("entity_id", it).put("option", "default"))
+                    }
                     quietService(if (inside) "switch/turn_on" else "switch/turn_off", JSONObject().put("entity_id", sw))
                 } else {
                     // Alleen tijden opgeslagen: geen opdracht, dus niet laden
