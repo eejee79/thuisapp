@@ -175,6 +175,7 @@ class MainActivity : Activity() {
         private const val KEY_TILE_ORDER = "tile_order"
         private const val KEY_ZONE_UP = "zone_up"
         private const val KEY_KPN_INFO_KEY = "kpn_info_key"
+        private const val KEY_KPN_SKIP_SEC = "kpn_skip_sec"
         private const val KEY_TMDB = "tmdb_key"
         private const val KEY_T_MUSIC = "target_music"
         private const val KEY_CAR_SWITCH = "car_charge_switch"
@@ -6858,6 +6859,37 @@ class MainActivity : Activity() {
                 btn("", "PROG_YELLOW", 0xFFFBC02D.toInt()),
                 btn("", "PROG_BLUE", 0xFF1976D2.toInt()),
                 height = 40,
+            ))
+            // 3 minuten terug/vooruit bij terugkijken: een aantal keer pijl links/rechts.
+            // Hoeveel seconden één druk springt verschilt per box: ingedrukt houden om dat in te stellen.
+            fun jumpBtn(label: String, key: String) = btn(label, null, size = 15f).apply {
+                background = GradientDrawable().apply { setColor(0xFF263238.toInt()); cornerRadius = dp(14).toFloat() }
+                isClickable = true
+                setOnClickListener {
+                    alpha = 0.5f; postDelayed({ alpha = 1f }, 300)
+                    val step = prefs().getInt(KEY_KPN_SKIP_SEC, 30).coerceAtLeast(5)
+                    val n = (180 + step - 1) / step
+                    thread {
+                        quietService("remote/send_command", JSONObject().put("entity_id", remote)
+                            .put("command", key).put("num_repeats", n).put("delay_secs", 0.35))
+                    }
+                }
+                setOnLongClickListener {
+                    val opts = listOf(10, 15, 30, 60)
+                    val cur = prefs().getInt(KEY_KPN_SKIP_SEC, 30)
+                    AlertDialog.Builder(this@MainActivity)
+                        .setTitle("Hoeveel springt één druk op pijl links/rechts?")
+                        .setItems(opts.map { (if (it == cur) "✓  " else "     ") + "$it seconden" }.toTypedArray()) { _, i ->
+                            prefs().edit().putInt(KEY_KPN_SKIP_SEC, opts[i]).apply()
+                        }
+                        .setNegativeButton("Annuleren", null)
+                        .show()
+                    true
+                }
+            }
+            content.addView(row(
+                jumpBtn("⏪  3 min terug", "DPAD_LEFT"),
+                jumpBtn("3 min vooruit  ⏩", "DPAD_RIGHT"),
             ))
             content.addView(row(
                 btn("▼ CH−", "CHANNEL_DOWN"),
