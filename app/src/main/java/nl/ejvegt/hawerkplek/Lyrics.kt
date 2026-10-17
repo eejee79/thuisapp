@@ -42,22 +42,31 @@ object LyricsApi {
 
     /** Zoekt de tekst; null = niets gevonden. Blokkeert (aanroepen in een achtergrondthread). */
     fun find(artist: String, title: String, album: String?, durationSec: Double?): Lyrics? {
-        val clean = title.replace(Regex("""\s*[(\[].*?(remaster|live|version|mix|edit).*?[)\]]""", RegexOption.IGNORE_CASE), "").trim()
-        val key = "${artist.lowercase()}|${clean.lowercase()}"
+        // Spotify-stijl opschonen: "Song - Remastered 2011", "Song (feat. X)", "A, B" of "A & B" als artiest
+        val clean = title
+            .replace(Regex("""\s+-\s+.*\b(remaster(ed)?|live|version|mix|edit|mono|stereo|radio|single|acoustic|demo|bonus)\b.*$""", RegexOption.IGNORE_CASE), "")
+            .replace(Regex("""\s*[(\[].*?(feat\.?|ft\.|with |remaster|live|version|mix|edit).*?[)\]]""", RegexOption.IGNORE_CASE), "")
+            .trim()
+        val mainArtist = artist.split(Regex(""",|&| feat\.? | ft\. | x | and """, RegexOption.IGNORE_CASE)).first().trim().ifEmpty { artist }
+        val key = "${mainArtist.lowercase()}|${clean.lowercase()}"
         cache[key]?.let { return if (it.isPresent) it.get() else null }
         fun enc(s: String) = URLEncoder.encode(s, "UTF-8")
+        fun search(url: String): Lyrics? = runCatching {
+            val arr = JSONArray(get(url))
+            val list = (0 until arr.length()).map { arr.getJSONObject(it) }
+            // Liefst een treffer met tijden per regel en ongeveer dezelfde duur
+            fun synced(o: JSONObject) = o.optString("syncedLyrics").let { it.isNotBlank() && it != "null" }
+            fun durOk(o: JSONObject) = durationSec == null || durationSec <= 0 || kotlin.math.abs(o.optDouble("duration", 0.0) - durationSec) < 4
+            (list.firstOrNull { synced(it) && durOk(it) } ?: list.firstOrNull { synced(it) } ?: list.firstOrNull())?.let { parse(it) }
+        }.getOrNull()
         val r = runCatching {
-            var url = "https://lrclib.net/api/get?artist_name=${enc(artist)}&track_name=${enc(clean)}"
+            var url = "https://lrclib.net/api/get?artist_name=${enc(mainArtist)}&track_name=${enc(clean)}"
             if (album != null) url += "&album_name=${enc(album)}"
             if (durationSec != null && durationSec > 0) url += "&duration=${durationSec.toInt()}"
             parse(JSONObject(get(url)))
-        }.getOrNull() ?: runCatching {
-            val arr = JSONArray(get("https://lrclib.net/api/search?artist_name=${enc(artist)}&track_name=${enc(clean)}"))
-            // Liefst een treffer met tijden per regel
-            val list = (0 until arr.length()).map { arr.getJSONObject(it) }
-            (list.firstOrNull { it.optString("syncedLyrics").isNotBlank() && it.optString("syncedLyrics") != "null" } ?: list.firstOrNull())
-                ?.let { parse(it) }
         }.getOrNull()
+            ?: search("https://lrclib.net/api/search?artist_name=${enc(mainArtist)}&track_name=${enc(clean)}")
+            ?: search("https://lrclib.net/api/search?q=${enc("$mainArtist $clean")}")
         cache[key] = java.util.Optional.ofNullable(r)
         return r
     }
