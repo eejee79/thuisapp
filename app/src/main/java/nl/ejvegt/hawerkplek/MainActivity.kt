@@ -4112,7 +4112,7 @@ class MainActivity : Activity() {
         nextBtn.setOnClickListener { svc("media_next_track") }
         box.setOnClickListener {
             val e = entity ?: return@setOnClickListener
-            if (e != "local") showMediaSheet(e, savedTarget(key)?.name ?: "Speler")
+            if (e == "local") showLocalSheet() else showMediaSheet(e, savedTarget(key)?.name ?: "Speler")
         }
         fun fetch() {
             val t = savedTarget(key)
@@ -4442,6 +4442,8 @@ class MainActivity : Activity() {
     }
 
     @Volatile private var musicPlayingPath: String? = null
+    /** Laatste map die naar een Music Assistant-speler ging: (speler, naam, nummers), voor de wachtrij. */
+    @Volatile private var maFolder: Triple<String, String, List<SmbMusic.Entry>>? = null
 
     /** Nummers uit de map afspelen op de vaste speler van Mijn muziek (eerst kiezen als die er nog niet is). */
     private fun playMusicFolder(tracks: List<SmbMusic.Entry>, startAt: Int, btn: TextView?) {
@@ -4474,7 +4476,8 @@ class MainActivity : Activity() {
     }
 
     private fun playFolderOnMa(tracks: List<SmbMusic.Entry>, entity: String, name: String) {
-        stopLocal()
+        silencePhone()
+        maFolder = Triple(entity, name, tracks)
         zoneUp = "picore" in name.lowercase(NL)
         musicRun++   // oude wachtrij via de telefoon stoppen
         mediaStatus.text = "${tracks.size} nummers op $name…"
@@ -4752,7 +4755,7 @@ class MainActivity : Activity() {
     }
 
     private fun playOnMa(item: SpotifyApi.Item, entity: String, name: String) {
-        stopLocal()
+        silencePhone()
         zoneUp = "picore" in name.lowercase(NL)
         prefs().edit().putString(KEY_MA_LAST_PLAYER, entity).apply()
         musicRun++   // eventuele oude wachtrij van de netwerkmap stoppen
@@ -5236,6 +5239,57 @@ class MainActivity : Activity() {
     @Volatile private var localQueue: List<SmbMusic.Entry> = emptyList()
     @Volatile private var localIndex = 0
 
+    // ---------- Geluid op deze telefoon: andere apps stil zetten ----------
+
+    private val audioManager by lazy { getSystemService(Context.AUDIO_SERVICE) as android.media.AudioManager }
+    private var focusReq: android.media.AudioFocusRequest? = null
+
+    private fun dropAudioFocus() {
+        focusReq?.let { runCatching { audioManager.abandonAudioFocusRequest(it) } }
+        focusReq = null
+    }
+
+    /**
+     * Audiofocus pakken: andere apps op deze telefoon (bijv. Spotify) stoppen dan met spelen.
+     * [keep] = we spelen zelf af en houden de focus; anders even pakken en weer loslaten.
+     */
+    private fun takeAudioFocus(keep: Boolean) {
+        dropAudioFocus()
+        val req = android.media.AudioFocusRequest.Builder(android.media.AudioManager.AUDIOFOCUS_GAIN)
+            .setAudioAttributes(
+                android.media.AudioAttributes.Builder()
+                    .setUsage(android.media.AudioAttributes.USAGE_MEDIA)
+                    .setContentType(android.media.AudioAttributes.CONTENT_TYPE_MUSIC).build()
+            )
+            .setOnAudioFocusChangeListener { change ->
+                // Een andere app gaat spelen: wij pauzeren (bij een korte melding hervatten we daarna)
+                runOnUiThread {
+                    val lp = localPlayer ?: return@runOnUiThread
+                    when (change) {
+                        android.media.AudioManager.AUDIOFOCUS_LOSS,
+                        android.media.AudioManager.AUDIOFOCUS_LOSS_TRANSIENT ->
+                            if (runCatching { lp.isPlaying }.getOrDefault(false)) {
+                                lp.pause(); pausedByFocus = change == android.media.AudioManager.AUDIOFOCUS_LOSS_TRANSIENT
+                            }
+                        android.media.AudioManager.AUDIOFOCUS_GAIN ->
+                            if (pausedByFocus) { pausedByFocus = false; lp.start() }
+                    }
+                }
+            }
+            .build()
+        runCatching { audioManager.requestAudioFocus(req) }
+        focusReq = req
+        if (!keep) handler.postDelayed({ if (focusReq === req && localPlayer == null) dropAudioFocus() }, 1_500)
+    }
+
+    @Volatile private var pausedByFocus = false
+
+    /** Iets elders laten spelen: geluid op deze telefoon (eigen speler én andere apps) stoppen. */
+    private fun silencePhone() {
+        stopLocal()
+        takeAudioFocus(keep = false)
+    }
+
     private fun playLocal(tracks: List<SmbMusic.Entry>, startAt: Int) {
         musicRun++   // eventuele cast-wachtrij stoppen
         localQueue = tracks
@@ -5260,6 +5314,7 @@ class MainActivity : Activity() {
                     )
                     setWakeMode(this@MainActivity, android.os.PowerManager.PARTIAL_WAKE_LOCK)
                     setOnPreparedListener {
+                        takeAudioFocus(keep = true)
                         it.start()
                         mediaStatus.text = "📱 ${e.name.substringBeforeLast('.')} (${i + 1}/${localQueue.size})"
                         refreshMedia()
@@ -5280,13 +5335,187 @@ class MainActivity : Activity() {
     }
 
     private fun stopLocal() {
+        val had = localPlayer != null
         localPlayer?.let { runCatching { it.release() } }
         localPlayer = null
         localQueue = emptyList()
+        if (had) dropAudioFocus()
+    }
+
+    /** Bediening voor muziek van de netwerkmap op deze telefoon: voortgang, spoelen, wachtrij (veegbaar). */
+    private fun showLocalSheet() {
+        val dialog = Dialog(this)
+        val content = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(20), dp(10), dp(20), dp(22))
+        }
+        content.addView(View(this).apply {
+            background = GradientDrawable().apply { setColor(0xFF555555.toInt()); cornerRadius = dp(2).toFloat() }
+            layoutParams = LinearLayout.LayoutParams(dp(40), dp(4)).apply { gravity = Gravity.CENTER_HORIZONTAL; bottomMargin = dp(12) }
+        })
+        content.addView(TextView(this).apply {
+            text = "Deze telefoon"
+            textSize = 19f
+            setTextColor(Color.WHITE)
+            setTypeface(typeface, Typeface.BOLD)
+        })
+        val cover = TextView(this).apply {
+            text = "♫"
+            textSize = 64f
+            setTextColor(0xFFFFB300.toInt())
+            gravity = Gravity.CENTER
+            background = GradientDrawable().apply { setColor(0xFF2E2610.toInt()); cornerRadius = dp(12).toFloat() }
+            layoutParams = LinearLayout.LayoutParams(dp(160), dp(160)).apply { gravity = Gravity.CENTER_HORIZONTAL; topMargin = dp(12) }
+        }
+        content.addView(cover)
+        val title = TextView(this).apply {
+            textSize = 17f; setTextColor(Color.WHITE); setTypeface(typeface, Typeface.BOLD)
+            gravity = Gravity.CENTER; maxLines = 2; ellipsize = android.text.TextUtils.TruncateAt.END
+            setPadding(0, dp(12), 0, 0)
+        }
+        val sub = TextView(this).apply {
+            textSize = 14f; setTextColor(0xFFB0B0B0.toInt()); gravity = Gravity.CENTER; maxLines = 1
+            ellipsize = android.text.TextUtils.TruncateAt.END; setPadding(0, 0, 0, dp(8))
+        }
+        content.addView(title)
+        content.addView(sub)
+        val bar = SeekBar(this).apply {
+            max = 1000
+            progressTintList = ColorStateList.valueOf(0xFFFFB300.toInt())
+            thumbTintList = ColorStateList.valueOf(0xFFFFB300.toInt())
+        }
+        val pos = TextView(this).apply { textSize = 12f; setTextColor(0xFF999999.toInt()) }
+        val dur = TextView(this).apply { textSize = 12f; setTextColor(0xFF999999.toInt()); gravity = Gravity.END }
+        content.addView(bar)
+        content.addView(LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            setPadding(dp(14), 0, dp(14), dp(8))
+            addView(pos, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+            addView(dur, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+        })
+        var dragging = false
+        bar.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
+            override fun onProgressChanged(sb: SeekBar, v: Int, fromUser: Boolean) {
+                val d = runCatching { localPlayer?.duration ?: 0 }.getOrDefault(0)
+                if (fromUser && d > 0) pos.text = fmtSec(d / 1000.0 * v / 1000)
+            }
+            override fun onStartTrackingTouch(sb: SeekBar) { dragging = true }
+            override fun onStopTrackingTouch(sb: SeekBar) {
+                dragging = false
+                localPlayer?.let { lp -> runCatching { lp.seekTo((lp.duration.toLong() * sb.progress / 1000).toInt()) } }
+            }
+        })
+        fun seekBy(sec: Int) {
+            localPlayer?.let { lp -> runCatching { lp.seekTo((lp.currentPosition + sec * 1000).coerceIn(0, lp.duration)) } }
+        }
+        fun ctl(label: String, size: Float = 24f, onTap: () -> Unit) = TextView(this).apply {
+            text = label; textSize = size; setTextColor(Color.WHITE); setTypeface(typeface, Typeface.BOLD)
+            gravity = Gravity.CENTER
+            background = GradientDrawable().apply { setColor(0xFF2A2A2A.toInt()); cornerRadius = dp(14).toFloat() }
+            isClickable = true
+            setOnClickListener { alpha = 0.5f; postDelayed({ alpha = 1f }, 150); onTap() }
+            layoutParams = LinearLayout.LayoutParams(0, dp(58), 1f).apply { marginStart = dp(6); marginEnd = dp(6) }
+        }
+        val playBtn = ctl("❚❚", 22f) { toggleLocal() }
+        content.addView(LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            setPadding(0, dp(6), 0, dp(6))
+            addView(ctl("⏮\uFE0E") {
+                // Na 3 s: terug naar het begin van dit nummer, anders het vorige
+                val lp = localPlayer
+                if (lp != null && runCatching { lp.currentPosition }.getOrDefault(0) > 3_000) runCatching { lp.seekTo(0) }
+                else if (localIndex > 0) playLocalAt(localIndex - 1)
+            })
+            addView(ctl("−15", 16f) { seekBy(-15) })
+            addView(playBtn)
+            addView(ctl("+30", 16f) { seekBy(30) })
+            addView(ctl("⏭\uFE0E") { if (localIndex + 1 < localQueue.size) playLocalAt(localIndex + 1) })
+        })
+        val queueHint = TextView(this).apply {
+            text = "▲  Wachtrij"; textSize = 13f; setTextColor(0xFF9A9A9A.toInt()); gravity = Gravity.CENTER
+            setPadding(0, dp(8), 0, dp(4)); isClickable = true
+        }
+        content.addView(queueHint)
+        val queueList = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        val queueScroll = ScrollView(this).apply {
+            addView(queueList)
+            visibility = View.GONE
+            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(320))
+        }
+        content.addView(queueScroll)
+        var shownIndex = -1
+        fun fillQueue() {
+            queueList.removeAllViews()
+            shownIndex = localIndex
+            localQueue.forEachIndexed { i, e ->
+                val now = i == localIndex
+                queueList.addView(TextView(this).apply {
+                    text = "${i + 1}.  ${e.name.substringBeforeLast('.')}"
+                    textSize = 14f
+                    setTextColor(if (now) 0xFFFFB300.toInt() else if (i < localIndex) 0xFF8A8A8A.toInt() else Color.WHITE)
+                    if (now) setTypeface(typeface, Typeface.BOLD)
+                    maxLines = 1
+                    ellipsize = android.text.TextUtils.TruncateAt.END
+                    setPadding(dp(12), dp(12), dp(12), dp(12))
+                    background = GradientDrawable().apply {
+                        setColor(if (now) 0xFF2E2610.toInt() else 0xFF262626.toInt()); cornerRadius = dp(10).toFloat()
+                    }
+                    layoutParams = LinearLayout.LayoutParams(
+                        ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT
+                    ).apply { bottomMargin = dp(5) }
+                    isClickable = true
+                    setOnClickListener { playLocalAt(i) }
+                })
+            }
+        }
+        var queueOpen = false
+        fun setQueue(open: Boolean) {
+            queueOpen = open
+            queueScroll.visibility = if (open) View.VISIBLE else View.GONE
+            cover.visibility = if (open) View.GONE else View.VISIBLE
+            queueHint.text = if (open) "▼  Wachtrij inklappen" else "▲  Wachtrij"
+            if (open) fillQueue()
+        }
+        queueHint.setOnClickListener { setQueue(!queueOpen) }
+        val ticker = object : Runnable {
+            override fun run() {
+                val lp = localPlayer
+                val e = localQueue.getOrNull(localIndex)
+                if (e == null) { title.text = "Niets aan het spelen"; sub.text = "" }
+                else {
+                    title.text = e.name.substringBeforeLast('.')
+                    sub.text = e.path.substringBeforeLast('\\').substringAfterLast('\\') + "  ·  ${localIndex + 1}/${localQueue.size}"
+                }
+                val p = runCatching { lp?.currentPosition ?: 0 }.getOrDefault(0)
+                val d = runCatching { lp?.duration ?: 0 }.getOrDefault(0)
+                if (!dragging && d > 0) { bar.progress = (p.toLong() * 1000 / d).toInt(); pos.text = fmtSec(p / 1000.0) }
+                dur.text = if (d > 0) fmtSec(d / 1000.0) else ""
+                playBtn.text = if (runCatching { lp?.isPlaying == true }.getOrDefault(false)) "❚❚" else "▶\uFE0E"
+                if (queueOpen && shownIndex != localIndex) fillQueue()
+                handler.postDelayed(this, 500)
+            }
+        }
+        dialog.setContentView(SwipeSheet(this, content, noIntercept = queueScroll,
+            onUp = { if (!queueOpen) setQueue(true) },
+            onDown = { if (queueOpen) setQueue(false) else dialog.dismiss() }))
+        dialog.setOnKeyListener { _, _, event ->
+            if (event.keyCode == KeyEvent.KEYCODE_VOLUME_UP || event.keyCode == KeyEvent.KEYCODE_VOLUME_DOWN) dispatchKeyEvent(event) else false
+        }
+        dialog.window?.apply {
+            setBackgroundDrawable(GradientDrawable().apply {
+                setColor(0xFF1E1E1E.toInt())
+                cornerRadii = floatArrayOf(dp(22).toFloat(), dp(22).toFloat(), dp(22).toFloat(), dp(22).toFloat(), 0f, 0f, 0f, 0f)
+            })
+            setGravity(Gravity.BOTTOM)
+            setLayout(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
+        }
+        dialog.setOnDismissListener { handler.removeCallbacks(ticker) }
+        dialog.show()
+        handler.post(ticker)
     }
 
     private fun playSpotify(item: SpotifyApi.Item, device: SpotifyApi.Device) {
-        stopLocal()
+        silencePhone()
         if ("picore" in device.name.lowercase(NL)) zoneUp = true
         mediaStatus.text = "${item.name} op ${device.name}…"
         thread {
@@ -5720,6 +5949,21 @@ class MainActivity : Activity() {
             })
         }
         fun loadQueue() {
+            // Map van Mijn muziek op deze speler: de hele map als wachtrij, tik = vanaf daar spelen
+            val folder = maFolder
+            if (folder != null && folder.first == entity) {
+                queueList.removeAllViews()
+                val cur = title.text.toString().lowercase(NL)
+                folder.third.forEachIndexed { i, e ->
+                    val stem = e.name.substringBeforeLast('.')
+                    val now = cur.isNotEmpty() && (stem.lowercase(NL).contains(cur) || cur.contains(stem.lowercase(NL)))
+                    val v = queueRow(stem, "", null, now)
+                    v.isClickable = true
+                    v.setOnClickListener { playFolderOnMa(folder.third.drop(i), folder.first, folder.second) }
+                    queueList.addView(v)
+                }
+                return
+            }
             queueList.removeAllViews()
             queueList.addView(TextView(this).apply { text = "Laden…"; setTextColor(0xFF9A9A9A.toInt()); setPadding(dp(4), dp(8), 0, dp(8)) })
             thread {
