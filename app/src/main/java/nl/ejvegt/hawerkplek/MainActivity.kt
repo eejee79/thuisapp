@@ -1856,6 +1856,8 @@ class MainActivity : Activity() {
     private var carArmed = false
     private lateinit var carInfo: TextView
     private var carFromMin = 23 * 60
+    private lateinit var carPrices: LinearLayout
+    private var carPricesKey = ""
     private var carToMin = 7 * 60
     private var carDirty = false      // tijden gewijzigd maar nog niet opgeslagen
     @Volatile private var carNeedsRewrite = false   // automatisering gebruikte de verkeerde schakelaar
@@ -2009,8 +2011,108 @@ class MainActivity : Activity() {
         win.addView(carSwitchLabel)
         fritzList.addView(win)
 
+        // Stroomprijs per uur (alles wat Zonneplan al weet), goedkoopste uren groen
+        val prices = card()
+        prices.addView(label("⚡  Stroomprijs per uur (Zonneplan) · tik op een uur om de begintijd te zetten"))
+        carPrices = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(0, dp(8), 0, 0) }
+        prices.addView(carPrices)
+        fritzList.addView(prices)
+
         carFrom.text = hhmm(carFromMin)
         carTo.text = hhmm(carToMin)
+    }
+
+    /** Alle bekende uurprijzen van Zonneplan vanaf dit uur, per dag, met balkjes. */
+    private fun showCarPrices(o: JSONObject?) {
+        val fc = o?.optJSONObject("attributes")?.optJSONArray("forecast")
+        val hourStart = System.currentTimeMillis() / 3_600_000 * 3_600_000
+        val list = mutableListOf<Pair<Long, Double>>()
+        if (fc != null) for (i in 0 until fc.length()) {
+            val p = fc.optJSONObject(i) ?: continue
+            val ts = parseIsoMillis(p.optString("datetime")) ?: continue
+            if (ts < hourStart) continue
+            var v = p.optDouble("electricity_price", Double.NaN)
+            if (v.isNaN()) continue
+            if (v > 10) v /= 10_000_000.0
+            list.add(ts to v)
+        }
+        val pts = list.distinctBy { it.first }.sortedBy { it.first }
+        val key = pts.joinToString { "${it.first}:${it.second}" }
+        if (key == carPricesKey) return
+        carPricesKey = key
+        carPrices.removeAllViews()
+        if (pts.isEmpty()) {
+            carPrices.addView(TextView(this).apply {
+                text = if (o == null) "Zonneplan niet bereikbaar" else "Geen prijzen bekend"
+                setTextColor(0xFF9A9A9A.toInt())
+            })
+            return
+        }
+        val maxP = pts.maxOf { it.second }.coerceAtLeast(0.01)
+        // Goedkoopste kwart groen, duurste kwart oranje
+        val sorted = pts.map { it.second }.sorted()
+        val cheap = sorted[(sorted.size - 1) / 4]
+        val dear = sorted[sorted.size - 1 - (sorted.size - 1) / 4]
+        val zone = java.time.ZoneId.systemDefault()
+        val dayFmt = java.time.format.DateTimeFormatter.ofPattern("EEEE d MMMM", NL)
+        var lastDay = ""
+        for ((ts, v) in pts) {
+            val t = java.time.Instant.ofEpochMilli(ts).atZone(zone)
+            val day = t.format(dayFmt).replaceFirstChar { it.uppercase() }
+            if (day != lastDay) {
+                lastDay = day
+                carPrices.addView(TextView(this).apply {
+                    text = day
+                    textSize = 13f
+                    setTextColor(0xFF4FC3F7.toInt())
+                    setTypeface(typeface, Typeface.BOLD)
+                    setPadding(0, dp(10), 0, dp(4))
+                })
+            }
+            val color = when {
+                v <= cheap -> 0xFF43A047.toInt()
+                v >= dear -> 0xFFE57000.toInt()
+                else -> 0xFF6B6B6B.toInt()
+            }
+            val now = ts == hourStart
+            val frac = (v.coerceAtLeast(0.0) / maxP).toFloat().coerceIn(0.02f, 1f)
+            carPrices.addView(LinearLayout(this).apply {
+                orientation = LinearLayout.HORIZONTAL
+                gravity = Gravity.CENTER_VERTICAL
+                minimumHeight = dp(30)
+                setPadding(dp(4), dp(2), dp(4), dp(2))
+                if (now) background = GradientDrawable().apply { setColor(0xFF2A2A2A.toInt()); cornerRadius = dp(6).toFloat() }
+                addView(TextView(this@MainActivity).apply {
+                    text = if (now) "nu" else "%02d:00".format(t.hour)
+                    textSize = 13f
+                    setTextColor(Color.WHITE)
+                    if (now) setTypeface(typeface, Typeface.BOLD)
+                    layoutParams = LinearLayout.LayoutParams(dp(52), ViewGroup.LayoutParams.WRAP_CONTENT)
+                })
+                addView(LinearLayout(this@MainActivity).apply {
+                    orientation = LinearLayout.HORIZONTAL
+                    layoutParams = LinearLayout.LayoutParams(0, dp(12), 1f)
+                    addView(View(this@MainActivity).apply {
+                        background = GradientDrawable().apply { setColor(color); cornerRadius = dp(3).toFloat() }
+                    }, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.MATCH_PARENT, frac))
+                    addView(View(this@MainActivity), LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.MATCH_PARENT, 1f - frac + 0.0001f))
+                })
+                addView(TextView(this@MainActivity).apply {
+                    text = String.format(NL, "€ %.3f", v)
+                    textSize = 13f
+                    setTextColor(if (v <= cheap) 0xFF7CE38A.toInt() else 0xFFCFCFCF.toInt())
+                    gravity = Gravity.END
+                    layoutParams = LinearLayout.LayoutParams(dp(72), ViewGroup.LayoutParams.WRAP_CONTENT)
+                })
+                isClickable = true
+                setOnClickListener {
+                    carFromMin = t.hour * 60
+                    carFrom.text = hhmm(carFromMin)
+                    carDirty = true
+                    carInfo.text = "Begintijd ${hhmm(carFromMin)} gekozen – tik op Laden of Alleen tijden opslaan"
+                }
+            })
+        }
     }
 
     /** Laad-schakelaars in HA zoeken; bij precies één (van de Škoda) die nemen, anders laten kiezen. */
@@ -2070,7 +2172,8 @@ class MainActivity : Activity() {
             val bat = stateOf(DASH_CAR_BATTERY)
             val swState = sw?.let { stateOf(it) }
             val limit = stateOf(DASH_CHARGE_LIMIT)
-            runOnUiThread { showCharge(limit, bat) }
+            val price = stateOf(DASH_PRICE)
+            runOnUiThread { showCharge(limit, bat); showCarPrices(price) }
             val auto = stateOf(CAR_AUTOMATION_ENTITY)
             val cfg = runCatching {
                 JSONObject(haRequest("GET", "/api/config/automation/config/$CAR_AUTOMATION_ID", null))
