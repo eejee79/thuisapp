@@ -8017,6 +8017,7 @@ class MainActivity : Activity() {
     private fun tuneChannel(num: Int, name: String) {
         prefs().edit().putInt(KEY_LAST_CHANNEL, num).apply()
         mediaStatus.text = "$name kiezen…"
+        showRemoteSheet(TVPLUS_REMOTE, true)  // na zappen direct de afstandsbediening
         thread {
             val boxWasOff = stateOf(TVPLUS_REMOTE)?.optString("state") != "on"
             if (boxWasOff) quietService("remote/turn_on", JSONObject().put("entity_id", TVPLUS_REMOTE))
