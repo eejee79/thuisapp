@@ -78,6 +78,7 @@ class MainActivity : Activity() {
 
     /** Een zender op KPN TV+: kanaalnummer, naam, kleur van het nummerblokje. */
     class TvChannel(val num: Int, val name: String, val color: Int)
+    class TvGroup(val title: String, val open: Boolean, val channels: List<TvChannel>)
 
     companion object {
         /** De schakelaars op het Home Assistant-tabblad, met de exacte lampen (entity-ID's) per groep. */
@@ -203,6 +204,12 @@ class MainActivity : Activity() {
         private val C_TALPA = 0xFF283593.toInt()
         private val C_SPORT = 0xFF2E7D32.toInt()
         private val C_ETC = 0xFF455A64.toInt()
+        private val C_FILM = 0xFF6D4C41.toInt()
+        private val C_DOC = 0xFF558B2F.toInt()
+        private val C_MUSIC = 0xFFAD1457.toInt()
+        private val C_KIDS = 0xFF6A1B9A.toInt()
+        private val C_NEWS = 0xFF00838F.toInt()
+        private val C_INTL = 0xFF37474F.toInt()
 
         /** Favorieten bovenaan (sport). Kanaalnummers volgens de KPN-zenderindeling (sep 2026). */
         val TV_FAVORITES = listOf(
@@ -218,35 +225,189 @@ class MainActivity : Activity() {
             TvChannel(238, "Ziggo Sport 6", C_SPORT),
         )
 
-        /** Gangbare Nederlandse zenders. */
-        val TV_CHANNELS = listOf(
-            TvChannel(1, "NPO 1", C_NPO),
-            TvChannel(2, "NPO 2", C_NPO),
-            TvChannel(3, "NPO 3", C_NPO),
-            TvChannel(4, "RTL 4", C_RTL),
-            TvChannel(5, "RTL 5", C_RTL),
-            TvChannel(6, "SBS6", C_TALPA),
-            TvChannel(7, "RTL 7", C_RTL),
-            TvChannel(8, "NET5", C_TALPA),
-            TvChannel(9, "Veronica", C_TALPA),
-            TvChannel(10, "RTL 8", C_RTL),
-            TvChannel(11, "RTL Z", C_RTL),
-            TvChannel(12, "Comedy Central", C_ETC),
-            TvChannel(13, "Paramount", C_ETC),
-            TvChannel(15, "Discovery", C_ETC),
-            TvChannel(16, "STAR Channel", C_ETC),
-            TvChannel(17, "TLC", C_ETC),
-            TvChannel(18, "National Geographic", C_ETC),
-            TvChannel(20, "MTV", C_ETC),
-            TvChannel(21, "ID", C_ETC),
-            TvChannel(24, "24Kitchen", C_ETC),
-            TvChannel(28, "Disney Channel", C_ETC),
-            TvChannel(33, "Nickelodeon", C_ETC),
-            TvChannel(35, "Eurosport 1", C_SPORT),
-            TvChannel(36, "Eurosport 2", C_SPORT),
-            TvChannel(43, "HGTV", C_ETC),
-            TvChannel(51, "Viaplay TV", C_ETC),
+        /** Alle zenders per soort (KPN-zenderoverzicht 1 april 2026). Open = standaard uitgeklapt. */
+        val TV_GROUPS = listOf(
+            TvGroup("Nederlands", true, listOf(
+                TvChannel(1, "NPO 1", C_NPO),
+                TvChannel(2, "NPO 2", C_NPO),
+                TvChannel(3, "NPO 3", C_NPO),
+                TvChannel(4, "RTL 4", C_NPO),
+                TvChannel(5, "RTL 5", C_NPO),
+                TvChannel(6, "SBS6", C_NPO),
+                TvChannel(7, "RTL 7", C_NPO),
+                TvChannel(8, "NET5", C_NPO),
+                TvChannel(9, "Veronica", C_NPO),
+                TvChannel(10, "RTL 8", C_NPO),
+                TvChannel(11, "RTL Z", C_NPO),
+                TvChannel(19, "SBS9", C_NPO),
+                TvChannel(81, "NPO 1 Extra", C_NPO),
+                TvChannel(82, "NPO 2 Extra", C_NPO),
+                TvChannel(83, "NPO Nieuws & Politiek", C_NPO),
+                TvChannel(538, "TV 538", C_NPO),
+                TvChannel(73, "RTL Lounge", C_NPO),
+                TvChannel(74, "RTL Crime", C_NPO),
+                TvChannel(89, "ONS", C_NPO),
+                TvChannel(78, "Family7", C_NPO),
+                TvChannel(38, "InPlus", C_NPO),
+                TvChannel(41, "Beleef KPN", C_NPO),
+                TvChannel(42, "Zender van de maand", C_NPO),
+            )),
+            TvGroup("Sport", true, listOf(
+                TvChannel(35, "Eurosport 1", C_SPORT),
+                TvChannel(36, "Eurosport 2", C_SPORT),
+                TvChannel(37, "W-Sport", C_SPORT),
+                TvChannel(230, "Viaplay TV+", C_SPORT),
+            )),
+            TvGroup("Film & series", false, listOf(
+                TvChannel(12, "Comedy Central", C_FILM),
+                TvChannel(13, "Paramount Network", C_FILM),
+                TvChannel(16, "STAR Channel", C_FILM),
+                TvChannel(51, "Viaplay TV", C_FILM),
+                TvChannel(50, "FilmBox", C_FILM),
+                TvChannel(245, "Film1 Premiere", C_FILM),
+                TvChannel(246, "Film1 Action", C_FILM),
+                TvChannel(247, "Film1 Family", C_FILM),
+                TvChannel(248, "Film1 Drama", C_FILM),
+                TvChannel(71, "E! Entertainment", C_FILM),
+            )),
+            TvGroup("Documentaire & lifestyle", false, listOf(
+                TvChannel(15, "Discovery", C_DOC),
+                TvChannel(84, "Discovery Science", C_DOC),
+                TvChannel(17, "TLC", C_DOC),
+                TvChannel(18, "National Geographic", C_DOC),
+                TvChannel(87, "Nat Geo Wild", C_DOC),
+                TvChannel(85, "Animal Planet", C_DOC),
+                TvChannel(21, "ID", C_DOC),
+                TvChannel(32, "History", C_DOC),
+                TvChannel(44, "Crime & Investigation", C_DOC),
+                TvChannel(34, "Love Nature", C_DOC),
+                TvChannel(24, "24Kitchen", C_DOC),
+                TvChannel(39, "Njam!", C_DOC),
+                TvChannel(43, "HGTV", C_DOC),
+                TvChannel(77, "OUTtv", C_DOC),
+            )),
+            TvGroup("Muziek", false, listOf(
+                TvChannel(20, "MTV", C_MUSIC),
+                TvChannel(22, "XITE", C_MUSIC),
+                TvChannel(115, "XITE Klassiek", C_MUSIC),
+                TvChannel(111, "SLAM! TV", C_MUSIC),
+                TvChannel(112, "TV Oranje", C_MUSIC),
+                TvChannel(113, "192TV", C_MUSIC),
+                TvChannel(114, "Top40 TV", C_MUSIC),
+            )),
+            TvGroup("Kinderen", false, listOf(
+                TvChannel(28, "Disney Channel", C_KIDS),
+                TvChannel(33, "Nickelodeon", C_KIDS),
+                TvChannel(52, "Nicktoons", C_KIDS),
+                TvChannel(53, "Nick Jr.", C_KIDS),
+                TvChannel(60, "Cartoon Network", C_KIDS),
+                TvChannel(55, "Cartoonito", C_KIDS),
+                TvChannel(23, "DreamWorks", C_KIDS),
+                TvChannel(59, "RTL Telekids", C_KIDS),
+                TvChannel(57, "BabyTV", C_KIDS),
+                TvChannel(31, "Ketnet", C_KIDS),
+            )),
+            TvGroup("Nieuws & Engelstalig", false, listOf(
+                TvChannel(25, "BBC NL", C_NEWS),
+                TvChannel(26, "BBC One", C_NEWS),
+                TvChannel(27, "BBC Two", C_NEWS),
+                TvChannel(40, "BBC News", C_NEWS),
+                TvChannel(61, "CNN", C_NEWS),
+                TvChannel(62, "Euronews", C_NEWS),
+                TvChannel(63, "Al Jazeera", C_NEWS),
+            )),
+            TvGroup("Vlaams", false, listOf(
+                TvChannel(29, "VRT 1", C_ETC),
+                TvChannel(30, "VRT Canvas", C_ETC),
+            )),
+            TvGroup("Duits", false, listOf(
+                TvChannel(45, "Das Erste", C_INTL),
+                TvChannel(46, "ZDF", C_INTL),
+                TvChannel(47, "RTL Television", C_INTL),
+                TvChannel(48, "WDR", C_INTL),
+                TvChannel(120, "NDR", C_INTL),
+                TvChannel(49, "ARTE", C_INTL),
+                TvChannel(119, "VOX", C_INTL),
+                TvChannel(121, "Sat.1", C_INTL),
+                TvChannel(124, "ProSieben", C_INTL),
+                TvChannel(127, "RTL II", C_INTL),
+                TvChannel(128, "Super RTL", C_INTL),
+                TvChannel(122, "tagesschau24", C_INTL),
+                TvChannel(123, "3sat", C_INTL),
+                TvChannel(125, "KiKA", C_INTL),
+                TvChannel(126, "ONE", C_INTL),
+            )),
+            TvGroup("Regionaal", false, listOf(
+                TvChannel(501, "TV Noord", C_ETC),
+                TvChannel(502, "Omrop Fryslân", C_ETC),
+                TvChannel(503, "RTV Drenthe", C_ETC),
+                TvChannel(504, "Oost", C_ETC),
+                TvChannel(505, "Omroep Flevoland", C_ETC),
+                TvChannel(506, "Omroep Gelderland", C_ETC),
+                TvChannel(507, "Omroep Brabant", C_ETC),
+                TvChannel(508, "L1", C_ETC),
+                TvChannel(509, "NH", C_ETC),
+                TvChannel(510, "AT5", C_ETC),
+                TvChannel(511, "RTV Utrecht", C_ETC),
+                TvChannel(512, "Omroep West", C_ETC),
+                TvChannel(513, "Rijnmond", C_ETC),
+                TvChannel(514, "Omroep Zeeland", C_ETC),
+            )),
+            TvGroup("4K", false, listOf(
+                TvChannel(692, "InUltra 4K", C_ETC),
+                TvChannel(693, "Love Nature 4K", C_ETC),
+                TvChannel(694, "ESPN 4K", C_ETC),
+            )),
+            TvGroup("Anderstalig", false, listOf(
+                TvChannel(92, "France 2", C_INTL),
+                TvChannel(96, "Mediaset Italia", C_INTL),
+                TvChannel(93, "RTV-7", C_INTL),
+                TvChannel(140, "TRT Türk", C_INTL),
+                TvChannel(141, "TRT Haber", C_INTL),
+                TvChannel(142, "ATV Avrupa", C_INTL),
+                TvChannel(143, "Euro D", C_INTL),
+                TvChannel(144, "Euro Star", C_INTL),
+                TvChannel(145, "Show Türk", C_INTL),
+                TvChannel(146, "TV8", C_INTL),
+                TvChannel(147, "TRT Çocuk", C_INTL),
+                TvChannel(148, "TRT Spor", C_INTL),
+                TvChannel(129, "Utsav Bharat", C_INTL),
+                TvChannel(130, "Zee Cinema", C_INTL),
+                TvChannel(131, "Zee TV", C_INTL),
+                TvChannel(132, "Sony TV Asia", C_INTL),
+                TvChannel(133, "Sony MAX", C_INTL),
+                TvChannel(134, "Utsav Plus", C_INTL),
+                TvChannel(135, "Colors", C_INTL),
+                TvChannel(136, "Utsav Gold", C_INTL),
+            )),
+            TvGroup("Live sport (260–283)", false, listOf(
+                TvChannel(260, "Live sport", C_SPORT),
+                TvChannel(261, "Live sport", C_SPORT),
+                TvChannel(262, "Live sport", C_SPORT),
+                TvChannel(263, "Live sport", C_SPORT),
+                TvChannel(264, "Live sport", C_SPORT),
+                TvChannel(265, "Live sport", C_SPORT),
+                TvChannel(266, "Live sport", C_SPORT),
+                TvChannel(267, "Live sport", C_SPORT),
+                TvChannel(268, "Live sport", C_SPORT),
+                TvChannel(269, "Live sport", C_SPORT),
+                TvChannel(270, "Live sport", C_SPORT),
+                TvChannel(271, "Live sport", C_SPORT),
+                TvChannel(272, "Live sport", C_SPORT),
+                TvChannel(273, "Live sport", C_SPORT),
+                TvChannel(274, "Live sport", C_SPORT),
+                TvChannel(275, "Live sport", C_SPORT),
+                TvChannel(276, "Live sport", C_SPORT),
+                TvChannel(277, "Live sport", C_SPORT),
+                TvChannel(278, "Live sport", C_SPORT),
+                TvChannel(279, "Live sport", C_SPORT),
+                TvChannel(280, "Live sport", C_SPORT),
+                TvChannel(281, "Live sport", C_SPORT),
+                TvChannel(282, "Live sport", C_SPORT),
+                TvChannel(283, "Live sport", C_SPORT),
+            )),
         )
+        val TV_CHANNELS = TV_GROUPS.flatMap { it.channels }
         private const val KEY_LAST_CHANNEL = "last_tv_channel"
 
         /** App-tegels: naam, pakketnaam op de Google TV, kleur van de tegel. */
@@ -6537,6 +6698,32 @@ class MainActivity : Activity() {
         return (TV_FAVORITES + TV_CHANNELS).firstOrNull { it.num == n }
     }
 
+    /** Inklapbare groepskop; stand wordt onthouden. Geeft de container voor de inhoud terug. */
+    private fun tvGroup(parent: LinearLayout, title: String, count: Int, defaultOpen: Boolean): LinearLayout {
+        val key = "tvgrp_" + title
+        var open = prefs().getBoolean(key, defaultOpen)
+        val body = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; visibility = if (open) View.VISIBLE else View.GONE }
+        val head = TextView(this).apply {
+            textSize = 12f
+            letterSpacing = 0.05f
+            setTextColor(0xFFCCCCCC.toInt())
+            setTypeface(typeface, Typeface.BOLD)
+            setPadding(dp(4), dp(12), dp(4), dp(10))
+            fun label() { text = (if (open) "▾  " else "▸  ") + title.uppercase(NL) + "  ·  " + count }
+            label()
+            isClickable = true
+            setOnClickListener {
+                open = !open
+                prefs().edit().putBoolean(key, open).apply()
+                body.visibility = if (open) View.VISIBLE else View.GONE
+                label()
+            }
+        }
+        parent.addView(head)
+        parent.addView(body)
+        return body
+    }
+
     /** Keuzescherm dat van onderen omhoog komt: favorieten, alle zenders, zappen en nummer. */
     /** Tv-gids in de app: per zender wat er nu loopt (met voortgang) en wat er straks komt. Tik = overschakelen. */
     private fun showGuideSheet() {
@@ -6596,7 +6783,7 @@ class MainActivity : Activity() {
                 setTextColor(0xFFAAAAAA.toInt())
                 setPadding(0, dp(12), 0, dp(6))
             })
-            fun rows(chs: List<TvChannel>) = chs.forEach { ch ->
+            fun rows(chs: List<TvChannel>, into: LinearLayout) = chs.forEach { ch ->
                 val (now, next) = TvGuide.nowNext(ch.name)
                 if (now == null && next == null) missing++
                 val row = LinearLayout(this).apply {
@@ -6677,16 +6864,13 @@ class MainActivity : Activity() {
                         ellipsize = android.text.TextUtils.TruncateAt.END
                     })
                 })
-                list.addView(row)
+                into.addView(row)
             }
             header("Favorieten")
-            rows(TV_FAVORITES)
-            header("Alle zenders")
-            rows(TV_CHANNELS)
-            val total = TV_FAVORITES.size + TV_CHANNELS.size
+            rows(TV_FAVORITES, list)
+            for (grp in TV_GROUPS) rows(grp.channels, tvGroup(list, grp.title, grp.channels.size, grp.open))
             status.text = if (TvGuide.data.isEmpty()) status.text
-                else "Tik op een zender om over te schakelen" + (if (missing > 0) " · $missing zenders zonder gids" else "")
-            if (TvGuide.data.isEmpty() && missing == total) status.text = status.text
+                else "Tik op een zender om over te schakelen · tik op een groep om open/dicht te klappen"
         }
         render()
         thread {
@@ -6738,7 +6922,7 @@ class MainActivity : Activity() {
             setPadding(0, dp(14), 0, dp(8))
         }
 
-        fun grid(list: List<TvChannel>) {
+        fun grid(list: List<TvChannel>, into: LinearLayout) {
             list.chunked(3).forEach { rowList ->
                 val row = LinearLayout(this).apply {
                     orientation = LinearLayout.HORIZONTAL
@@ -6784,14 +6968,13 @@ class MainActivity : Activity() {
                     }
                     row.addView(cell)
                 }
-                content.addView(row)
+                into.addView(row)
             }
         }
 
         content.addView(section("Favorieten"))
-        grid(TV_FAVORITES)
-        content.addView(section("Alle zenders"))
-        grid(TV_CHANNELS)
+        grid(TV_FAVORITES, content)
+        for (grp in TV_GROUPS) grid(grp.channels, tvGroup(content, grp.title, grp.channels.size, grp.open))
 
         // Onderaan: aanzetten, zappen, nummer intikken
         val keys = LinearLayout(this).apply {
