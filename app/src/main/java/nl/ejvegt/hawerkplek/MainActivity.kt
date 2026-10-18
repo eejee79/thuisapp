@@ -2649,6 +2649,9 @@ class MainActivity : Activity() {
 
         private fun busy() = dragging || System.currentTimeMillis() - lastCommit < 5_000
 
+        /** Wijziging geannuleerd: meteen weer de echte waarde laten zien. */
+        fun release() { lastCommit = 0L }
+
         fun value(p: Int) = min + p * step
 
         fun setRange(mn: Double, mx: Double, st: Double) {
@@ -2828,7 +2831,15 @@ class MainActivity : Activity() {
         // Laadlimiet auto
         chargeCard = DashCard("🚗  Škoda Elroq · laadlimiet")
         chargeSlider = DashSlider(chargeCard.addSeek(), chargeCard.big, { "${it.toInt()}%" }) { v ->
-            haService("number", "set_value", JSONObject().put("entity_id", DASH_CHARGE_LIMIT).put("value", v))
+            // Eerst bevestigen: een per ongeluk aangeraakte schuif (bijv. tijdens scrollen) verandert zo niets
+            AlertDialog.Builder(this)
+                .setTitle("Laadlimiet naar ${v.toInt()}%?")
+                .setPositiveButton("Ja, wijzigen") { _, _ ->
+                    haService("number", "set_value", JSONObject().put("entity_id", DASH_CHARGE_LIMIT).put("value", v))
+                }
+                .setNegativeButton("Annuleren") { _, _ -> chargeSlider.release(); refreshCar() }
+                .setOnCancelListener { chargeSlider.release(); refreshCar() }
+                .show()
         }
         chargeSlider.setRange(50.0, 100.0, 10.0)
         // De laadlimiet staat op het tabblad Auto (zie buildCar)
