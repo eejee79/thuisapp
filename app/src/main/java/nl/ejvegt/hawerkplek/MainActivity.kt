@@ -3345,10 +3345,7 @@ class MainActivity : Activity() {
             ).apply { marginStart = dp(6) }
             visibility = View.GONE
             // Gids openen op TV+ en meteen de afstandsbediening erbij
-            setOnClickListener {
-                sendRemoteKey(TVPLUS_REMOTE, "GUIDE")
-                showRemoteSheet(TVPLUS_REMOTE, true)
-            }
+            setOnClickListener { showGuideSheet() }
         }
         nowBar.addView(nowChannelBtn)
         nowBar.addView(nowGuideBtn)
@@ -6541,6 +6538,179 @@ class MainActivity : Activity() {
     }
 
     /** Keuzescherm dat van onderen omhoog komt: favorieten, alle zenders, zappen en nummer. */
+    /** Tv-gids in de app: per zender wat er nu loopt (met voortgang) en wat er straks komt. Tik = overschakelen. */
+    private fun showGuideSheet() {
+        val dialog = sheet()
+        val content = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(16), dp(10), dp(16), dp(18))
+        }
+        content.addView(View(this).apply {
+            background = GradientDrawable().apply { setColor(0xFF555555.toInt()); cornerRadius = dp(2).toFloat() }
+            layoutParams = LinearLayout.LayoutParams(dp(40), dp(4)).apply { gravity = Gravity.CENTER_HORIZONTAL; bottomMargin = dp(12) }
+        })
+        content.addView(LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            addView(TextView(this@MainActivity).apply {
+                text = "Tv-gids"
+                textSize = 19f
+                setTextColor(Color.WHITE)
+                setTypeface(typeface, Typeface.BOLD)
+                layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
+            })
+            addView(TextView(this@MainActivity).apply {
+                text = "Gids op tv"
+                textSize = 13f
+                setTextColor(Color.WHITE)
+                setTypeface(typeface, Typeface.BOLD)
+                setPadding(dp(12), dp(8), dp(12), dp(8))
+                background = GradientDrawable().apply { setColor(0xFF1565C0.toInt()); cornerRadius = dp(16).toFloat() }
+                isClickable = true
+                setOnClickListener {
+                    dialog.dismiss()
+                    sendRemoteKey(TVPLUS_REMOTE, "GUIDE")
+                    showRemoteSheet(TVPLUS_REMOTE, true)
+                }
+            })
+        })
+        val status = TextView(this).apply {
+            textSize = 13f
+            setTextColor(0xFFAAAAAA.toInt())
+            setPadding(0, dp(6), 0, dp(6))
+            text = "Gids laden…"
+        }
+        content.addView(status)
+        val list = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        content.addView(list)
+        val timeFmt = java.text.SimpleDateFormat("HH:mm", NL)
+        fun hm(t: Long) = timeFmt.format(java.util.Date(t))
+        val current = prefs().getInt(KEY_LAST_CHANNEL, -1)
+        fun render() {
+            list.removeAllViews()
+            var missing = 0
+            fun header(t: String) = list.addView(TextView(this).apply {
+                text = t.uppercase(NL)
+                textSize = 12f
+                letterSpacing = 0.05f
+                setTextColor(0xFFAAAAAA.toInt())
+                setPadding(0, dp(12), 0, dp(6))
+            })
+            fun rows(chs: List<TvChannel>) = chs.forEach { ch ->
+                val (now, next) = TvGuide.nowNext(ch.name)
+                if (now == null && next == null) missing++
+                val row = LinearLayout(this).apply {
+                    orientation = LinearLayout.HORIZONTAL
+                    gravity = Gravity.CENTER_VERTICAL
+                    setPadding(dp(10), dp(10), dp(10), dp(10))
+                    background = GradientDrawable().apply {
+                        setColor(0xFF262626.toInt()); cornerRadius = dp(12).toFloat()
+                        if (ch.num == current) setStroke(dp(2), 0xFF18BCF2.toInt())
+                    }
+                    layoutParams = LinearLayout.LayoutParams(
+                        ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT
+                    ).apply { bottomMargin = dp(6) }
+                    isClickable = true
+                    setOnClickListener { dialog.dismiss(); tuneChannel(ch.num, ch.name) }
+                }
+                row.addView(LinearLayout(this).apply {
+                    orientation = LinearLayout.VERTICAL
+                    gravity = Gravity.CENTER_HORIZONTAL
+                    layoutParams = LinearLayout.LayoutParams(dp(64), ViewGroup.LayoutParams.WRAP_CONTENT).apply { marginEnd = dp(10) }
+                    addView(TextView(this@MainActivity).apply {
+                        text = ch.num.toString()
+                        textSize = 12f
+                        setTextColor(Color.WHITE)
+                        setTypeface(typeface, Typeface.BOLD)
+                        gravity = Gravity.CENTER
+                        setPadding(dp(6), dp(3), dp(6), dp(3))
+                        background = GradientDrawable().apply { setColor(ch.color); cornerRadius = dp(7).toFloat() }
+                    })
+                    addView(TextView(this@MainActivity).apply {
+                        text = ch.name
+                        textSize = 11f
+                        setTextColor(0xFFCFCFCF.toInt())
+                        gravity = Gravity.CENTER
+                        maxLines = 2
+                        setPadding(0, dp(3), 0, 0)
+                    })
+                })
+                row.addView(LinearLayout(this).apply {
+                    orientation = LinearLayout.VERTICAL
+                    layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
+                    addView(TextView(this@MainActivity).apply {
+                        text = now?.title ?: if (next == null) "Geen gidsgegevens" else "—"
+                        textSize = 15f
+                        setTextColor(if (now != null) Color.WHITE else 0xFF8A8A8A.toInt())
+                        setTypeface(typeface, Typeface.BOLD)
+                        maxLines = 1
+                        ellipsize = android.text.TextUtils.TruncateAt.END
+                    })
+                    if (now != null) {
+                        val frac = ((System.currentTimeMillis() - now.start).toFloat() / (now.stop - now.start).coerceAtLeast(1)).coerceIn(0f, 1f)
+                        addView(LinearLayout(this@MainActivity).apply {
+                            orientation = LinearLayout.HORIZONTAL
+                            gravity = Gravity.CENTER_VERTICAL
+                            setPadding(0, dp(4), 0, dp(2))
+                            addView(TextView(this@MainActivity).apply {
+                                text = hm(now.start); textSize = 11f; setTextColor(0xFF9A9A9A.toInt())
+                            })
+                            addView(LinearLayout(this@MainActivity).apply {
+                                orientation = LinearLayout.HORIZONTAL
+                                background = GradientDrawable().apply { setColor(0xFF3A3A3A.toInt()); cornerRadius = dp(2).toFloat() }
+                                layoutParams = LinearLayout.LayoutParams(0, dp(4), 1f).apply { marginStart = dp(6); marginEnd = dp(6) }
+                                addView(View(this@MainActivity).apply {
+                                    background = GradientDrawable().apply { setColor(0xFF18BCF2.toInt()); cornerRadius = dp(2).toFloat() }
+                                }, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.MATCH_PARENT, frac + 0.0001f))
+                                addView(View(this@MainActivity), LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.MATCH_PARENT, 1f - frac + 0.0001f))
+                            })
+                            addView(TextView(this@MainActivity).apply {
+                                text = hm(now.stop); textSize = 11f; setTextColor(0xFF9A9A9A.toInt())
+                            })
+                        })
+                    }
+                    if (next != null) addView(TextView(this@MainActivity).apply {
+                        text = "${hm(next.start)}  ${next.title}"
+                        textSize = 12f
+                        setTextColor(0xFFA8A8A8.toInt())
+                        maxLines = 1
+                        ellipsize = android.text.TextUtils.TruncateAt.END
+                    })
+                })
+                list.addView(row)
+            }
+            header("Favorieten")
+            rows(TV_FAVORITES)
+            header("Alle zenders")
+            rows(TV_CHANNELS)
+            val total = TV_FAVORITES.size + TV_CHANNELS.size
+            status.text = if (TvGuide.data.isEmpty()) status.text
+                else "Tik op een zender om over te schakelen" + (if (missing > 0) " · $missing zenders zonder gids" else "")
+            if (TvGuide.data.isEmpty() && missing == total) status.text = status.text
+        }
+        render()
+        thread {
+            val err = TvGuide.ensure(cacheDir, (TV_FAVORITES + TV_CHANNELS).map { it.name })
+            runOnUiThread {
+                if (!dialog.isShowing) return@runOnUiThread
+                if (err != null && TvGuide.data.isEmpty()) status.text = "Gids niet beschikbaar: $err"
+                render()
+            }
+        }
+        val sheetScroll = ScrollView(this).apply { addView(content) }
+        dialog.setContentView(SwipeSheet(this, sheetScroll, noIntercept = null, onUp = {}, onDown = { dialog.dismiss() },
+            scroller = sheetScroll, canSwipeUp = false))
+        dialog.window?.apply {
+            setBackgroundDrawable(GradientDrawable().apply {
+                setColor(0xFF1E1E1E.toInt())
+                cornerRadii = floatArrayOf(dp(22).toFloat(), dp(22).toFloat(), dp(22).toFloat(), dp(22).toFloat(), 0f, 0f, 0f, 0f)
+            })
+            setGravity(Gravity.BOTTOM)
+            setLayout(ViewGroup.LayoutParams.MATCH_PARENT, (resources.displayMetrics.heightPixels * 0.85).toInt())
+        }
+        dialog.show()
+    }
+
     private fun showChannelSheet() {
         val dialog = sheet()
         val content = LinearLayout(this).apply {
