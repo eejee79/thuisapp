@@ -404,6 +404,140 @@ class MainActivity : Activity() {
             )),
         )
         val TV_CHANNELS = TV_GROUPS.flatMap { it.channels }
+
+        /** Zenderlogo's uit de openbare verzameling tv-logo/tv-logos (GitHub), pad onder countries/. */
+        private const val LOGO_BASE = "https://raw.githubusercontent.com/tv-logo/tv-logos/main/countries/"
+        val TV_LOGOS = mapOf(
+            1 to "netherlands/npo1-nl",
+            2 to "netherlands/npo2-nl",
+            3 to "netherlands/npo3-nl",
+            4 to "netherlands/rtl4-nl",
+            5 to "netherlands/rtl5-nl",
+            6 to "netherlands/sbs6-nl",
+            7 to "netherlands/rtl7-nl",
+            8 to "netherlands/net5-nl",
+            9 to "netherlands/veronica-nl",
+            10 to "netherlands/rtl8-nl",
+            11 to "netherlands/rtlz-nl",
+            12 to "netherlands/comedy-central-nl",
+            13 to "netherlands/paramount-network-nl",
+            14 to "netherlands/espn-nl",
+            15 to "netherlands/discovery-channel-nl",
+            16 to "netherlands/star-channel-nl",
+            17 to "netherlands/tlc-nl",
+            18 to "netherlands/national-geographic-nl",
+            19 to "netherlands/sbs9-nl",
+            20 to "netherlands/mtv-nl",
+            21 to "netherlands/id-investigation-discovery-nl",
+            22 to "netherlands/xite-nl",
+            23 to "netherlands/dreamworks-channel-nl",
+            24 to "netherlands/24-kitchen-nl",
+            25 to "netherlands/bbc-nl-nl",
+            26 to "united-kingdom/bbc-one-uk",
+            27 to "united-kingdom/bbc-two-uk",
+            28 to "netherlands/disney-channel-nl",
+            29 to "belgium/vrt-1-be",
+            30 to "belgium/vrt-canvas-be",
+            31 to "belgium/ketnet-be",
+            32 to "netherlands/history-channel-nl",
+            33 to "netherlands/nickelodeon-nl",
+            34 to "netherlands/love-nature-nl",
+            35 to "netherlands/eurosport-1-nl",
+            36 to "netherlands/eurosport-2-nl",
+            39 to "netherlands/njam-nl",
+            40 to "united-kingdom/bbc-news-uk",
+            43 to "united-kingdom/hgtv-uk",
+            44 to "netherlands/crime-and-investigation-nl",
+            45 to "germany/das-erste-de",
+            46 to "germany/zdf-de",
+            47 to "germany/rtl-de",
+            48 to "germany/wdr-de",
+            49 to "germany/arte-de",
+            50 to "international/filmbox-int",
+            51 to "netherlands/viaplay-tv-nl",
+            52 to "netherlands/nick-toons-nl",
+            53 to "netherlands/nick-jr-nl",
+            55 to "united-kingdom/cartoonito-uk",
+            57 to "netherlands/baby-tv-nl",
+            59 to "netherlands/rtl-telekids-nl",
+            60 to "netherlands/cartoon-network-nl",
+            61 to "international/cnn-international-int",
+            71 to "netherlands/e-entertainment-nl",
+            73 to "netherlands/rtl-lounge-nl",
+            74 to "netherlands/rtl-crime-nl",
+            77 to "netherlands/out-tv-nl",
+            78 to "netherlands/family7-nl",
+            81 to "netherlands/npo1-extra-nl",
+            82 to "netherlands/npo2-extra-nl",
+            83 to "netherlands/npo-politiek-en-nieuws-nl",
+            84 to "netherlands/discovery-science-nl",
+            85 to "netherlands/animal-planet-nl",
+            87 to "netherlands/national-geographic-wild-nl",
+            89 to "netherlands/ons-nl",
+            92 to "france/france-2-fr",
+            93 to "netherlands/rtv7-nl",
+            111 to "netherlands/slam-tv-nl",
+            112 to "netherlands/tv-oranje-nl",
+            113 to "netherlands/192-tv-nl",
+            119 to "germany/vox-de",
+            120 to "germany/ndr-de",
+            121 to "germany/sat-1-de",
+            122 to "germany/tagesschau24-de",
+            123 to "germany/3sat-de",
+            124 to "germany/pro-sieben-de",
+            125 to "germany/kika-de",
+            126 to "germany/one-de",
+            127 to "germany/rtl-zwei-de",
+            128 to "germany/rtl-super-de",
+            129 to "united-kingdom/utsav-bharat-uk",
+            130 to "india/zee-cinema-in",
+            131 to "india/zee-tv-in",
+            132 to "india/sony-entertainment-television-in",
+            133 to "india/sony-max-in",
+            134 to "netherlands/utsav-plus-nl",
+            135 to "india/colors-in",
+            136 to "netherlands/utsav-gold-nl",
+            140 to "turkey/trt-turk-tr",
+            141 to "turkey/trt-haber-tr",
+            142 to "turkey/atv-avrupa-tr",
+            143 to "turkey/euro-d-tr",
+            144 to "turkey/euro-star-tr",
+            145 to "turkey/show-turk-tr",
+            146 to "turkey/tv8-int-tr",
+            147 to "turkey/trt-cocuk-tr",
+            148 to "turkey/trt-spor-tr",
+            222 to "netherlands/espn-2-nl",
+            223 to "netherlands/espn-3-nl",
+            224 to "netherlands/espn-4-nl",
+            230 to "netherlands/viaplay-tv-nl",
+            233 to "netherlands/ziggo-sport-nl",
+            234 to "netherlands/ziggo-sport-2-nl",
+            235 to "netherlands/ziggo-sport-3-nl",
+            236 to "netherlands/ziggo-sport-4-nl",
+            237 to "netherlands/ziggo-sport-5-nl",
+            238 to "netherlands/ziggo-sport-6-nl",
+            245 to "netherlands/film1-premiere-nl",
+            246 to "netherlands/film1-action-nl",
+            247 to "netherlands/film1-family-nl",
+            248 to "netherlands/film1-drama-nl",
+            501 to "netherlands/rtv-noord-nl",
+            502 to "netherlands/omrop-fryslan-nl",
+            503 to "netherlands/rtv-drenthe-nl",
+            504 to "netherlands/rtv-oost-nl",
+            505 to "netherlands/omroep-flevoland-nl",
+            506 to "netherlands/omroep-gelderland-nl",
+            507 to "netherlands/omroep-brabant-nl",
+            508 to "netherlands/l1-tv-nl",
+            509 to "netherlands/nh-nl",
+            510 to "netherlands/at5-nl",
+            511 to "netherlands/rtv-utrecht-nl",
+            512 to "netherlands/omroep-west-nl",
+            513 to "netherlands/rtv-rijnmond-nl",
+            514 to "netherlands/omroep-zeeland-nl",
+            538 to "netherlands/tv-538-nl",
+            693 to "united-kingdom/love-nature-4k-uk",
+            694 to "netherlands/espn-ultra-hd-nl",
+        )
         private const val KEY_LAST_CHANNEL = "last_tv_channel"
 
         /** App-tegels: naam, pakketnaam op de Google TV, kleur van de tegel. */
@@ -6694,6 +6828,50 @@ class MainActivity : Activity() {
         return TV_CHANNELS.firstOrNull { it.num == n }
     }
 
+    private val logoMem = android.util.LruCache<String, android.graphics.Bitmap>(120)
+
+    /** Zenderlogo laden: eenmalig downloaden naar de cache-map, verkleind decoderen. */
+    private fun loadLogo(view: ImageView, path: String, onFail: () -> Unit) {
+        view.tag = path
+        logoMem.get(path)?.let { view.setImageBitmap(it); return }
+        imagePool.execute {
+            val bmp = runCatching {
+                val dir = java.io.File(cacheDir, "logos").apply { mkdirs() }
+                val file = java.io.File(dir, path.replace('/', '_') + ".png")
+                if (!file.exists() || file.length() == 0L) {
+                    val c = URL(LOGO_BASE + path + ".png").openConnection() as HttpURLConnection
+                    c.connectTimeout = 8_000; c.readTimeout = 10_000
+                    if (c.responseCode !in 200..299) throw java.io.IOException("logo ${c.responseCode}")
+                    val tmp = java.io.File(dir, file.name + ".tmp")
+                    c.inputStream.use { inp -> tmp.outputStream().use { inp.copyTo(it) } }
+                    tmp.renameTo(file)
+                }
+                val o = android.graphics.BitmapFactory.Options().apply { inJustDecodeBounds = true }
+                android.graphics.BitmapFactory.decodeFile(file.path, o)
+                var sample = 1
+                while (o.outWidth / (sample * 2) >= 160) sample *= 2
+                android.graphics.BitmapFactory.decodeFile(file.path, android.graphics.BitmapFactory.Options().apply { inSampleSize = sample })
+            }.getOrNull()
+            runOnUiThread {
+                if (view.tag != path) return@runOnUiThread
+                if (bmp == null) onFail() else { logoMem.put(path, bmp); view.setImageBitmap(bmp) }
+            }
+        }
+    }
+
+    /** Logo van een zender (of null als er geen is); bij mislukken wordt [fallback] zichtbaar. */
+    private fun channelLogo(ch: TvChannel, w: Int, h: Int, fallback: View): ImageView? {
+        val path = TV_LOGOS[ch.num] ?: return null
+        fallback.visibility = View.GONE
+        return ImageView(this).apply {
+            scaleType = ImageView.ScaleType.FIT_CENTER
+            adjustViewBounds = false
+            layoutParams = LinearLayout.LayoutParams(w, h)
+            contentDescription = ch.name
+            loadLogo(this, path) { visibility = View.GONE; fallback.visibility = View.VISIBLE }
+        }
+    }
+
     /** Inklapbare groepskop; stand wordt onthouden. Geeft de container voor de inhoud terug. */
     private fun tvGroup(parent: LinearLayout, title: String, count: Int, defaultOpen: Boolean): LinearLayout {
         val key = "tvgrp_" + title
@@ -6809,14 +6987,19 @@ class MainActivity : Activity() {
                         setPadding(dp(6), dp(3), dp(6), dp(3))
                         background = GradientDrawable().apply { setColor(ch.color); cornerRadius = dp(7).toFloat() }
                     })
-                    addView(TextView(this@MainActivity).apply {
+                    val nameView = TextView(this@MainActivity).apply {
                         text = ch.name
                         textSize = 11f
                         setTextColor(0xFFCFCFCF.toInt())
                         gravity = Gravity.CENTER
                         maxLines = 2
                         setPadding(0, dp(3), 0, 0)
-                    })
+                    }
+                    channelLogo(ch, dp(60), dp(30), nameView)?.let {
+                        (it.layoutParams as LinearLayout.LayoutParams).topMargin = dp(4)
+                        addView(it)
+                    }
+                    addView(nameView)
                 })
                 row.addView(LinearLayout(this).apply {
                     orientation = LinearLayout.VERTICAL
@@ -6949,14 +7132,19 @@ class MainActivity : Activity() {
                             setPadding(dp(4), dp(3), dp(4), dp(3))
                             background = GradientDrawable().apply { setColor(ch.color); cornerRadius = dp(7).toFloat() }
                         })
-                        cell.addView(TextView(this).apply {
+                        val nameView = TextView(this).apply {
                             text = ch.name
                             textSize = 13f
                             setTextColor(Color.WHITE)
                             setTypeface(typeface, Typeface.BOLD)
                             maxLines = 2
                             setPadding(dp(7), 0, 0, 0)
-                        })
+                        }
+                        channelLogo(ch, 0, dp(28), nameView)?.let {
+                            it.layoutParams = LinearLayout.LayoutParams(0, dp(28), 1f).apply { marginStart = dp(6) }
+                            cell.addView(it)
+                        }
+                        cell.addView(nameView)
                         cell.isClickable = true
                         cell.setOnClickListener { dialog.dismiss(); tuneChannel(ch.num, ch.name) }
                     }
