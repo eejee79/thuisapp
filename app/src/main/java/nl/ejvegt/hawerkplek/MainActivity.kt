@@ -211,20 +211,6 @@ class MainActivity : Activity() {
         private val C_NEWS = 0xFF00838F.toInt()
         private val C_INTL = 0xFF37474F.toInt()
 
-        /** Favorieten bovenaan (sport). Kanaalnummers volgens de KPN-zenderindeling (sep 2026). */
-        val TV_FAVORITES = listOf(
-            TvChannel(14, "ESPN", C_SPORT),
-            TvChannel(222, "ESPN 2", C_SPORT),
-            TvChannel(223, "ESPN 3", C_SPORT),
-            TvChannel(224, "ESPN 4", C_SPORT),
-            TvChannel(233, "Ziggo Sport", C_SPORT),
-            TvChannel(234, "Ziggo Sport 2", C_SPORT),
-            TvChannel(235, "Ziggo Sport 3", C_SPORT),
-            TvChannel(236, "Ziggo Sport 4", C_SPORT),
-            TvChannel(237, "Ziggo Sport 5", C_SPORT),
-            TvChannel(238, "Ziggo Sport 6", C_SPORT),
-        )
-
         /** Alle zenders per soort (KPN-zenderoverzicht 1 april 2026). Open = standaard uitgeklapt. */
         val TV_GROUPS = listOf(
             TvGroup("Nederlands", true, listOf(
@@ -253,6 +239,16 @@ class MainActivity : Activity() {
                 TvChannel(42, "Zender van de maand", C_NPO),
             )),
             TvGroup("Sport", true, listOf(
+                TvChannel(14, "ESPN", C_SPORT),
+                TvChannel(222, "ESPN 2", C_SPORT),
+                TvChannel(223, "ESPN 3", C_SPORT),
+                TvChannel(224, "ESPN 4", C_SPORT),
+                TvChannel(233, "Ziggo Sport", C_SPORT),
+                TvChannel(234, "Ziggo Sport 2", C_SPORT),
+                TvChannel(235, "Ziggo Sport 3", C_SPORT),
+                TvChannel(236, "Ziggo Sport 4", C_SPORT),
+                TvChannel(237, "Ziggo Sport 5", C_SPORT),
+                TvChannel(238, "Ziggo Sport 6", C_SPORT),
                 TvChannel(35, "Eurosport 1", C_SPORT),
                 TvChannel(36, "Eurosport 2", C_SPORT),
                 TvChannel(37, "W-Sport", C_SPORT),
@@ -6695,7 +6691,7 @@ class MainActivity : Activity() {
 
     private fun lastChannel(): TvChannel? {
         val n = prefs().getInt(KEY_LAST_CHANNEL, -1)
-        return (TV_FAVORITES + TV_CHANNELS).firstOrNull { it.num == n }
+        return TV_CHANNELS.firstOrNull { it.num == n }
     }
 
     /** Inklapbare groepskop; stand wordt onthouden. Geeft de container voor de inhoud terug. */
@@ -6866,15 +6862,13 @@ class MainActivity : Activity() {
                 })
                 into.addView(row)
             }
-            header("Favorieten")
-            rows(TV_FAVORITES, list)
             for (grp in TV_GROUPS) rows(grp.channels, tvGroup(list, grp.title, grp.channels.size, grp.open))
             status.text = if (TvGuide.data.isEmpty()) status.text
                 else "Tik op een zender om over te schakelen · tik op een groep om open/dicht te klappen"
         }
         render()
         thread {
-            val err = TvGuide.ensure(cacheDir, (TV_FAVORITES + TV_CHANNELS).map { it.name })
+            val err = TvGuide.ensure(cacheDir, TV_CHANNELS.map { it.name })
             runOnUiThread {
                 if (!dialog.isShowing) return@runOnUiThread
                 if (err != null && TvGuide.data.isEmpty()) status.text = "Gids niet beschikbaar: $err"
@@ -6972,8 +6966,6 @@ class MainActivity : Activity() {
             }
         }
 
-        content.addView(section("Favorieten"))
-        grid(TV_FAVORITES, content)
         for (grp in TV_GROUPS) grid(grp.channels, tvGroup(content, grp.title, grp.channels.size, grp.open))
 
         // Onderaan: aanzetten, zappen, nummer intikken
@@ -7826,7 +7818,7 @@ class MainActivity : Activity() {
             .setView(input)
             .setPositiveButton("Kijken") { _, _ ->
                 val n = input.text.toString().toIntOrNull() ?: return@setPositiveButton
-                val name = (TV_FAVORITES + TV_CHANNELS).firstOrNull { it.num == n }?.name ?: "Kanaal $n"
+                val name = TV_CHANNELS.firstOrNull { it.num == n }?.name ?: "Kanaal $n"
                 tuneChannel(n, name)
             }
             .setNegativeButton("Annuleren", null)
@@ -7842,6 +7834,11 @@ class MainActivity : Activity() {
             if (boxWasOff) quietService("remote/turn_on", JSONObject().put("entity_id", TVPLUS_REMOTE))
             prepareWatching(SOURCE_TV)
             if (boxWasOff) Thread.sleep(6_000)  // box laten opstarten
+            else {
+                // Bij terugkijken zou het zendernummer als spoeltijd gelden: eerst naar live tv (TV-toets)
+                quietService("remote/send_command", JSONObject().put("entity_id", TVPLUS_REMOTE).put("command", "TV"))
+                Thread.sleep(2_000)
+            }
             val digits = num.toString().map { it.toString() }
             quietService(
                 "remote/send_command",
