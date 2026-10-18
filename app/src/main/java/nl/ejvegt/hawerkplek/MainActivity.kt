@@ -8160,7 +8160,7 @@ class MainActivity : Activity() {
         }
         nowEntity = info.entity
         nowPlayPause.visibility = if (info.entity != null) View.VISIBLE else View.GONE
-        nowChannelBtn.visibility = if (info.tv) View.VISIBLE else View.GONE
+        nowChannelBtn.visibility = View.GONE  // zender kiezen gaat via de gids
         nowGuideBtn.visibility = if (info.tv) View.VISIBLE else View.GONE
         nowRemote = info.remote
         // Afstandsbediening: box/TV+ met pijltjes, of bij muziek (Chromecast Audio, PiCore…) een speler-bediening
