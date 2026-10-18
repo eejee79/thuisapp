@@ -7835,8 +7835,8 @@ class MainActivity : Activity() {
             prepareWatching(SOURCE_TV)
             if (boxWasOff) Thread.sleep(6_000)  // box laten opstarten
             else {
-                // Bij terugkijken zou het zendernummer als spoeltijd gelden: eerst naar live tv (TV-toets)
-                quietService("remote/send_command", JSONObject().put("entity_id", TVPLUS_REMOTE).put("command", "TV"))
+                // Bij terugkijken zou het zendernummer als spoeltijd gelden: eerst naar het beginscherm (Home)
+                quietService("remote/send_command", JSONObject().put("entity_id", TVPLUS_REMOTE).put("command", "HOME"))
                 Thread.sleep(2_000)
             }
             val digits = num.toString().map { it.toString() }
