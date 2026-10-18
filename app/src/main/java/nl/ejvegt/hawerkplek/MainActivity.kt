@@ -6920,20 +6920,6 @@ class MainActivity : Activity() {
                 setTypeface(typeface, Typeface.BOLD)
                 layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
             })
-            addView(TextView(this@MainActivity).apply {
-                text = "Gids op tv"
-                textSize = 13f
-                setTextColor(Color.WHITE)
-                setTypeface(typeface, Typeface.BOLD)
-                setPadding(dp(12), dp(8), dp(12), dp(8))
-                background = GradientDrawable().apply { setColor(0xFF1565C0.toInt()); cornerRadius = dp(16).toFloat() }
-                isClickable = true
-                setOnClickListener {
-                    dialog.dismiss()
-                    sendRemoteKey(TVPLUS_REMOTE, "GUIDE")
-                    showRemoteSheet(TVPLUS_REMOTE, true)
-                }
-            })
         })
         val status = TextView(this).apply {
             textSize = 13f
@@ -7689,7 +7675,12 @@ class MainActivity : Activity() {
         content.addView(row(
             btn("↩ Terug", "BACK"),
             btn("⌂ Home", "HOME"),
-            if (kpn) btn("Gids", "GUIDE", 0xFF1565C0.toInt())
+            // Gids-toets van de box springt naar het beginscherm; daarom de gids in de app openen
+            if (kpn) btn("Gids", null).apply {
+                background = GradientDrawable().apply { setColor(0xFF1565C0.toInt()); cornerRadius = dp(14).toFloat() }
+                isClickable = true
+                setOnClickListener { dialog.dismiss(); showGuideSheet() }
+            }
             else btn("⌨ Typen", null).apply {
                 background = GradientDrawable().apply { setColor(0xFF1565C0.toInt()); cornerRadius = dp(14).toFloat() }
                 isClickable = true
