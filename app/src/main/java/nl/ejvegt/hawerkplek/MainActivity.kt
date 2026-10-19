@@ -4366,19 +4366,19 @@ class MainActivity : Activity() {
             fun adb(c: String) = quietService("androidtv/adb_command", JSONObject().put("entity_id", MEDIA_ADB).put("command", c))
             var how = ""
             if (svc.key == "videoland") {
-                adb("monkey -p ${svc.pkg} -c android.intent.category.LEANBACK_LAUNCHER 1")
-                Thread.sleep(4_000)
-                // Zoeken in Videoland: probeer de manieren na elkaar tot de box er een accepteert
-                // De app kent (volgens de box) https://v2.videoland.com/zoeken, titelpagina's /…_… en het schema videoland-v2
-                val enc = Uri.encode(q)
-                val tries = (if (cmd.isNotEmpty()) listOf(cmd) else emptyList()) + listOf(
-                    "am start -a android.intent.action.VIEW -d 'https://v2.videoland.com/zoeken?q=$enc' ${svc.pkg}",
-                    "am start -a android.intent.action.VIEW -d 'videoland-v2://zoeken?q=$enc' ${svc.pkg}",
-                    "am start -a android.intent.action.SEARCH --es query '$q' ${svc.pkg}",
-                )
-                for (c in tries) {
-                    val r = runCatching { adbAsk(c) }.getOrDefault("")
-                    if (r.isNotEmpty() && !r.contains("Error", true) && !r.contains("unable", true)) { how = "ok"; break }
+                if (cmd.isNotEmpty()) { adb(cmd); how = "ok" }   // titel-ID bekend: rechtstreeks
+                else {
+                    // Zoekscherm van Videoland openen (pad dat de app kent), dan zelf de titel intypen:
+                    // ▲ naar de zoekbalk, ▶ (vanaf de microfoon) en OK, tekst, Enter, ▼ naar het eerste resultaat, OK
+                    adb("am start -a android.intent.action.VIEW -d 'https://v2.videoland.com/zoeken' ${svc.pkg}")
+                    Thread.sleep(5_000)
+                    adb("input keyevent 19 && sleep 0.4 && input keyevent 22 && sleep 0.4 && input keyevent 23")
+                    Thread.sleep(1_500)
+                    val typed = java.text.Normalizer.normalize(q, java.text.Normalizer.Form.NFD).replace(Regex("[^A-Za-z0-9 ]"), " ").trim().replace(Regex(" +"), "%s")
+                    adb("input text '$typed' && sleep 0.5 && input keyevent 66")
+                    Thread.sleep(3_000)
+                    adb("input keyevent 20 && sleep 0.5 && input keyevent 23")
+                    how = "ok"
                 }
             } else adb(cmd)
             if (svc.key == "prime") {
