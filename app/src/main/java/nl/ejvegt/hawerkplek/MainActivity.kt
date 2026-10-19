@@ -4369,10 +4369,12 @@ class MainActivity : Activity() {
                 adb("monkey -p ${svc.pkg} -c android.intent.category.LEANBACK_LAUNCHER 1")
                 Thread.sleep(4_000)
                 // Zoeken in Videoland: probeer de manieren na elkaar tot de box er een accepteert
+                // De app kent (volgens de box) https://v2.videoland.com/zoeken, titelpagina's /…_… en het schema videoland-v2
+                val enc = Uri.encode(q)
                 val tries = (if (cmd.isNotEmpty()) listOf(cmd) else emptyList()) + listOf(
+                    "am start -a android.intent.action.VIEW -d 'https://v2.videoland.com/zoeken?q=$enc' ${svc.pkg}",
+                    "am start -a android.intent.action.VIEW -d 'videoland-v2://zoeken?q=$enc' ${svc.pkg}",
                     "am start -a android.intent.action.SEARCH --es query '$q' ${svc.pkg}",
-                    "am start -a android.intent.action.VIEW -d 'videoland://search?q=${Uri.encode(q)}' ${svc.pkg}",
-                    "am start -a android.intent.action.VIEW -d 'https://v2.videoland.com/search?q=${Uri.encode(q)}' ${svc.pkg}",
                 )
                 for (c in tries) {
                     val r = runCatching { adbAsk(c) }.getOrDefault("")
