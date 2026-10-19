@@ -7022,7 +7022,7 @@ class MainActivity : Activity() {
                         ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT
                     ).apply { bottomMargin = dp(6) }
                     isClickable = true
-                    setOnClickListener { dialog.dismiss(); tuneChannel(ch.num, ch.name) }
+                    setOnClickListener { dialog.dismiss(); tuneChannel(ch.num, ch.name, if (at != null) now?.start else null) }
                 }
                 row.addView(LinearLayout(this).apply {
                     orientation = LinearLayout.VERTICAL
@@ -7099,7 +7099,7 @@ class MainActivity : Activity() {
             }
             for (grp in TV_GROUPS) rows(grp.channels, tvGroup(list, grp.title, grp.channels.size, grp.open))
             status.text = if (TvGuide.data.isEmpty()) status.text
-                else if (at != null) "Wat er toen liep · tik op het logo voor het dagoverzicht · tik op de rij om over te schakelen"
+                else if (at != null) "Wat er toen liep · tik op de rij om het terug te kijken · logo = dagoverzicht"
                 else "Tik op een zender om over te schakelen · tik op het logo voor het dagoverzicht"
         }
         render()
@@ -7198,7 +7198,17 @@ class MainActivity : Activity() {
                     layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
                         .apply { bottomMargin = dp(6) }
                     isClickable = true
-                    setOnClickListener { dialog.dismiss(); tuneChannel(ch.num, ch.name) }
+                    setOnClickListener {
+                        dialog.dismiss()
+                        when {
+                            p.start > System.currentTimeMillis() -> tuneChannel(ch.num, ch.name)
+                            live -> AlertDialog.Builder(this@MainActivity).setTitle(p.title)
+                                .setItems(arrayOf("Live kijken", "Vanaf het begin")) { _, w ->
+                                    tuneChannel(ch.num, ch.name, if (w == 1) p.start else null)
+                                }.show()
+                            else -> tuneChannel(ch.num, ch.name, p.start)
+                        }
+                    }
                 }
                 row.addView(TextView(this).apply {
                     text = hmFmt.format(java.util.Date(p.start))
@@ -8215,7 +8225,8 @@ class MainActivity : Activity() {
     }
 
     /** Alles aan (indien nodig) en het kanaalnummer als cijfertoetsen naar de TV+-box sturen. */
-    private fun tuneChannel(num: Int, name: String) {
+    /** Overschakelen; met [rewindTo] daarna terugspoelen naar dat tijdstip (KPN: minuten intoetsen + ⏪). */
+    private fun tuneChannel(num: Int, name: String, rewindTo: Long? = null) {
         prefs().edit().putInt(KEY_LAST_CHANNEL, num).apply()
         mediaStatus.text = "$name kiezen…"
         showRemoteSheet(TVPLUS_REMOTE, true)  // na zappen direct de afstandsbediening
@@ -8234,8 +8245,17 @@ class MainActivity : Activity() {
                 "remote/send_command",
                 JSONObject().put("entity_id", TVPLUS_REMOTE).put("command", JSONArray(digits)).put("delay_secs", 0.3)
             )
+            if (rewindTo != null) {
+                Thread.sleep(5_000)  // zender eerst laten starten
+                val minutes = ((System.currentTimeMillis() - rewindTo) / 60_000L + 1).toInt()
+                if (minutes in 1..9_999) {
+                    val keys = JSONArray("${minutes}00".map { it.toString() }).put("MEDIA_REWIND")
+                    quietService("remote/send_command", JSONObject().put("entity_id", TVPLUS_REMOTE)
+                        .put("command", keys).put("delay_secs", 0.3))
+                }
+            }
             runOnUiThread {
-                mediaStatus.text = "$name (kanaal $num)"
+                mediaStatus.text = if (rewindTo != null) "$name: terugkijken vanaf het begin" else "$name (kanaal $num)"
                 refreshMedia()
             }
         }
