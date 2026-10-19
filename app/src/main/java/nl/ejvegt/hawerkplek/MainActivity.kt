@@ -3971,7 +3971,7 @@ class MainActivity : Activity() {
     private val STREAM_SVCS = listOf(
         StreamSvc("netflix", "Netflix", "8|1796", 0xFFE50914.toInt(), "com.netflix.ninja"),
         StreamSvc("prime", "Prime Video", "119", 0xFF1A98FF.toInt(), "com.amazon.amazonvideo.livingroom"),
-        StreamSvc("videoland", "Videoland", "72", 0xFFE4007C.toInt(), null),
+        StreamSvc("videoland", "Videoland", "72", 0xFFE4007C.toInt(), "nl.rtl.videoland.v2"),
     )
     private fun svcForProvider(id: Int) = STREAM_SVCS.firstOrNull { s -> s.providers.split('|').any { it.toInt() == id } }
 
@@ -4333,10 +4333,17 @@ class MainActivity : Activity() {
                     val param = if (id!!.startsWith("amzn1.")) "gti" else "asin"
                     "am start -a android.intent.action.VIEW -d 'https://app.primevideo.com/detail?$param=$id' ${svc.pkg}"
                 } else "am start -a android.search.action.GLOBAL_SEARCH --es query '$q'"
+                // Videoland: eerst de app zelf openen, dan (als de app dat kent) de titel of het zoekscherm erin
+                "videoland" -> if (direct) "am start -a android.intent.action.VIEW -d 'https://v2.videoland.com/$id' ${svc.pkg}"
+                    else "am start -a android.intent.action.VIEW -d 'https://v2.videoland.com/search?q=${Uri.encode(q)}' ${svc.pkg}"
                 else -> "am start -a android.search.action.GLOBAL_SEARCH --es query '$q'"
             }
             Thread.sleep(1_200)
             fun adb(c: String) = quietService("androidtv/adb_command", JSONObject().put("entity_id", MEDIA_ADB).put("command", c))
+            if (svc.key == "videoland") {
+                adb("monkey -p ${svc.pkg} -c android.intent.category.LEANBACK_LAUNCHER 1")
+                Thread.sleep(4_000)
+            }
             adb(cmd)
             if (svc.key == "prime") {
                 // Prime Video begint met "Wie kijkt er?": OK kiest het (laatst gebruikte) profiel,
@@ -4347,8 +4354,11 @@ class MainActivity : Activity() {
                 adb(cmd)
             }
             runOnUiThread {
-                mediaStatus.text = if (direct && svc.key != "videoland") "${t.name} staat open in ${svc.name}"
-                    else "${t.name}: opgezocht op de tv (geen direct ID bekend)"
+                mediaStatus.text = when {
+                    direct -> "${t.name} staat open in ${svc.name}"
+                    svc.key == "videoland" -> "Videoland staat open; zoeken naar ${t.name}"
+                    else -> "${t.name}: opgezocht op de tv (geen direct ID bekend)"
+                }
                 handler.postDelayed({ refreshMedia() }, 2_500)
             }
         }
