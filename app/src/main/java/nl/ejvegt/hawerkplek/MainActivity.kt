@@ -8249,6 +8249,9 @@ class MainActivity : Activity() {
                 Thread.sleep(5_000)  // zender eerst laten starten
                 val minutes = ((System.currentTimeMillis() - rewindTo) / 60_000L + 1).toInt()
                 if (minutes in 1..9_999) {
+                    // Bij live tv zijn cijfers een zendernummer; eerst pauzeren zodat de box in terugkijk-stand staat
+                    quietService("remote/send_command", JSONObject().put("entity_id", TVPLUS_REMOTE).put("command", "MEDIA_PAUSE"))
+                    Thread.sleep(2_000)
                     val keys = JSONArray("${minutes}00".map { it.toString() }).put("MEDIA_REWIND")
                     quietService("remote/send_command", JSONObject().put("entity_id", TVPLUS_REMOTE)
                         .put("command", keys).put("delay_secs", 0.3))
