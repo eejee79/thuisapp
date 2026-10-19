@@ -68,6 +68,11 @@ object TvGuide {
     private fun parse(file: File, channels: List<String>) {
         val wanted = channels.associateBy { norm(it) }          // genormaliseerd → naam in de app
         val idToName = HashMap<String, String>()
+        val claimed = HashSet<String>()   // elke app-zender krijgt maar één bron (niet NPO1 én NPO1 HD)
+        fun claim(id: String, name: String) {
+            if (idToName.containsKey(id) || name in claimed) return
+            idToName[id] = name; claimed.add(name)
+        }
         val out = HashMap<String, MutableList<Prog>>()
         val from = System.currentTimeMillis() - KEEP_MS
         val until = System.currentTimeMillis() + 30 * 3_600_000L
@@ -87,11 +92,11 @@ object TvGuide {
                         "channel" -> {
                             chId = p.getAttributeValue(null, "id")
                             // Ook de id zelf proberen (bijv. "NPO1.nl")
-                            chId?.let { id -> wanted[norm(id)]?.let { idToName.putIfAbsent(id, it) } }
+                            chId?.let { id -> wanted[norm(id)]?.let { claim(id, it) } }
                         }
                         "display-name" -> if (chId != null) {
                             val name = p.nextText()
-                            wanted[norm(name)]?.let { idToName.putIfAbsent(chId!!, it) }
+                            wanted[norm(name)]?.let { claim(chId!!, it) }
                         }
                         "programme" -> {
                             val c = p.getAttributeValue(null, "channel")
@@ -121,8 +126,9 @@ object TvGuide {
                 ev = p.next()
             }
         }
-        data = histDir?.let { runCatching { mergeHistory(it, out) }.getOrNull() }
-            ?: out.mapValues { (_, v) -> v.sortedBy { it.start }.distinctBy { it.start } }
+        data = (histDir?.let { runCatching { mergeHistory(it, out) }.getOrNull() }
+            ?: out.mapValues { (_, v) -> v.sortedBy { it.start }.distinctBy { it.start } })
+            .mapValues { (_, v) -> clean(v) }
         loadedAt = System.currentTimeMillis()
     }
 
@@ -157,6 +163,16 @@ object TvGuide {
         }
         tmp.renameTo(f)
         return result
+    }
+
+    /** Overlappende (dubbele) programma's eruit: alleen wat na het einde van het vorige begint. */
+    private fun clean(sorted: List<Prog>): List<Prog> {
+        val out = ArrayList<Prog>(sorted.size)
+        for (p in sorted) {
+            val last = out.lastOrNull()
+            if (last == null || p.start >= last.stop - 60_000L) out.add(p)
+        }
+        return out
     }
 
     /** Programma's van een zender binnen [from, to). */

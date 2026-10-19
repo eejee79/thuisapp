@@ -8243,9 +8243,16 @@ class MainActivity : Activity() {
             )
             if (rewindTo != null) {
                 // Terugkijken zoals op de afstandsbediening: Gids, zendernummer, ◀ naar het programma, OK, OK.
-                // Aantal keer ◀ = aantal programma's van het gekozen programma tot het huidige (uit onze gids).
+                // In de KPN-gids: ⏪ = 24 uur terug, ⏩ = 24 uur vooruit. Eerst zoveel dagen terug springen
+                // dat we dichtbij zitten, dan met ◀/▶ het aantal programma's tussen dat moment en het gekozen.
                 val now = System.currentTimeMillis()
-                val steps = TvGuide.range(name, rewindTo, now + 1).count { it.start > rewindTo && it.start <= now }
+                val day = 24 * 3_600_000L
+                val days = ((now - rewindTo + day / 2) / day).toInt().coerceIn(0, 7)
+                val ref = now - days * day
+                val progs = TvGuide.range(name, minOf(rewindTo, ref) - 1, maxOf(rewindTo, ref) + 1)
+                val refStart = progs.lastOrNull { it.start <= ref }?.start ?: ref
+                val left = progs.count { it.start > rewindTo && it.start <= refStart }
+                val right = if (rewindTo > refStart) progs.count { it.start > refStart && it.start <= rewindTo } else 0
                 Thread.sleep(3_000)  // zender eerst laten starten
                 fun send(cmd: Any, delay: Double = 0.3) = quietService("remote/send_command",
                     JSONObject().put("entity_id", TVPLUS_REMOTE).put("command", cmd).put("delay_secs", delay))
@@ -8257,7 +8264,9 @@ class MainActivity : Activity() {
                 // In de gids het zendernummer intoetsen = naar die zender in de gids
                 send(JSONArray(num.toString().map { it.toString() }), 0.25)
                 Thread.sleep(1_500)
-                if (steps > 0) send(JSONArray(List(steps) { "DPAD_LEFT" }), 0.35)
+                if (days > 0) { send(JSONArray(List(days) { "MEDIA_REWIND" }), 0.6); Thread.sleep(1_500) }
+                if (left > 0) send(JSONArray(List(left) { "DPAD_LEFT" }), 0.35)
+                if (right > 0) send(JSONArray(List(right) { "DPAD_RIGHT" }), 0.35)
                 Thread.sleep(800)
                 send("DPAD_CENTER")
                 Thread.sleep(1_500)
