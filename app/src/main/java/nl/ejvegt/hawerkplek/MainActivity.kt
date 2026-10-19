@@ -6910,16 +6910,71 @@ class MainActivity : Activity() {
             background = GradientDrawable().apply { setColor(0xFF555555.toInt()); cornerRadius = dp(2).toFloat() }
             layoutParams = LinearLayout.LayoutParams(dp(40), dp(4)).apply { gravity = Gravity.CENTER_HORIZONTAL; bottomMargin = dp(12) }
         })
+        // Kop: titel met een klein zoek-icoon; tik = titel wordt een zoekveld
+        var query = ""
+        lateinit var renderRef: () -> Unit
+        val guideTitle = TextView(this).apply {
+            text = "Tv-gids"
+            textSize = 19f
+            setTextColor(Color.WHITE)
+            setTypeface(typeface, Typeface.BOLD)
+            layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
+        }
+        val searchField = EditText(this).apply {
+            hint = "Zoek programma of zender"
+            textSize = 16f
+            setTextColor(Color.WHITE)
+            setHintTextColor(0xFF777777.toInt())
+            setSingleLine()
+            imeOptions = android.view.inputmethod.EditorInfo.IME_ACTION_SEARCH
+            background = GradientDrawable().apply { setColor(0xFF2A2A2A.toInt()); cornerRadius = dp(18).toFloat() }
+            setPadding(dp(14), dp(8), dp(14), dp(8))
+            visibility = View.GONE
+            layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
+        }
+        val searchIcon = ImageView(this).apply {
+            setImageResource(R.drawable.ic_search)
+            setColorFilter(0xFF9A9A9A.toInt())
+            setPadding(dp(10), dp(8), dp(4), dp(8))
+            contentDescription = "Zoeken in de gids"
+            layoutParams = LinearLayout.LayoutParams(dp(40), dp(40))
+        }
+        val imm = getSystemService(Context.INPUT_METHOD_SERVICE) as android.view.inputmethod.InputMethodManager
+        val searchDelay = Runnable { renderRef() }
+        searchField.addTextChangedListener(object : android.text.TextWatcher {
+            override fun beforeTextChanged(s: CharSequence?, a: Int, b: Int, c: Int) {}
+            override fun onTextChanged(s: CharSequence?, a: Int, b: Int, c: Int) {}
+            override fun afterTextChanged(e: android.text.Editable?) {
+                query = e?.toString()?.trim().orEmpty()
+                handler.removeCallbacks(searchDelay)
+                handler.postDelayed(searchDelay, 250)
+            }
+        })
+        searchField.setOnEditorActionListener { v, _, _ -> imm.hideSoftInputFromWindow(v.windowToken, 0); true }
+        searchIcon.setOnClickListener {
+            if (searchField.visibility == View.VISIBLE) {
+                searchField.setText("")
+                query = ""
+                imm.hideSoftInputFromWindow(searchField.windowToken, 0)
+                searchField.visibility = View.GONE
+                guideTitle.visibility = View.VISIBLE
+                searchIcon.setImageResource(R.drawable.ic_search)
+                renderRef()
+            } else {
+                guideTitle.visibility = View.GONE
+                searchField.visibility = View.VISIBLE
+                searchIcon.setImageDrawable(null)
+                searchIcon.setImageDrawable(TextDrawableX("✕"))
+                searchField.requestFocus()
+                imm.showSoftInput(searchField, android.view.inputmethod.InputMethodManager.SHOW_IMPLICIT)
+            }
+        }
         content.addView(LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
-            addView(TextView(this@MainActivity).apply {
-                text = "Tv-gids"
-                textSize = 19f
-                setTextColor(Color.WHITE)
-                setTypeface(typeface, Typeface.BOLD)
-                layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
-            })
+            addView(guideTitle)
+            addView(searchField)
+            addView(searchIcon)
         })
         val status = TextView(this).apply {
             textSize = 13f
@@ -6967,14 +7022,15 @@ class MainActivity : Activity() {
         }
         val hour = 3_600_000L
         fun floorHour(t: Long) = t - (t % (30 * 60_000L))
-        content.addView(LinearLayout(this).apply {
+        val stepRow = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
             setPadding(0, dp(8), 0, dp(2))
             addView(stepBtn("◀ 1 uur") { setAt(floorHour(at ?: System.currentTimeMillis()) - if (at == null) 0 else hour) })
             addView(atLabel)
             addView(stepBtn("1 uur ▶") { at?.let { setAt(it + hour) } })
-        }, 2)  // direct onder de titel
+        }
+        content.addView(stepRow, 2)  // direct onder de titel
         atLabel.setOnClickListener {
             // Dag kiezen (7 dagen terug), daarna het tijdstip
             val dayFmt = java.text.SimpleDateFormat("EEEE d MMMM", NL)
@@ -6996,8 +7052,11 @@ class MainActivity : Activity() {
             }.show()
         }
         atLabel.text = "Nu"
+        renderRef = { render() }
         render = fun() {
             list.removeAllViews()
+            stepRow.visibility = if (query.isEmpty()) View.VISIBLE else View.GONE
+            if (query.isNotEmpty()) { renderGuideSearch(query, list, status, dialog); return }
             var missing = 0
             fun header(t: String) = list.addView(TextView(this).apply {
                 text = t.uppercase(NL)
@@ -7124,6 +7183,114 @@ class MainActivity : Activity() {
             setLayout(ViewGroup.LayoutParams.MATCH_PARENT, (resources.displayMetrics.heightPixels * 0.85).toInt())
         }
         dialog.show()
+    }
+
+    /** Klein tekst-icoon (✕) voor een ImageView. */
+    private inner class TextDrawableX(val t: String) : android.graphics.drawable.Drawable() {
+        private val p = android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG).apply {
+            color = 0xFF9A9A9A.toInt(); textSize = dp(18).toFloat(); textAlign = android.graphics.Paint.Align.CENTER
+        }
+        override fun draw(c: android.graphics.Canvas) {
+            val b = bounds
+            c.drawText(t, b.exactCenterX(), b.exactCenterY() - (p.descent() + p.ascent()) / 2, p)
+        }
+        override fun setAlpha(a: Int) { p.alpha = a }
+        override fun setColorFilter(cf: android.graphics.ColorFilter?) { p.colorFilter = cf }
+        @Deprecated("") override fun getOpacity() = android.graphics.PixelFormat.TRANSLUCENT
+        override fun getIntrinsicWidth() = dp(20)
+        override fun getIntrinsicHeight() = dp(20)
+    }
+
+    /** Zoeken in de gids (7 dagen terug t/m vooruit): zenders en programma's op titel. */
+    private fun renderGuideSearch(q: String, list: LinearLayout, status: TextView, dialog: Dialog) {
+        val needle = q.lowercase(NL)
+        val now = System.currentTimeMillis()
+        val dayFmt = java.text.SimpleDateFormat("EEE d MMM HH:mm", NL)
+        val hmFmt = java.text.SimpleDateFormat("HH:mm", NL)
+        fun header(t: String) = list.addView(TextView(this).apply {
+            text = t.uppercase(NL); textSize = 12f; letterSpacing = 0.05f
+            setTextColor(0xFFAAAAAA.toInt()); setPadding(dp(4), dp(12), 0, dp(6))
+        })
+        fun row(ch: TvChannel, line1: String, line2: String, mark: String?, markColor: Int, onTap: () -> Unit) {
+            val r = LinearLayout(this).apply {
+                orientation = LinearLayout.HORIZONTAL
+                gravity = Gravity.CENTER_VERTICAL
+                setPadding(dp(10), dp(9), dp(10), dp(9))
+                background = GradientDrawable().apply { setColor(0xFF262626.toInt()); cornerRadius = dp(12).toFloat() }
+                layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
+                    .apply { bottomMargin = dp(6) }
+                isClickable = true
+                setOnClickListener { onTap() }
+            }
+            val num = TextView(this).apply {
+                text = ch.num.toString(); textSize = 12f; setTextColor(Color.WHITE); setTypeface(typeface, Typeface.BOLD)
+                gravity = Gravity.CENTER; setPadding(dp(6), dp(3), dp(6), dp(3))
+                background = GradientDrawable().apply { setColor(ch.color); cornerRadius = dp(7).toFloat() }
+            }
+            r.addView(LinearLayout(this).apply {
+                orientation = LinearLayout.VERTICAL
+                gravity = Gravity.CENTER_HORIZONTAL
+                layoutParams = LinearLayout.LayoutParams(dp(56), ViewGroup.LayoutParams.WRAP_CONTENT).apply { marginEnd = dp(10) }
+                channelLogo(ch, dp(52), dp(26), View(this@MainActivity))?.let { addView(it) }
+                addView(num)
+            })
+            r.addView(LinearLayout(this).apply {
+                orientation = LinearLayout.VERTICAL
+                layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
+                addView(TextView(this@MainActivity).apply {
+                    text = line1; textSize = 15f; setTextColor(Color.WHITE); setTypeface(typeface, Typeface.BOLD)
+                    maxLines = 1; ellipsize = android.text.TextUtils.TruncateAt.END
+                })
+                addView(TextView(this@MainActivity).apply { text = line2; textSize = 12f; setTextColor(0xFFA8A8A8.toInt()) })
+            })
+            if (mark != null) r.addView(TextView(this).apply {
+                text = mark; textSize = 12f; setTextColor(markColor); setTypeface(typeface, Typeface.BOLD)
+                setPadding(dp(8), 0, 0, 0)
+            })
+            list.addView(r)
+        }
+        // Zenders op naam of nummer
+        val chans = TV_CHANNELS.filter { it.name.lowercase(NL).contains(needle) || it.num.toString() == q }.take(6)
+        if (chans.isNotEmpty()) {
+            header("Zenders")
+            chans.forEach { ch ->
+                val (n, _) = TvGuide.nowNext(ch.name)
+                row(ch, ch.name, n?.let { "Nu: ${it.title}" } ?: "Kanaal ${ch.num}", null, 0) {
+                    dialog.dismiss(); tuneChannel(ch.num, ch.name)
+                }
+            }
+        }
+        // Programma's
+        class Hit(val ch: TvChannel, val p: TvGuide.Prog)
+        val hits = ArrayList<Hit>()
+        val seen = HashSet<String>()
+        for (ch in TV_CHANNELS) {
+            if (!seen.add(ch.name)) continue
+            TvGuide.data[ch.name]?.forEach { p -> if (p.title.lowercase(NL).contains(needle)) hits.add(Hit(ch, p)) }
+        }
+        val live = hits.filter { it.p.start <= now && it.p.stop > now }.sortedBy { it.ch.num }
+        val later = hits.filter { it.p.start > now }.sortedBy { it.p.start }.take(40)
+        val past = hits.filter { it.p.stop <= now }.sortedByDescending { it.p.start }.take(40)
+        if (live.isNotEmpty()) {
+            header("Nu bezig")
+            live.forEach { h -> row(h.ch, h.p.title, "${h.ch.name} · tot ${hmFmt.format(java.util.Date(h.p.stop))}", "● live", 0xFF18BCF2.toInt()) {
+                dialog.dismiss(); tuneChannel(h.ch.num, h.ch.name)
+            } }
+        }
+        if (later.isNotEmpty()) {
+            header("Straks")
+            later.forEach { h -> row(h.ch, h.p.title, "${dayFmt.format(java.util.Date(h.p.start))} · ${h.ch.name}", null, 0) {
+                showChannelDaySheet(h.ch, h.p.start)
+            } }
+        }
+        if (past.isNotEmpty()) {
+            header("Terugkijken")
+            past.forEach { h -> row(h.ch, h.p.title, "${dayFmt.format(java.util.Date(h.p.start))} · ${h.ch.name}", "↺", 0xFFFFC966.toInt()) {
+                dialog.dismiss(); tuneChannel(h.ch.num, h.ch.name, h.p.start)
+            } }
+        }
+        status.text = if (chans.isEmpty() && hits.isEmpty()) "Niets gevonden voor \"$q\""
+            else "${hits.size} programma's gevonden · tik ↺ = terugkijken, straks = dagoverzicht"
     }
 
     /** Dagoverzicht van één zender: 7 dagen terug t/m morgen, met beschrijving. Tik = overschakelen. */
