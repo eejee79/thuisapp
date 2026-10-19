@@ -7099,7 +7099,7 @@ class MainActivity : Activity() {
             }
             for (grp in TV_GROUPS) rows(grp.channels, tvGroup(list, grp.title, grp.channels.size, grp.open))
             status.text = if (TvGuide.data.isEmpty()) status.text
-                else if (at != null) "Wat er toen liep · tik = naar die zender · logo = dagoverzicht"
+                else if (at != null) "Wat er toen liep · tik = terugkijken · logo = dagoverzicht"
                 else "Tik op een zender om over te schakelen · tik op het logo voor het dagoverzicht"
         }
         render()
@@ -8241,21 +8241,25 @@ class MainActivity : Activity() {
                 "remote/send_command",
                 JSONObject().put("entity_id", TVPLUS_REMOTE).put("command", JSONArray(digits)).put("delay_secs", 0.3)
             )
-            if (rewindTo != null && false) {  // werkt niet op de KPN-box (cijfers = zender); uitgeschakeld
+            if (rewindTo != null) {
+                // Terugkijken zoals op de afstandsbediening: Gids, ◀ naar het programma, OK, OK.
+                // Aantal keer ◀ = aantal programma's van het gekozen programma tot het huidige (uit onze gids).
+                val now = System.currentTimeMillis()
+                val steps = TvGuide.range(name, rewindTo, now + 1).count { it.start > rewindTo && it.start <= now }
                 Thread.sleep(5_000)  // zender eerst laten starten
-                val minutes = ((System.currentTimeMillis() - rewindTo) / 60_000L + 1).toInt()
-                if (minutes in 1..9_999) {
-                    // Bij live tv zijn cijfers een zendernummer; eerst pauzeren zodat de box in terugkijk-stand staat
-                    quietService("remote/send_command", JSONObject().put("entity_id", TVPLUS_REMOTE).put("command", "MEDIA_PAUSE"))
-                    Thread.sleep(2_000)
-                    val keys = JSONArray("${minutes}00".map { it.toString() }).put("MEDIA_REWIND")
-                    quietService("remote/send_command", JSONObject().put("entity_id", TVPLUS_REMOTE)
-                        .put("command", keys).put("delay_secs", 0.3))
-                }
+                fun send(cmd: Any, delay: Double = 0.4) = quietService("remote/send_command",
+                    JSONObject().put("entity_id", TVPLUS_REMOTE).put("command", cmd).put("delay_secs", delay))
+                send("GUIDE")
+                Thread.sleep(3_000)
+                if (steps > 0) send(JSONArray(List(steps) { "DPAD_LEFT" }), 0.5)
+                Thread.sleep(1_500)
+                send("DPAD_CENTER")
+                Thread.sleep(2_500)
+                send("DPAD_CENTER")
             }
             runOnUiThread {
                 mediaStatus.text = "$name (kanaal $num)"
-                if (rewindTo != null) Toast.makeText(this, "Terugkijken: start het programma via de KPN-gids op tv", Toast.LENGTH_LONG).show()
+                if (rewindTo != null) mediaStatus.text = "$name: terugkijken gestart via de gids"
                 refreshMedia()
             }
         }
