@@ -4193,6 +4193,7 @@ class MainActivity : Activity() {
                 .apply { bottomMargin = dp(8) }
             isClickable = true
             setOnClickListener { dialog.dismiss(); openStreamOnTv(t, svc) }
+            setOnLongClickListener { svc.pkg?.let { showAppLinks(it) }; true }
         })
         // Komt de titel uit een dienst-rij, dan staat die knop er meteen
         from?.let { svcButton(it) }
@@ -4314,6 +4315,30 @@ class MainActivity : Activity() {
         }
     }
 
+    /** ADB-opdracht op de GoogleTV-box en het antwoord lezen (attribuut adb_response). Blokkeert. */
+    private fun adbAsk(cmd: String): String {
+        quietService("androidtv/adb_command", JSONObject().put("entity_id", MEDIA_ADB).put("command", cmd))
+        Thread.sleep(1_200)
+        return attr(stateOf(MEDIA_ADB), "adb_response").orEmpty()
+    }
+
+    /** Diagnose: welke links/zoekacties de app van een dienst op de box zegt te begrijpen. */
+    private fun showAppLinks(pkg: String) {
+        mediaStatus.text = "Links van $pkg opvragen…"
+        thread {
+            val out = runCatching {
+                adbAsk("dumpsys package $pkg | grep -iE 'Scheme:|Authority:|Path|SEARCH|VIEW' | sort -u | head -60")
+            }.getOrElse { "Mislukt: ${it.message}" }
+            runOnUiThread {
+                AlertDialog.Builder(this)
+                    .setTitle(pkg)
+                    .setMessage(out.ifBlank { "Geen antwoord van de box (staat ADB aan?)" })
+                    .setPositiveButton("OK", null)
+                    .show()
+            }
+        }
+    }
+
     /**
      * Titel openen in de app van de dienst op de GoogleTV-box. Eerst het ID bij de dienst zoeken (Wikidata);
      * gevonden: rechtstreeks naar de titel. Anders: zoeken in die app (of in Google TV).
@@ -4334,17 +4359,26 @@ class MainActivity : Activity() {
                     "am start -a android.intent.action.VIEW -d 'https://app.primevideo.com/detail?$param=$id' ${svc.pkg}"
                 } else "am start -a android.search.action.GLOBAL_SEARCH --es query '$q'"
                 // Videoland: eerst de app zelf openen, dan (als de app dat kent) de titel of het zoekscherm erin
-                "videoland" -> if (direct) "am start -a android.intent.action.VIEW -d 'https://v2.videoland.com/$id' ${svc.pkg}"
-                    else "am start -a android.intent.action.VIEW -d 'https://v2.videoland.com/search?q=${Uri.encode(q)}' ${svc.pkg}"
+                "videoland" -> if (direct) "am start -a android.intent.action.VIEW -d 'https://v2.videoland.com/$id' ${svc.pkg}" else ""
                 else -> "am start -a android.search.action.GLOBAL_SEARCH --es query '$q'"
             }
             Thread.sleep(1_200)
             fun adb(c: String) = quietService("androidtv/adb_command", JSONObject().put("entity_id", MEDIA_ADB).put("command", c))
+            var how = ""
             if (svc.key == "videoland") {
                 adb("monkey -p ${svc.pkg} -c android.intent.category.LEANBACK_LAUNCHER 1")
                 Thread.sleep(4_000)
-            }
-            adb(cmd)
+                // Zoeken in Videoland: probeer de manieren na elkaar tot de box er een accepteert
+                val tries = (if (cmd.isNotEmpty()) listOf(cmd) else emptyList()) + listOf(
+                    "am start -a android.intent.action.SEARCH --es query '$q' ${svc.pkg}",
+                    "am start -a android.intent.action.VIEW -d 'videoland://search?q=${Uri.encode(q)}' ${svc.pkg}",
+                    "am start -a android.intent.action.VIEW -d 'https://v2.videoland.com/search?q=${Uri.encode(q)}' ${svc.pkg}",
+                )
+                for (c in tries) {
+                    val r = runCatching { adbAsk(c) }.getOrDefault("")
+                    if (r.isNotEmpty() && !r.contains("Error", true) && !r.contains("unable", true)) { how = "ok"; break }
+                }
+            } else adb(cmd)
             if (svc.key == "prime") {
                 // Prime Video begint met "Wie kijkt er?": OK kiest het (laatst gebruikte) profiel,
                 // daarna de link nog een keer zodat je op de titel uitkomt
@@ -4356,7 +4390,8 @@ class MainActivity : Activity() {
             runOnUiThread {
                 mediaStatus.text = when {
                     direct -> "${t.name} staat open in ${svc.name}"
-                    svc.key == "videoland" -> "Videoland staat open; zoeken naar ${t.name}"
+                    svc.key == "videoland" && how == "ok" -> "Videoland: ${t.name} opgezocht"
+                    svc.key == "videoland" -> "Videoland staat open; zoeken lukte niet (houd de Videoland-knop lang ingedrukt voor diagnose)"
                     else -> "${t.name}: opgezocht op de tv (geen direct ID bekend)"
                 }
                 handler.postDelayed({ refreshMedia() }, 2_500)
