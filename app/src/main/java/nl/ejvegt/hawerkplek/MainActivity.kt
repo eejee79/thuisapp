@@ -8249,7 +8249,10 @@ class MainActivity : Activity() {
                 Thread.sleep(5_000)  // zender eerst laten starten
                 fun send(cmd: Any, delay: Double = 0.4) = quietService("remote/send_command",
                     JSONObject().put("entity_id", TVPLUS_REMOTE).put("command", cmd).put("delay_secs", delay))
-                send("GUIDE")
+                // De Gids-toets (172) komt via de koppeling niet aan; vanuit live tv opent ▲ + OK de gids
+                send("DPAD_UP")
+                Thread.sleep(1_500)
+                send("DPAD_CENTER")
                 Thread.sleep(3_000)
                 // In de gids het zendernummer intoetsen = naar die zender in de gids
                 send(JSONArray(num.toString().map { it.toString() }), 0.3)
