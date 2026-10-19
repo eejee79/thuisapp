@@ -4362,7 +4362,7 @@ class MainActivity : Activity() {
                 "videoland" -> if (direct) "am start -a android.intent.action.VIEW -d 'https://v2.videoland.com/$id' ${svc.pkg}" else ""
                 else -> "am start -a android.search.action.GLOBAL_SEARCH --es query '$q'"
             }
-            Thread.sleep(1_200)
+            Thread.sleep(600)
             fun adb(c: String) = quietService("androidtv/adb_command", JSONObject().put("entity_id", MEDIA_ADB).put("command", c))
             var how = ""
             if (svc.key == "videoland") {
@@ -4396,7 +4396,7 @@ class MainActivity : Activity() {
             }
             if (svc.key == "netflix" && direct) {
                 // Netflix staat op de titelpagina met Afspelen geselecteerd: bevestigen
-                Thread.sleep(6_000)
+                Thread.sleep(3_000)
                 adb("input keyevent 23")
             }
             runOnUiThread {
