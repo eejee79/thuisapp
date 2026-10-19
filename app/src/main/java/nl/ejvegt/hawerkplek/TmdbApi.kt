@@ -15,6 +15,8 @@ class TmdbApi(private val key: () -> String) {
     )
 
     class Provider(val name: String, val logo: String?, val kind: String)
+    class Season(val number: Int, val name: String, val episodes: Int)
+    class Episode(val number: Int, val name: String, val overview: String, val air: String, val still: String?, val runtime: Int)
 
     companion object {
         const val IMG = "https://image.tmdb.org/t/p/"
@@ -66,6 +68,34 @@ class TmdbApi(private val key: () -> String) {
         "/discover/$type?language=nl-NL&watch_region=NL&with_watch_providers=" + URLEncoder.encode(providers, "UTF-8") +
             "&with_watch_monetization_types=flatrate%7Cads&sort_by=popularity.desc&vote_count.gte=20&page=$page"
     )).map { Title(it.id, type, it.name, it.year, it.overview, it.poster, it.rating) }
+
+    /** Seizoenen van een serie (specials achteraan). */
+    fun seasons(id: Int): List<Season> {
+        val arr = get("/tv/$id?language=nl-NL").optJSONArray("seasons") ?: return emptyList()
+        return (0 until arr.length()).map { arr.getJSONObject(it) }
+            .map { Season(it.optInt("season_number"), it.optString("name"), it.optInt("episode_count")) }
+            .filter { it.episodes > 0 }
+            .sortedBy { if (it.number == 0) 9_999 else it.number }
+    }
+
+    /** Afleveringen van één seizoen; lege Nederlandse tekst valt terug op Engels. */
+    fun episodes(id: Int, season: Int): List<Episode> {
+        fun load(lang: String) = get("/tv/$id/season/$season?language=$lang").optJSONArray("episodes")
+        val nl = load("nl-NL") ?: return emptyList()
+        val en = if ((0 until nl.length()).any { nl.getJSONObject(it).optString("overview").isEmpty() }) runCatching { load("en-US") }.getOrNull() else null
+        return (0 until nl.length()).map { i ->
+            val e = nl.getJSONObject(i)
+            val alt = en?.optJSONObject(i)
+            Episode(
+                e.optInt("episode_number"),
+                e.optString("name").ifEmpty { alt?.optString("name").orEmpty() },
+                e.optString("overview").ifEmpty { alt?.optString("overview").orEmpty() },
+                e.optString("air_date"),
+                e.optString("still_path").takeIf { it.startsWith("/") }?.let { "${IMG}w300$it" },
+                e.optInt("runtime"),
+            )
+        }
+    }
 
     /** Aanbieder-id's (abonnement/gratis) van een titel in Nederland. */
     fun providerIds(t: Title): Set<Int> {

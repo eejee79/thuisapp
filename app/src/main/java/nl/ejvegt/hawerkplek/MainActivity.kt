@@ -4148,7 +4148,7 @@ class MainActivity : Activity() {
             orientation = LinearLayout.VERTICAL
             setPadding(dp(18), dp(14), dp(18), dp(18))
         }
-        val dialog = sheetDialog(content)
+        val dialog = sheetDialog(ScrollView(this).apply { addView(content) })  // afleveringen kunnen lang worden
         content.addView(LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             val img = ImageView(this@MainActivity).apply {
@@ -4196,12 +4196,112 @@ class MainActivity : Activity() {
         })
         // Komt de titel uit een dienst-rij, dan staat die knop er meteen
         from?.let { svcButton(it) }
+        var openSvc: StreamSvc? = from
+        // Serie: seizoenen en afleveringen
+        if (t.type == "tv") {
+            val seasonRow = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; setPadding(0, dp(14), 0, dp(6)) }
+            content.addView(android.widget.HorizontalScrollView(this).apply { isHorizontalScrollBarEnabled = false; addView(seasonRow) })
+            val epList = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+            content.addView(epList)
+            val dateFmtIn = java.text.SimpleDateFormat("yyyy-MM-dd", NL)
+            val dateFmtOut = java.text.SimpleDateFormat("d MMM yyyy", NL)
+            fun showSeason(n: Int, chips: List<Pair<Int, TextView>>) {
+                chips.forEach { (num, c) ->
+                    val on = num == n
+                    c.setTextColor(if (on) 0xFF0B2430.toInt() else Color.WHITE)
+                    c.background = GradientDrawable().apply { setColor(if (on) 0xFF4FC3F7.toInt() else 0xFF2A2A2A.toInt()); cornerRadius = dp(16).toFloat() }
+                }
+                epList.removeAllViews()
+                epList.addView(TextView(this).apply { text = "Afleveringen laden…"; textSize = 13f; setTextColor(0xFF888888.toInt()) })
+                thread {
+                    val r = runCatching { tmdb.episodes(t.id, n) }
+                    runOnUiThread {
+                        epList.removeAllViews()
+                        val eps = r.getOrNull()
+                        if (eps.isNullOrEmpty()) {
+                            epList.addView(TextView(this).apply { text = "Geen afleveringen gevonden"; textSize = 13f; setTextColor(0xFF888888.toInt()) })
+                            return@runOnUiThread
+                        }
+                        val today = dateFmtIn.format(java.util.Date())
+                        eps.forEach { e ->
+                            val future = e.air.isNotEmpty() && e.air > today
+                            val row = LinearLayout(this).apply {
+                                orientation = LinearLayout.HORIZONTAL
+                                setPadding(dp(8), dp(8), dp(8), dp(8))
+                                background = GradientDrawable().apply { setColor(0xFF262626.toInt()); cornerRadius = dp(12).toFloat() }
+                                layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
+                                    .apply { bottomMargin = dp(6) }
+                                alpha = if (future) 0.55f else 1f
+                            }
+                            row.addView(ImageView(this).apply {
+                                scaleType = ImageView.ScaleType.CENTER_CROP
+                                clipToOutline = true
+                                background = GradientDrawable().apply { setColor(0xFF1A1A1A.toInt()); cornerRadius = dp(8).toFloat() }
+                                layoutParams = LinearLayout.LayoutParams(dp(112), dp(63)).apply { marginEnd = dp(10) }
+                                e.still?.let { loadImage(this, it) }
+                            })
+                            val desc = TextView(this).apply {
+                                text = e.overview.ifEmpty { "Geen beschrijving." }
+                                textSize = 12f; setTextColor(0xFFA8A8A8.toInt()); maxLines = 2
+                                ellipsize = android.text.TextUtils.TruncateAt.END
+                            }
+                            row.addView(LinearLayout(this).apply {
+                                orientation = LinearLayout.VERTICAL
+                                layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
+                                addView(TextView(this@MainActivity).apply {
+                                    text = "${e.number}. ${e.name}"
+                                    textSize = 14f; setTextColor(Color.WHITE); setTypeface(typeface, Typeface.BOLD)
+                                    maxLines = 2; ellipsize = android.text.TextUtils.TruncateAt.END
+                                })
+                                addView(TextView(this@MainActivity).apply {
+                                    val d = runCatching { dateFmtOut.format(dateFmtIn.parse(e.air)!!) }.getOrNull()
+                                    text = listOfNotNull(d, if (e.runtime > 0) "${e.runtime} min" else null, if (future) "nog niet uit" else null).joinToString(" · ")
+                                    textSize = 11f; setTextColor(0xFF4FC3F7.toInt()); setPadding(0, dp(2), 0, dp(2))
+                                })
+                                addView(desc)
+                            })
+                            // Tik = hele beschrijving; lang indrukken = serie openen op de tv
+                            var open = false
+                            row.isClickable = true
+                            row.setOnClickListener { open = !open; desc.maxLines = if (open) 30 else 2 }
+                            row.setOnLongClickListener {
+                                openSvc?.let { svc -> dialog.dismiss(); openStreamOnTv(t, svc) }
+                                true
+                            }
+                            epList.addView(row)
+                        }
+                        epList.addView(TextView(this).apply {
+                            text = "Tik = hele beschrijving · lang indrukken = serie openen op de tv (de aflevering kies je daar)"
+                            textSize = 11f; setTextColor(0xFF777777.toInt()); setPadding(dp(2), dp(4), 0, 0)
+                        })
+                    }
+                }
+            }
+            thread {
+                val seasons = runCatching { tmdb.seasons(t.id) }.getOrNull().orEmpty()
+                runOnUiThread {
+                    if (seasons.isEmpty()) return@runOnUiThread
+                    val chips = seasons.map { se ->
+                        se.number to TextView(this).apply {
+                            text = if (se.number == 0) "Specials" else "Seizoen ${se.number}"
+                            textSize = 13f; setTypeface(typeface, Typeface.BOLD)
+                            setPadding(dp(14), dp(7), dp(14), dp(7))
+                            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT)
+                                .apply { marginEnd = dp(8) }
+                        }
+                    }
+                    chips.forEach { (n, c) -> c.setOnClickListener { showSeason(n, chips) }; seasonRow.addView(c) }
+                    showSeason(seasons.first().number, chips)
+                }
+            }
+        }
         dialog.show()
         thread {
             val ids = runCatching { tmdb.providerIds(t) }.getOrNull()
             runOnUiThread {
                 if (ids == null) { note.text = "Kon niet ophalen waar het te zien is"; return@runOnUiThread }
                 val svcs = ids.mapNotNull { svcForProvider(it) }.distinct()
+                if (openSvc == null) openSvc = svcs.firstOrNull()
                 svcs.filter { it != from }.forEach { svcButton(it) }
                 note.text = when {
                     svcs.isEmpty() && from == null -> "Niet bij Netflix, Prime Video of Videoland. Zoeken op de tv kan wel:"
