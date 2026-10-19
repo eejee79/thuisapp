@@ -4236,7 +4236,16 @@ class MainActivity : Activity() {
                 else -> "am start -a android.search.action.GLOBAL_SEARCH --es query '$q'"
             }
             Thread.sleep(1_200)
-            quietService("androidtv/adb_command", JSONObject().put("entity_id", MEDIA_ADB).put("command", cmd))
+            fun adb(c: String) = quietService("androidtv/adb_command", JSONObject().put("entity_id", MEDIA_ADB).put("command", c))
+            adb(cmd)
+            if (svc.key == "prime") {
+                // Prime Video begint met "Wie kijkt er?": OK kiest het (laatst gebruikte) profiel,
+                // daarna de link nog een keer zodat je op de titel uitkomt
+                Thread.sleep(5_000)
+                adb("input keyevent 23")
+                Thread.sleep(3_500)
+                adb(cmd)
+            }
             runOnUiThread {
                 mediaStatus.text = if (direct && svc.key != "videoland") "${t.name} staat open in ${svc.name}"
                     else "${t.name}: opgezocht op de tv (geen direct ID bekend)"
