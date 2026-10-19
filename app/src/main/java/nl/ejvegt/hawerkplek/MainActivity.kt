@@ -8242,7 +8242,7 @@ class MainActivity : Activity() {
                 JSONObject().put("entity_id", TVPLUS_REMOTE).put("command", JSONArray(digits)).put("delay_secs", 0.3)
             )
             if (rewindTo != null) {
-                // Terugkijken zoals op de afstandsbediening: Gids, ◀ naar het programma, OK, OK.
+                // Terugkijken zoals op de afstandsbediening: Gids, zendernummer, ◀ naar het programma, OK, OK.
                 // Aantal keer ◀ = aantal programma's van het gekozen programma tot het huidige (uit onze gids).
                 val now = System.currentTimeMillis()
                 val steps = TvGuide.range(name, rewindTo, now + 1).count { it.start > rewindTo && it.start <= now }
@@ -8251,6 +8251,9 @@ class MainActivity : Activity() {
                     JSONObject().put("entity_id", TVPLUS_REMOTE).put("command", cmd).put("delay_secs", delay))
                 send("GUIDE")
                 Thread.sleep(3_000)
+                // In de gids het zendernummer intoetsen = naar die zender in de gids
+                send(JSONArray(num.toString().map { it.toString() }), 0.3)
+                Thread.sleep(2_500)
                 if (steps > 0) send(JSONArray(List(steps) { "DPAD_LEFT" }), 0.5)
                 Thread.sleep(1_500)
                 send("DPAD_CENTER")
