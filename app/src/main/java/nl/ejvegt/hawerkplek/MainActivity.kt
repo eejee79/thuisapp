@@ -7099,7 +7099,7 @@ class MainActivity : Activity() {
             }
             for (grp in TV_GROUPS) rows(grp.channels, tvGroup(list, grp.title, grp.channels.size, grp.open))
             status.text = if (TvGuide.data.isEmpty()) status.text
-                else if (at != null) "Wat er toen liep · tik op de rij om het terug te kijken · logo = dagoverzicht"
+                else if (at != null) "Wat er toen liep · tik = naar die zender · logo = dagoverzicht"
                 else "Tik op een zender om over te schakelen · tik op het logo voor het dagoverzicht"
         }
         render()
@@ -7202,10 +7202,6 @@ class MainActivity : Activity() {
                         dialog.dismiss()
                         when {
                             p.start > System.currentTimeMillis() -> tuneChannel(ch.num, ch.name)
-                            live -> AlertDialog.Builder(this@MainActivity).setTitle(p.title)
-                                .setItems(arrayOf("Live kijken", "Vanaf het begin")) { _, w ->
-                                    tuneChannel(ch.num, ch.name, if (w == 1) p.start else null)
-                                }.show()
                             else -> tuneChannel(ch.num, ch.name, p.start)
                         }
                     }
@@ -8245,7 +8241,7 @@ class MainActivity : Activity() {
                 "remote/send_command",
                 JSONObject().put("entity_id", TVPLUS_REMOTE).put("command", JSONArray(digits)).put("delay_secs", 0.3)
             )
-            if (rewindTo != null) {
+            if (rewindTo != null && false) {  // werkt niet op de KPN-box (cijfers = zender); uitgeschakeld
                 Thread.sleep(5_000)  // zender eerst laten starten
                 val minutes = ((System.currentTimeMillis() - rewindTo) / 60_000L + 1).toInt()
                 if (minutes in 1..9_999) {
@@ -8258,7 +8254,8 @@ class MainActivity : Activity() {
                 }
             }
             runOnUiThread {
-                mediaStatus.text = if (rewindTo != null) "$name: terugkijken vanaf het begin" else "$name (kanaal $num)"
+                mediaStatus.text = "$name (kanaal $num)"
+                if (rewindTo != null) Toast.makeText(this, "Terugkijken: start het programma via de KPN-gids op tv", Toast.LENGTH_LONG).show()
                 refreshMedia()
             }
         }
