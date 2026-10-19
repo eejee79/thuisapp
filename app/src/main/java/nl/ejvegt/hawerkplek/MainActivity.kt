@@ -161,6 +161,15 @@ class MainActivity : Activity() {
         /** De TV+-box achter die Denon-ingang ("KPN Hangplek" in HA). */
         const val TVPLUS_REMOTE = "remote.kpn_diw7022"
         const val TVPLUS_PLAYER = "media_player.kpn_diw7022"
+        /** Tweede TV+-ontvanger (werkplek; geluid via optisch, dus geen volumeregeling). */
+        const val TVPLUS2_REMOTE = "remote.tv_werkplek"
+        const val TVPLUS2_PLAYER = "media_player.tv_werkplek"
+        /** TV+-ontvangers: remote → kamernaam, kleur. */
+        val TV_BOXES = listOf(
+            Triple(TVPLUS_REMOTE, "Woonkamer", 0xFF18BCF2.toInt()),
+            Triple(TVPLUS2_REMOTE, "Werkplek", 0xFFFFB74D.toInt()),
+        )
+        private const val KEY_TV_BOX = "tv_box"
         const val CHROMECAST_AUDIO = "media_player.chromecastaudio8913"
         /** Spotify-integratie: weet altijd welk nummer er speelt (de cast-bridge geeft dat niet door). */
         const val SPOTIFY = "media_player.spotify_ejvegt"
@@ -3516,6 +3525,9 @@ class MainActivity : Activity() {
     @Volatile private var mediaBusy = false
 
     /** Wat de balk toont. [entity] = mediaspeler voor de pauzeknop (null = geen knop). */
+    private lateinit var werkBar: LinearLayout
+    private lateinit var werkText: TextView
+
     private class NowInfo(
         val title: String, val sub: String, val icon: Int?, val iconBg: Int,
         val entity: String?, val playing: Boolean, val tv: Boolean = false,
@@ -3601,7 +3613,7 @@ class MainActivity : Activity() {
             isClickable = true
             setOnClickListener {
                 val r = nowRemote
-                if (r != null) showRemoteSheet(r, r == TVPLUS_REMOTE)
+                if (r != null) showRemoteSheet(r, r == TVPLUS_REMOTE || r == TVPLUS2_REMOTE)
                 else nowEntity?.let { showMediaSheet(it, nowTitle.text.toString().removeSuffix(" ▾")) }
             }
         }
@@ -3636,7 +3648,7 @@ class MainActivity : Activity() {
             ).apply { marginStart = dp(6) }
             visibility = View.GONE
             // Gids openen op TV+ en meteen de afstandsbediening erbij
-            setOnClickListener { showGuideSheet() }
+            setOnClickListener { tvBox = TVPLUS_REMOTE; showGuideSheet() }
         }
         nowBar.addView(nowChannelBtn)
         nowBar.addView(nowGuideBtn)
@@ -3645,6 +3657,45 @@ class MainActivity : Activity() {
         nowBar.addView(nowRemoteBtn)
         nowBar.addView(nowPlayPause)
         mediaList.addView(nowBar)
+
+        // Tweede TV+ (werkplek): eigen compacte rij zodra die box aan staat
+        werkBar = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            setPadding(dp(12), dp(8), dp(8), dp(8))
+            background = GradientDrawable().apply {
+                setColor(0xFF1E1E1E.toInt()); cornerRadius = dp(14).toFloat(); setStroke(dp(1), 0xFF5A4320.toInt())
+            }
+            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
+                .apply { bottomMargin = dp(12) }
+            visibility = View.GONE
+            addView(TextView(this@MainActivity).apply {
+                text = "WERKPLEK"; textSize = 10f; setTypeface(typeface, Typeface.BOLD); setTextColor(0xFF2B1A00.toInt())
+                setPadding(dp(6), dp(2), dp(6), dp(2))
+                background = GradientDrawable().apply { setColor(boxColor(TVPLUS2_REMOTE)); cornerRadius = dp(6).toFloat() }
+            })
+            werkText = TextView(this@MainActivity).apply {
+                textSize = 14f; setTextColor(Color.WHITE); maxLines = 1; ellipsize = android.text.TextUtils.TruncateAt.END
+                setPadding(dp(10), 0, dp(6), 0)
+                layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
+            }
+            addView(werkText)
+            addView(TextView(this@MainActivity).apply {
+                text = "Gids"; textSize = 13f; setTextColor(Color.WHITE); setTypeface(typeface, Typeface.BOLD)
+                setPadding(dp(11), dp(6), dp(11), dp(6))
+                background = GradientDrawable().apply { setColor(0xFF1565C0.toInt()); cornerRadius = dp(15).toFloat() }
+                isClickable = true
+                setOnClickListener { tvBox = TVPLUS2_REMOTE; showGuideSheet() }
+            })
+            addView(ImageView(this@MainActivity).apply {
+                setImageResource(R.drawable.ic_remote)
+                contentDescription = "Afstandsbediening werkplek"
+                setPadding(dp(10), dp(4), dp(4), dp(4))
+                isClickable = true
+                setOnClickListener { showRemoteSheet(TVPLUS2_REMOTE, true) }
+            })
+        }
+        mediaList.addView(werkBar)
 
         tileGrid = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
         mediaList.addView(tileGrid)
@@ -6823,6 +6874,53 @@ class MainActivity : Activity() {
 
     // ---------- Zenders kiezen (KPN TV+) ----------
 
+    /** Welke TV+-ontvanger de zenderkeuze, gids en afstandsbediening nu bedienen. */
+    private var tvBox: String
+        get() = prefs().getString(KEY_TV_BOX, TVPLUS_REMOTE).takeIf { b -> TV_BOXES.any { it.first == b } } ?: TVPLUS_REMOTE
+        set(v) { prefs().edit().putString(KEY_TV_BOX, v).apply() }
+    private fun boxName(b: String) = TV_BOXES.firstOrNull { it.first == b }?.second ?: "TV+"
+    private fun boxColor(b: String) = TV_BOXES.firstOrNull { it.first == b }?.third ?: 0xFF18BCF2.toInt()
+    private fun lastChannelKey(b: String) = if (b == TVPLUS_REMOTE) KEY_LAST_CHANNEL else KEY_LAST_CHANNEL + "_" + b.substringAfter('.')
+    private fun lastChannelNum(b: String) = prefs().getInt(lastChannelKey(b), -1)
+    private fun lastChannelOf(b: String) = lastChannelNum(b).let { n -> TV_CHANNELS.firstOrNull { it.num == n } }
+
+    /** Kiezer "Kijken op: Woonkamer ▾" — wisselt de ontvanger; [onChange] tekent opnieuw. */
+    private fun boxChip(onChange: () -> Unit): TextView = TextView(this).apply {
+        textSize = 14f
+        setTextColor(Color.WHITE)
+        setPadding(dp(14), dp(9), dp(14), dp(9))
+        fun paint() {
+            val c = boxColor(tvBox)
+            text = "Kijken op  ${boxName(tvBox)}  ▾"
+            background = GradientDrawable().apply {
+                setColor((c and 0x00FFFFFF) or 0x33000000); setStroke(dp(1), c); cornerRadius = dp(18).toFloat()
+            }
+        }
+        paint()
+        layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT)
+            .apply { topMargin = dp(8) }
+        isClickable = true
+        setOnClickListener {
+            val i = TV_BOXES.indexOfFirst { it.first == tvBox }
+            tvBox = TV_BOXES[(i + 1) % TV_BOXES.size].first
+            paint(); onChange()
+        }
+    }
+
+    /** Klein label met de kamer waar deze zender nu op staat (of null). */
+    private fun onBoxBadge(num: Int): TextView? {
+        val boxes = TV_BOXES.filter { lastChannelNum(it.first) == num }
+        if (boxes.isEmpty()) return null
+        return TextView(this).apply {
+            text = boxes.joinToString(" · ") { it.second.uppercase(NL) }
+            textSize = 10f
+            setTypeface(typeface, Typeface.BOLD)
+            setTextColor(0xFF111111.toInt())
+            setPadding(dp(6), dp(2), dp(6), dp(2))
+            background = GradientDrawable().apply { setColor(boxes.first().third); cornerRadius = dp(6).toFloat() }
+        }
+    }
+
     private fun lastChannel(): TvChannel? {
         val n = prefs().getInt(KEY_LAST_CHANNEL, -1)
         return TV_CHANNELS.firstOrNull { it.num == n }
@@ -7031,6 +7129,7 @@ class MainActivity : Activity() {
             addView(stepBtn("1 uur ▶") { at?.let { setAt(it + hour) } })
         }
         content.addView(stepRow, 2)  // direct onder de titel
+        content.addView(boxChip { render() }, 2)
         atLabel.setOnClickListener {
             // Dag kiezen (7 dagen terug), daarna het tijdstip
             val dayFmt = java.text.SimpleDateFormat("EEEE d MMMM", NL)
@@ -7075,7 +7174,7 @@ class MainActivity : Activity() {
                     setPadding(dp(10), dp(10), dp(10), dp(10))
                     background = GradientDrawable().apply {
                         setColor(0xFF262626.toInt()); cornerRadius = dp(12).toFloat()
-                        if (ch.num == current) setStroke(dp(2), 0xFF18BCF2.toInt())
+                        if (ch.num == lastChannelNum(tvBox)) setStroke(dp(2), boxColor(tvBox))
                     }
                     layoutParams = LinearLayout.LayoutParams(
                         ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT
@@ -7154,6 +7253,7 @@ class MainActivity : Activity() {
                         ellipsize = android.text.TextUtils.TruncateAt.END
                     })
                 })
+                onBoxBadge(ch.num)?.let { b -> row.addView(b) }
                 into.addView(row)
             }
             for (grp in TV_GROUPS) rows(grp.channels, tvGroup(list, grp.title, grp.channels.size, grp.open))
@@ -7459,6 +7559,7 @@ class MainActivity : Activity() {
             setTextColor(Color.WHITE)
             setTypeface(typeface, Typeface.BOLD)
         })
+        content.addView(boxChip { dialog.dismiss(); showChannelSheet() })
 
         fun section(title: String) = TextView(this).apply {
             text = title.uppercase(NL)
@@ -7489,7 +7590,7 @@ class MainActivity : Activity() {
                         cell.background = GradientDrawable().apply {
                             setColor(0xFF2A2A2A.toInt())
                             cornerRadius = dp(12).toFloat()
-                            if (ch.num == prefs().getInt(KEY_LAST_CHANNEL, -1)) setStroke(dp(2), 0xFF18BCF2.toInt())
+                            TV_BOXES.firstOrNull { lastChannelNum(it.first) == ch.num }?.let { setStroke(dp(2), it.third) }
                         }
                         cell.addView(TextView(this).apply {
                             text = ch.num.toString()
@@ -8012,8 +8113,42 @@ class MainActivity : Activity() {
                 gravity = Gravity.CENTER_HORIZONTAL; bottomMargin = dp(12)
             }
         })
-        content.addView(TextView(this).apply {
-            text = if (kpn) "TV+ woonkamer" else "GoogleTV Box"
+        if (kpn) {
+            tvBox = remote
+            // Wissel tussen de TV+-ontvangers: elke kamer zijn eigen kleur, met wat er nu op staat
+            content.addView(LinearLayout(this).apply {
+                orientation = LinearLayout.HORIZONTAL
+                setPadding(dp(4), dp(4), dp(4), dp(4))
+                background = GradientDrawable().apply { setColor(0xFF121212.toInt()); cornerRadius = dp(14).toFloat() }
+                layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
+                    .apply { bottomMargin = dp(12) }
+                TV_BOXES.forEach { (r, name, color) ->
+                    val on = r == remote
+                    addView(LinearLayout(this@MainActivity).apply {
+                        orientation = LinearLayout.VERTICAL
+                        gravity = Gravity.CENTER
+                        setPadding(0, dp(7), 0, dp(7))
+                        background = GradientDrawable().apply { setColor(if (on) color else Color.TRANSPARENT); cornerRadius = dp(11).toFloat() }
+                        layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
+                        addView(TextView(this@MainActivity).apply {
+                            text = name; textSize = 15f; setTypeface(typeface, Typeface.BOLD)
+                            setTextColor(if (on) 0xFF111111.toInt() else Color.WHITE)
+                        })
+                        addView(TextView(this@MainActivity).apply {
+                            text = lastChannelOf(r)?.let { c -> c.name + (TvGuide.nowNext(c.name).first?.let { " · ${it.title}" } ?: "") } ?: "TV+"
+                            textSize = 11f; maxLines = 1; ellipsize = android.text.TextUtils.TruncateAt.END
+                            setTextColor(if (on) 0xFF222222.toInt() else 0xFFB0B0B0.toInt())
+                            setPadding(dp(6), 0, dp(6), 0)
+                        })
+                        if (!on) {
+                            isClickable = true
+                            setOnClickListener { dialog.dismiss(); showRemoteSheet(r, true) }
+                        }
+                    })
+                }
+            })
+        } else content.addView(TextView(this).apply {
+            text = "GoogleTV Box"
             textSize = 19f
             setTextColor(Color.WHITE)
             setTypeface(typeface, Typeface.BOLD)
@@ -8269,7 +8404,7 @@ class MainActivity : Activity() {
                     return Prog("kodi:$pid", pd.first, pd.second, playing, title)
                 }
             }
-            val entity = maPlayerOnBox(remote) ?: if (remote == MEDIA_REMOTE) MEDIA_PLAYER else TVPLUS_PLAYER
+            val entity = maPlayerOnBox(remote) ?: if (remote == MEDIA_REMOTE) MEDIA_PLAYER else if (remote == TVPLUS2_REMOTE) TVPLUS2_PLAYER else TVPLUS_PLAYER
             val st = stateOf(entity) ?: return null
             val a = st.optJSONObject("attributes") ?: return null
             val dur = a.optDouble("media_duration", 0.0)
@@ -8389,24 +8524,24 @@ class MainActivity : Activity() {
 
     /** Alles aan (indien nodig) en het kanaalnummer als cijfertoetsen naar de TV+-box sturen. */
     /** Overschakelen; met [rewindTo] daarna terugspoelen naar dat tijdstip (KPN: minuten intoetsen + ⏪). */
-    private fun tuneChannel(num: Int, name: String, rewindTo: Long? = null) {
-        prefs().edit().putInt(KEY_LAST_CHANNEL, num).apply()
+    private fun tuneChannel(num: Int, name: String, rewindTo: Long? = null, box: String = tvBox) {
+        prefs().edit().putInt(lastChannelKey(box), num).apply()
         mediaStatus.text = "$name kiezen…"
-        showRemoteSheet(TVPLUS_REMOTE, true)  // na zappen direct de afstandsbediening
+        showRemoteSheet(box, true)  // na zappen direct de afstandsbediening
         thread {
-            val boxWasOff = stateOf(TVPLUS_REMOTE)?.optString("state") != "on"
-            if (boxWasOff) quietService("remote/turn_on", JSONObject().put("entity_id", TVPLUS_REMOTE))
-            prepareWatching(SOURCE_TV)
+            val boxWasOff = stateOf(box)?.optString("state") != "on"
+            if (boxWasOff) quietService("remote/turn_on", JSONObject().put("entity_id", box))
+            if (box == TVPLUS_REMOTE) prepareWatching(SOURCE_TV)  // werkplek: eigen tv, geen receiver
             if (boxWasOff) Thread.sleep(6_000)  // box laten opstarten
             else {
                 // Bij terugkijken zou het zendernummer als spoeltijd gelden: eerst naar het beginscherm (Home)
-                quietService("remote/send_command", JSONObject().put("entity_id", TVPLUS_REMOTE).put("command", "HOME"))
+                quietService("remote/send_command", JSONObject().put("entity_id", box).put("command", "HOME"))
                 Thread.sleep(2_000)
             }
             val digits = num.toString().map { it.toString() }
             quietService(
                 "remote/send_command",
-                JSONObject().put("entity_id", TVPLUS_REMOTE).put("command", JSONArray(digits)).put("delay_secs", 0.3)
+                JSONObject().put("entity_id", box).put("command", JSONArray(digits)).put("delay_secs", 0.3)
             )
             if (rewindTo != null) {
                 // Terugkijken zoals op de afstandsbediening: Gids, zendernummer, ◀ naar het programma, OK, OK.
@@ -8422,7 +8557,7 @@ class MainActivity : Activity() {
                 val right = if (rewindTo > refStart) progs.count { it.start > refStart && it.start <= rewindTo } else 0
                 Thread.sleep(3_000)  // zender eerst laten starten
                 fun send(cmd: Any, delay: Double = 0.3) = quietService("remote/send_command",
-                    JSONObject().put("entity_id", TVPLUS_REMOTE).put("command", cmd).put("delay_secs", delay))
+                    JSONObject().put("entity_id", box).put("command", cmd).put("delay_secs", delay))
                 // De Gids-toets (172) komt via de koppeling niet aan; vanuit live tv opent ▲ + OK de gids
                 send("DPAD_UP")
                 Thread.sleep(800)
@@ -8440,7 +8575,7 @@ class MainActivity : Activity() {
                 send("DPAD_CENTER")
             }
             runOnUiThread {
-                mediaStatus.text = "$name (kanaal $num)"
+                mediaStatus.text = "$name (kanaal $num) · ${boxName(box)}"
                 if (rewindTo != null) mediaStatus.text = "$name: terugkijken gestart via de gids"
                 refreshMedia()
             }
@@ -8449,7 +8584,7 @@ class MainActivity : Activity() {
 
     private fun sendTvKeys(keys: List<String>, label: String) {
         mediaStatus.text = label
-        keys.forEach { sendRemoteKey(TVPLUS_REMOTE, it) }
+        keys.forEach { sendRemoteKey(tvBox, it) }
     }
 
     /**
@@ -8486,14 +8621,15 @@ class MainActivity : Activity() {
 
     private fun watchTv() {
         mediaStatus.text = "TV kijken: tv en receiver aanzetten…"
+        val box = tvBox
         thread {
             // TV+-box aan (alleen als hij uit staat; aan/uit is bij deze box een schakelknop)
-            if (stateOf(TVPLUS_REMOTE)?.optString("state") != "on") {
-                quietService("remote/turn_on", JSONObject().put("entity_id", TVPLUS_REMOTE))
+            if (stateOf(box)?.optString("state") != "on") {
+                quietService("remote/turn_on", JSONObject().put("entity_id", box))
             }
-            prepareWatching(SOURCE_TV)
+            if (box == TVPLUS_REMOTE) prepareWatching(SOURCE_TV)
             runOnUiThread {
-                mediaStatus.text = "TV kijken: receiver staat op TV+ woonkamer"
+                mediaStatus.text = if (box == TVPLUS_REMOTE) "TV kijken: receiver staat op TV+ woonkamer" else "TV+ ${boxName(box)} staat aan"
                 refreshMedia()
             }
         }
@@ -8582,7 +8718,14 @@ class MainActivity : Activity() {
         thread {
             try {
                 val info = runCatching { nowPlaying() }
-                runOnUiThread { showNowBar(info) }
+                val werkOn = runCatching { isOn(stateOf(TVPLUS2_REMOTE)) }.getOrDefault(false)
+                runOnUiThread {
+                    showNowBar(info)
+                    werkBar.visibility = if (werkOn) View.VISIBLE else View.GONE
+                    if (werkOn) werkText.text = lastChannelOf(TVPLUS2_REMOTE)?.let { c ->
+                        c.name + (TvGuide.nowNext(c.name).first?.let { " · ${it.title}" } ?: "")
+                    } ?: "TV+ werkplek"
+                }
             } finally {
                 mediaBusy = false
             }
