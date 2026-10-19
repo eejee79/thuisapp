@@ -4382,12 +4382,19 @@ class MainActivity : Activity() {
                 }
             } else adb(cmd)
             if (svc.key == "prime") {
-                // Prime Video begint met "Wie kijkt er?": OK kiest het (laatst gebruikte) profiel,
-                // daarna de link nog een keer zodat je op de titel uitkomt
+                // Prime Video toont bij elke link "Wie kijkt er?": profiel kiezen (OK), link opnieuw,
+                // en het profielscherm dat dan wéér komt ook met OK bevestigen → titelpagina
                 Thread.sleep(5_000)
                 adb("input keyevent 23")
                 Thread.sleep(3_500)
                 adb(cmd)
+                Thread.sleep(5_000)
+                adb("input keyevent 23")
+            }
+            if (svc.key == "netflix" && direct) {
+                // Netflix staat op de titelpagina met Afspelen geselecteerd: bevestigen
+                Thread.sleep(7_000)
+                adb("input keyevent 23")
             }
             runOnUiThread {
                 mediaStatus.text = when {
