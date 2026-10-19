@@ -4371,13 +4371,16 @@ class MainActivity : Activity() {
                     // Zoekscherm van Videoland openen (pad dat de app kent), dan zelf de titel intypen:
                     // ▲ naar de zoekbalk, ▶ (vanaf de microfoon) en OK, tekst, Enter, ▼ naar het eerste resultaat, OK
                     adb("am start -a android.intent.action.VIEW -d 'https://v2.videoland.com/zoeken' ${svc.pkg}")
-                    Thread.sleep(5_000)
-                    adb("input keyevent 19 && sleep 0.4 && input keyevent 22 && sleep 0.4 && input keyevent 23")
-                    Thread.sleep(1_500)
+                    Thread.sleep(3_500)
+                    adb("input keyevent 19 && sleep 0.3 && input keyevent 22 && sleep 0.3 && input keyevent 23")
+                    Thread.sleep(1_000)
                     val typed = java.text.Normalizer.normalize(q, java.text.Normalizer.Form.NFD).replace(Regex("[^A-Za-z0-9 ]"), " ").trim().replace(Regex(" +"), "%s")
-                    adb("input text '$typed' && sleep 0.5 && input keyevent 66")
-                    Thread.sleep(3_000)
-                    adb("input keyevent 20 && sleep 0.5 && input keyevent 23")
+                    adb("input text '$typed' && sleep 0.4 && input keyevent 66")
+                    Thread.sleep(2_000)
+                    adb("input keyevent 20 && sleep 0.4 && input keyevent 23")
+                    // Titelpagina: Afspelen staat geselecteerd → bevestigen
+                    Thread.sleep(2_500)
+                    adb("input keyevent 23")
                     how = "ok"
                 }
             } else adb(cmd)
@@ -4393,7 +4396,7 @@ class MainActivity : Activity() {
             }
             if (svc.key == "netflix" && direct) {
                 // Netflix staat op de titelpagina met Afspelen geselecteerd: bevestigen
-                Thread.sleep(7_000)
+                Thread.sleep(6_000)
                 adb("input keyevent 23")
             }
             runOnUiThread {
