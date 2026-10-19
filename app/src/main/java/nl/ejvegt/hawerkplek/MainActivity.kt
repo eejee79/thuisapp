@@ -8246,21 +8246,21 @@ class MainActivity : Activity() {
                 // Aantal keer ◀ = aantal programma's van het gekozen programma tot het huidige (uit onze gids).
                 val now = System.currentTimeMillis()
                 val steps = TvGuide.range(name, rewindTo, now + 1).count { it.start > rewindTo && it.start <= now }
-                Thread.sleep(5_000)  // zender eerst laten starten
-                fun send(cmd: Any, delay: Double = 0.4) = quietService("remote/send_command",
+                Thread.sleep(3_000)  // zender eerst laten starten
+                fun send(cmd: Any, delay: Double = 0.3) = quietService("remote/send_command",
                     JSONObject().put("entity_id", TVPLUS_REMOTE).put("command", cmd).put("delay_secs", delay))
                 // De Gids-toets (172) komt via de koppeling niet aan; vanuit live tv opent ▲ + OK de gids
                 send("DPAD_UP")
-                Thread.sleep(1_500)
+                Thread.sleep(800)
                 send("DPAD_CENTER")
-                Thread.sleep(3_000)
+                Thread.sleep(2_000)
                 // In de gids het zendernummer intoetsen = naar die zender in de gids
-                send(JSONArray(num.toString().map { it.toString() }), 0.3)
-                Thread.sleep(2_500)
-                if (steps > 0) send(JSONArray(List(steps) { "DPAD_LEFT" }), 0.5)
+                send(JSONArray(num.toString().map { it.toString() }), 0.25)
                 Thread.sleep(1_500)
+                if (steps > 0) send(JSONArray(List(steps) { "DPAD_LEFT" }), 0.35)
+                Thread.sleep(800)
                 send("DPAD_CENTER")
-                Thread.sleep(2_500)
+                Thread.sleep(1_500)
                 send("DPAD_CENTER")
             }
             runOnUiThread {
