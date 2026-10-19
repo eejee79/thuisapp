@@ -61,6 +61,57 @@ class TmdbApi(private val key: () -> String) {
 
     fun trending(): List<Title> = titles(get("/trending/all/week?language=nl-NL"))
 
+    /** Populair bij één dienst in Nederland (abonnement), films of series. */
+    fun discover(type: String, providers: String, page: Int = 1): List<Title> = titles(get(
+        "/discover/$type?language=nl-NL&watch_region=NL&with_watch_providers=" + URLEncoder.encode(providers, "UTF-8") +
+            "&with_watch_monetization_types=flatrate%7Cads&sort_by=popularity.desc&vote_count.gte=20&page=$page"
+    )).map { Title(it.id, type, it.name, it.year, it.overview, it.poster, it.rating) }
+
+    /** Aanbieder-id's (abonnement/gratis) van een titel in Nederland. */
+    fun providerIds(t: Title): Set<Int> {
+        val nl = get("/${t.type}/${t.id}/watch/providers").optJSONObject("results")?.optJSONObject("NL") ?: return emptySet()
+        val out = HashSet<Int>()
+        for (key in listOf("flatrate", "ads", "free")) {
+            val arr = nl.optJSONArray(key) ?: continue
+            for (i in 0 until arr.length()) out.add(arr.getJSONObject(i).optInt("provider_id"))
+        }
+        return out
+    }
+
+    /**
+     * ID's bij de streamingdiensten zelf (Netflix, Prime Video, Videoland) via Wikidata,
+     * gekoppeld op het TMDB-nummer. Geeft bijv. {"netflix": "80057281"}; leeg als onbekend.
+     */
+    fun serviceIds(t: Title): Map<String, String> {
+        val prop = if (t.type == "tv") "P4983" else "P4947"
+        val q = """SELECT ?l ?v WHERE { ?i wdt:$prop "${t.id}" . ?i ?p ?v . ?pr wikibase:directClaim ?p ; rdfs:label ?l .
+            FILTER(LANG(?l) = "en") FILTER(REGEX(?l, "Netflix|Prime Video|Videoland", "i")) } LIMIT 20"""
+        val conn = URL("https://query.wikidata.org/sparql?format=json&query=" + URLEncoder.encode(q, "UTF-8"))
+            .openConnection() as HttpURLConnection
+        conn.connectTimeout = 8_000
+        conn.readTimeout = 12_000
+        conn.setRequestProperty("Accept", "application/sparql-results+json")
+        conn.setRequestProperty("User-Agent", "Thuisbasis/2 (prive Android-app)")
+        if (conn.responseCode !in 200..299) return emptyMap()
+        val rows = JSONObject(conn.inputStream.bufferedReader().use { it.readText() })
+            .optJSONObject("results")?.optJSONArray("bindings") ?: return emptyMap()
+        val out = HashMap<String, String>()
+        for (i in 0 until rows.length()) {
+            val r = rows.getJSONObject(i)
+            val label = r.optJSONObject("l")?.optString("value")?.lowercase().orEmpty()
+            val v = r.optJSONObject("v")?.optString("value").orEmpty()
+            if (v.isEmpty() || v.startsWith("http")) continue
+            val key = when {
+                "netflix" in label -> "netflix"
+                "prime video" in label -> "prime"
+                "videoland" in label -> "videoland"
+                else -> continue
+            }
+            out.putIfAbsent(key, v)
+        }
+        return out
+    }
+
     /** Waar is het in Nederland te zien: abonnement, gratis (met reclame), huren of kopen. */
     fun providers(t: Title): List<Provider> {
         val nl = get("/${t.type}/${t.id}/watch/providers").optJSONObject("results")?.optJSONObject("NL") ?: return emptyList()
