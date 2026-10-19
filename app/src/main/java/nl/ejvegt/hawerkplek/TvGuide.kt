@@ -41,6 +41,10 @@ object TvGuide {
     private fun time(s: String?): Long? = s?.let { runCatching { synchronized(timeFmt) { timeFmt.parse(it.trim())?.time } }.getOrNull() }
 
     /** Gids (bij)laden; blokkeert, dus in een achtergrondthread aanroepen. Geeft een foutmelding of null. */
+    /** Eigen archief: programma's van de afgelopen dagen blijven bewaard, ook als de bron ze niet meer levert. */
+    private const val KEEP_MS = 8 * 24 * 3_600_000L
+    @Volatile var histDir: File? = null
+
     fun ensure(cacheDir: File, channels: List<String>, force: Boolean = false): String? {
         val now = System.currentTimeMillis()
         if (!force && data.isNotEmpty() && now - loadedAt < 3 * 3_600_000L) return null
@@ -65,7 +69,7 @@ object TvGuide {
         val wanted = channels.associateBy { norm(it) }          // genormaliseerd → naam in de app
         val idToName = HashMap<String, String>()
         val out = HashMap<String, MutableList<Prog>>()
-        val from = System.currentTimeMillis() - 3 * 3_600_000L
+        val from = System.currentTimeMillis() - KEEP_MS
         val until = System.currentTimeMillis() + 30 * 3_600_000L
         val p = android.util.Xml.newPullParser()
         GZIPInputStream(BufferedInputStream(FileInputStream(file), 1 shl 16)).use { input ->
@@ -117,14 +121,52 @@ object TvGuide {
                 ev = p.next()
             }
         }
-        data = out.mapValues { (_, v) -> v.sortedBy { it.start }.distinctBy { it.start } }
+        data = histDir?.let { runCatching { mergeHistory(it, out) }.getOrNull() }
+            ?: out.mapValues { (_, v) -> v.sortedBy { it.start }.distinctBy { it.start } }
         loadedAt = System.currentTimeMillis()
     }
 
+    private fun esc(s: String) = s.replace('\t', ' ').replace('\n', ' ').replace('\r', ' ')
+
+    /** Archief inlezen, vullen met de nieuwe gids (die wint vanaf zijn eerste programma) en terugschrijven. */
+    private fun mergeHistory(dir: File, fresh: Map<String, List<Prog>>): Map<String, List<Prog>> {
+        val f = File(dir, "epg_history.tsv")
+        val cutoff = System.currentTimeMillis() - KEEP_MS
+        val all = HashMap<String, MutableList<Prog>>()
+        if (f.exists()) f.forEachLine { line ->
+            val p = line.split('\t')
+            if (p.size < 4) return@forEachLine
+            val st = p[1].toLongOrNull() ?: return@forEachLine
+            val sp = p[2].toLongOrNull() ?: return@forEachLine
+            if (sp < cutoff) return@forEachLine
+            all.getOrPut(p[0]) { mutableListOf() }.add(Prog(st, sp, p[3], p.getOrNull(4)?.takeIf { it.isNotEmpty() }))
+        }
+        for ((ch, l) in fresh) {
+            if (l.isEmpty()) continue
+            val first = l.minOf { it.start }
+            val keep = all[ch]?.filter { it.start < first }.orEmpty()
+            all[ch] = (keep + l).toMutableList()
+        }
+        val result = all.mapValues { (_, v) -> v.sortedBy { it.start }.distinctBy { it.start } }
+        val tmp = File(dir, "epg_history.tmp")
+        tmp.bufferedWriter().use { w ->
+            for ((ch, l) in result) for (p in l) {
+                w.write(esc(ch)); w.write("\t"); w.write(p.start.toString()); w.write("\t"); w.write(p.stop.toString())
+                w.write("\t"); w.write(esc(p.title)); w.write("\t"); w.write(esc(p.desc?.take(300) ?: "")); w.write("\n")
+            }
+        }
+        tmp.renameTo(f)
+        return result
+    }
+
+    /** Programma's van een zender binnen [from, to). */
+    fun range(channel: String, from: Long, to: Long): List<Prog> =
+        data[channel]?.filter { it.stop > from && it.start < to }.orEmpty()
+
     /** (nu, straks) voor een zender. */
-    fun nowNext(channel: String): Pair<Prog?, Prog?> {
+    fun nowNext(channel: String, at: Long = System.currentTimeMillis()): Pair<Prog?, Prog?> {
         val list = data[channel] ?: return null to null
-        val now = System.currentTimeMillis()
+        val now = at
         val i = list.indexOfFirst { it.start <= now && it.stop > now }
         return if (i >= 0) list[i] to list.getOrNull(i + 1) else null to list.firstOrNull { it.start > now }
     }

@@ -6933,7 +6933,70 @@ class MainActivity : Activity() {
         val timeFmt = java.text.SimpleDateFormat("HH:mm", NL)
         fun hm(t: Long) = timeFmt.format(java.util.Date(t))
         val current = prefs().getInt(KEY_LAST_CHANNEL, -1)
-        fun render() {
+        // Tijdstip in de gids: null = nu (live), anders terugbladeren
+        var at: Long? = null
+        val atFmt = java.text.SimpleDateFormat("EEE d MMM HH:mm", NL)
+        lateinit var render: () -> Unit
+        val atLabel = TextView(this).apply {
+            textSize = 14f
+            setTextColor(Color.WHITE)
+            setTypeface(typeface, Typeface.BOLD)
+            gravity = Gravity.CENTER
+            setPadding(dp(12), dp(8), dp(12), dp(8))
+            background = GradientDrawable().apply { setColor(0xFF2A2A2A.toInt()); cornerRadius = dp(16).toFloat() }
+            layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f).apply { marginStart = dp(8); marginEnd = dp(8) }
+        }
+        fun setAt(t: Long?) {
+            at = t?.takeIf { it < System.currentTimeMillis() - 60_000L }
+            atLabel.text = at?.let { "↺  " + atFmt.format(java.util.Date(it)) } ?: "Nu"
+            atLabel.background = GradientDrawable().apply {
+                setColor(if (at == null) 0xFF2A2A2A.toInt() else 0xFF4A3A10.toInt()); cornerRadius = dp(16).toFloat()
+            }
+            render()
+        }
+        fun stepBtn(label: String, onTap: () -> Unit) = TextView(this).apply {
+            text = label
+            textSize = 14f
+            setTextColor(Color.WHITE)
+            setTypeface(typeface, Typeface.BOLD)
+            gravity = Gravity.CENTER
+            setPadding(dp(14), dp(8), dp(14), dp(8))
+            background = GradientDrawable().apply { setColor(0xFF2A2A2A.toInt()); cornerRadius = dp(16).toFloat() }
+            isClickable = true
+            setOnClickListener { onTap() }
+        }
+        val hour = 3_600_000L
+        fun floorHour(t: Long) = t - (t % (30 * 60_000L))
+        content.addView(LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            setPadding(0, dp(8), 0, dp(2))
+            addView(stepBtn("◀ 1 uur") { setAt(floorHour(at ?: System.currentTimeMillis()) - if (at == null) 0 else hour) })
+            addView(atLabel)
+            addView(stepBtn("1 uur ▶") { at?.let { setAt(it + hour) } })
+        }, 2)  // direct onder de titel
+        atLabel.setOnClickListener {
+            // Dag kiezen (7 dagen terug), daarna het tijdstip
+            val dayFmt = java.text.SimpleDateFormat("EEEE d MMMM", NL)
+            val cal = java.util.Calendar.getInstance()
+            val days = (0..7).map { back ->
+                (cal.clone() as java.util.Calendar).apply { add(java.util.Calendar.DAY_OF_YEAR, -back) }
+            }
+            val names = arrayOf("Nu (live)") + days.mapIndexed { i, c ->
+                when (i) { 0 -> "Vandaag"; 1 -> "Gisteren"; else -> dayFmt.format(c.time) }
+            }
+            AlertDialog.Builder(this).setTitle("Terugkijken: welke dag?").setItems(names) { _, which ->
+                if (which == 0) { setAt(null); return@setItems }
+                val c = days[which - 1]
+                android.app.TimePickerDialog(this, { _, h, m ->
+                    c.set(java.util.Calendar.HOUR_OF_DAY, h); c.set(java.util.Calendar.MINUTE, m)
+                    c.set(java.util.Calendar.SECOND, 0)
+                    setAt(c.timeInMillis)
+                }, 20, 30, true).show()
+            }.show()
+        }
+        atLabel.text = "Nu"
+        render = fun() {
             list.removeAllViews()
             var missing = 0
             fun header(t: String) = list.addView(TextView(this).apply {
@@ -6944,7 +7007,8 @@ class MainActivity : Activity() {
                 setPadding(0, dp(12), 0, dp(6))
             })
             fun rows(chs: List<TvChannel>, into: LinearLayout) = chs.forEach { ch ->
-                val (now, next) = TvGuide.nowNext(ch.name)
+                val t = at ?: System.currentTimeMillis()
+                val (now, next) = TvGuide.nowNext(ch.name, t)
                 if (now == null && next == null) missing++
                 val row = LinearLayout(this).apply {
                     orientation = LinearLayout.HORIZONTAL
@@ -6964,6 +7028,8 @@ class MainActivity : Activity() {
                     orientation = LinearLayout.VERTICAL
                     gravity = Gravity.CENTER_HORIZONTAL
                     layoutParams = LinearLayout.LayoutParams(dp(64), ViewGroup.LayoutParams.WRAP_CONTENT).apply { marginEnd = dp(10) }
+                    isClickable = true
+                    setOnClickListener { showChannelDaySheet(ch, at ?: System.currentTimeMillis()) }
                     addView(TextView(this@MainActivity).apply {
                         text = ch.num.toString()
                         textSize = 12f
@@ -6999,7 +7065,7 @@ class MainActivity : Activity() {
                         ellipsize = android.text.TextUtils.TruncateAt.END
                     })
                     if (now != null) {
-                        val frac = ((System.currentTimeMillis() - now.start).toFloat() / (now.stop - now.start).coerceAtLeast(1)).coerceIn(0f, 1f)
+                        val frac = ((t - now.start).toFloat() / (now.stop - now.start).coerceAtLeast(1)).coerceIn(0f, 1f)
                         addView(LinearLayout(this@MainActivity).apply {
                             orientation = LinearLayout.HORIZONTAL
                             gravity = Gravity.CENTER_VERTICAL
@@ -7033,10 +7099,12 @@ class MainActivity : Activity() {
             }
             for (grp in TV_GROUPS) rows(grp.channels, tvGroup(list, grp.title, grp.channels.size, grp.open))
             status.text = if (TvGuide.data.isEmpty()) status.text
-                else "Tik op een zender om over te schakelen · tik op een groep om open/dicht te klappen"
+                else if (at != null) "Wat er toen liep · tik op het logo voor het dagoverzicht · tik op de rij om over te schakelen"
+                else "Tik op een zender om over te schakelen · tik op het logo voor het dagoverzicht"
         }
         render()
         thread {
+            TvGuide.histDir = filesDir
             val err = TvGuide.ensure(cacheDir, TV_CHANNELS.map { it.name })
             runOnUiThread {
                 if (!dialog.isShowing) return@runOnUiThread
@@ -7045,6 +7113,148 @@ class MainActivity : Activity() {
             }
         }
         val sheetScroll = ScrollView(this).apply { addView(content) }
+        dialog.setContentView(SwipeSheet(this, sheetScroll, noIntercept = null, onUp = {}, onDown = { dialog.dismiss() },
+            scroller = sheetScroll, canSwipeUp = false))
+        dialog.window?.apply {
+            setBackgroundDrawable(GradientDrawable().apply {
+                setColor(0xFF1E1E1E.toInt())
+                cornerRadii = floatArrayOf(dp(22).toFloat(), dp(22).toFloat(), dp(22).toFloat(), dp(22).toFloat(), 0f, 0f, 0f, 0f)
+            })
+            setGravity(Gravity.BOTTOM)
+            setLayout(ViewGroup.LayoutParams.MATCH_PARENT, (resources.displayMetrics.heightPixels * 0.85).toInt())
+        }
+        dialog.show()
+    }
+
+    /** Dagoverzicht van één zender: 7 dagen terug t/m morgen, met beschrijving. Tik = overschakelen. */
+    private fun showChannelDaySheet(ch: TvChannel, around: Long) {
+        val dialog = sheet()
+        val content = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(16), dp(10), dp(16), dp(18))
+        }
+        content.addView(View(this).apply {
+            background = GradientDrawable().apply { setColor(0xFF555555.toInt()); cornerRadius = dp(2).toFloat() }
+            layoutParams = LinearLayout.LayoutParams(dp(40), dp(4)).apply { gravity = Gravity.CENTER_HORIZONTAL; bottomMargin = dp(12) }
+        })
+        val title = TextView(this).apply {
+            text = "${ch.num}  ${ch.name}"
+            textSize = 19f
+            setTextColor(Color.WHITE)
+            setTypeface(typeface, Typeface.BOLD)
+            setPadding(dp(8), 0, 0, 0)
+        }
+        content.addView(LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            channelLogo(ch, dp(64), dp(32), View(this@MainActivity))?.let { addView(it) }
+            addView(title)
+        })
+        val dayRow = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; setPadding(0, dp(10), 0, dp(8)) }
+        content.addView(android.widget.HorizontalScrollView(this).apply {
+            isHorizontalScrollBarEnabled = false
+            addView(dayRow)
+        })
+        val list = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        content.addView(list)
+        val sheetScroll = ScrollView(this).apply { addView(content) }
+        val hmFmt = java.text.SimpleDateFormat("HH:mm", NL)
+        val dayFmt = java.text.SimpleDateFormat("EEE d", NL)
+        fun dayStart(back: Int) = java.util.Calendar.getInstance().apply {
+            add(java.util.Calendar.DAY_OF_YEAR, -back)
+            set(java.util.Calendar.HOUR_OF_DAY, 0); set(java.util.Calendar.MINUTE, 0)
+            set(java.util.Calendar.SECOND, 0); set(java.util.Calendar.MILLISECOND, 0)
+        }.timeInMillis
+        val chips = ArrayList<TextView>()
+        fun showDay(back: Int, focus: Long?) {
+            chips.forEachIndexed { i, c ->
+                c.background = GradientDrawable().apply {
+                    setColor(if (7 - i == back) 0xFF18BCF2.toInt() else 0xFF2A2A2A.toInt()); cornerRadius = dp(14).toFloat()
+                }
+                c.setTextColor(if (7 - i == back) 0xFF0B2430.toInt() else Color.WHITE)
+            }
+            list.removeAllViews()
+            val from = dayStart(back)
+            val progs = TvGuide.range(ch.name, from, from + 24 * 3_600_000L)
+            val now = System.currentTimeMillis()
+            if (progs.isEmpty()) list.addView(TextView(this).apply {
+                text = if (back > 0) "Geen gidsgegevens voor deze dag. De app bewaart de gids vanaf nu zelf, dus dit vult zich de komende dagen."
+                    else "Geen gidsgegevens voor deze zender."
+                textSize = 14f
+                setTextColor(0xFFAAAAAA.toInt())
+                setPadding(dp(4), dp(10), dp(4), dp(10))
+            })
+            var focusView: View? = null
+            for (p in progs) {
+                val live = p.start <= now && p.stop > now
+                val past = p.stop <= now
+                val row = LinearLayout(this).apply {
+                    orientation = LinearLayout.HORIZONTAL
+                    setPadding(dp(10), dp(10), dp(10), dp(10))
+                    background = GradientDrawable().apply {
+                        setColor(if (live) 0xFF13303A.toInt() else 0xFF262626.toInt()); cornerRadius = dp(12).toFloat()
+                        if (live) setStroke(dp(1), 0xFF18BCF2.toInt())
+                    }
+                    layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
+                        .apply { bottomMargin = dp(6) }
+                    isClickable = true
+                    setOnClickListener { dialog.dismiss(); tuneChannel(ch.num, ch.name) }
+                }
+                row.addView(TextView(this).apply {
+                    text = hmFmt.format(java.util.Date(p.start))
+                    textSize = 14f
+                    setTextColor(if (live) 0xFF18BCF2.toInt() else 0xFFCFCFCF.toInt())
+                    setTypeface(typeface, Typeface.BOLD)
+                    layoutParams = LinearLayout.LayoutParams(dp(54), ViewGroup.LayoutParams.WRAP_CONTENT)
+                })
+                row.addView(LinearLayout(this).apply {
+                    orientation = LinearLayout.VERTICAL
+                    layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
+                    addView(TextView(this@MainActivity).apply {
+                        text = (if (past) "↺ " else if (live) "● " else "") + p.title
+                        textSize = 15f
+                        setTextColor(if (past) 0xFFD8D8D8.toInt() else Color.WHITE)
+                        setTypeface(typeface, Typeface.BOLD)
+                    })
+                    p.desc?.let { d ->
+                        addView(TextView(this@MainActivity).apply {
+                            text = d
+                            textSize = 12f
+                            setTextColor(0xFF9A9A9A.toInt())
+                            maxLines = 2
+                            ellipsize = android.text.TextUtils.TruncateAt.END
+                            setPadding(0, dp(2), 0, 0)
+                            var open = false
+                            isClickable = true
+                            setOnClickListener { open = !open; maxLines = if (open) 50 else 2 }
+                        })
+                    }
+                })
+                list.addView(row)
+                if (focus != null && p.start <= focus && p.stop > focus) focusView = row
+            }
+            val fv = focusView
+            sheetScroll.post { sheetScroll.scrollTo(0, if (fv != null) (fv.top + list.top - dp(80)).coerceAtLeast(0) else 0) }
+        }
+        val todayStart = dayStart(0)
+        val aroundBack = if (around >= todayStart) 0 else (((todayStart - around) / (24 * 3_600_000L)) + 1).toInt().coerceIn(0, 7)
+        for (back in 7 downTo -1) {
+            val c = TextView(this).apply {
+                text = when (back) { 0 -> "Vandaag"; 1 -> "Gisteren"; -1 -> "Morgen"; else -> dayFmt.format(java.util.Date(dayStart(back))) }
+                textSize = 13f
+                setTypeface(typeface, Typeface.BOLD)
+                setPadding(dp(12), dp(7), dp(12), dp(7))
+                layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT)
+                    .apply { marginEnd = dp(6) }
+                isClickable = true
+                setOnClickListener { showDay(back, null) }
+            }
+            chips.add(c); dayRow.addView(c)
+        }
+        showDay(aroundBack, around)
+        (dayRow.parent as? android.widget.HorizontalScrollView)?.post {
+            (dayRow.parent as android.widget.HorizontalScrollView).scrollTo(chips[7 - aroundBack].left - dp(60), 0)
+        }
         dialog.setContentView(SwipeSheet(this, sheetScroll, noIntercept = null, onUp = {}, onDown = { dialog.dismiss() },
             scroller = sheetScroll, canSwipeUp = false))
         dialog.window?.apply {
