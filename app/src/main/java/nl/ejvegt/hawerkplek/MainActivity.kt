@@ -4875,7 +4875,7 @@ class MainActivity : Activity() {
         })
         dialog.setOnDismissListener { handler.removeCallbacks(typed) }
         dialog.show()
-        select(0)
+        select(tabNames.indexOf("Series").takeIf { it >= 0 } ?: 0)   // standaard op Series
     }
 
     /** Speelbalk onderin: wat Kodi nu afspeelt, met voortgang, pauze en ondertitels. Ververst elke 2 s. */
