@@ -10398,7 +10398,40 @@ class SwipeSheet(
     private var velocity: android.view.VelocityTracker? = null
     private val content = child
 
-    init { addView(child) }
+    /** Streepje bovenaan als teken dat het blad omlaag te vegen is (alleen als het blad er zelf geen heeft). */
+    private val handle = View(ctx).apply {
+        background = GradientDrawable().apply { setColor(0xFF555555.toInt()); cornerRadius = 2 * density }
+        layoutParams = LayoutParams((40 * density).toInt(), (4 * density).toInt(), Gravity.TOP or Gravity.CENTER_HORIZONTAL)
+            .apply { topMargin = (6 * density).toInt() }
+    }
+    private var handleChecked = false
+
+    init { addView(child); addView(handle) }
+
+    /** Heeft het blad al een eigen streepje (40×4 dp) in de bovenste rand? */
+    private fun hasOwnHandle(v: View, depth: Int = 0): Boolean {
+        if (depth > 4) return false
+        if (v !is android.view.ViewGroup && kotlin.math.abs(v.width - 40 * density) < 2 && kotlin.math.abs(v.height - 4 * density) < 2) {
+            val loc = IntArray(2); v.getLocationInWindow(loc)
+            val me = IntArray(2); getLocationInWindow(me)
+            return loc[1] - me[1] < 40 * density
+        }
+        if (v is android.view.ViewGroup) for (i in 0 until v.childCount) if (hasOwnHandle(v.getChildAt(i), depth + 1)) return true
+        return false
+    }
+
+    override fun onLayout(changed: Boolean, l: Int, t: Int, r: Int, b: Int) {
+        super.onLayout(changed, l, t, r, b)
+        if (!handleChecked && content.width > 0) {
+            handleChecked = true
+            if (hasOwnHandle(content)) post { handle.visibility = View.GONE }
+        }
+    }
+
+    override fun dispatchDraw(canvas: android.graphics.Canvas) {
+        handle.translationY = content.translationY   // streepje beweegt mee met het blad
+        super.dispatchDraw(canvas)
+    }
 
     /** Eerste verticale scroller in het blad (voor bladen die zelf geen scroller opgeven). */
     private fun findVScroll(v: View): View? {
