@@ -69,6 +69,22 @@ class TmdbApi(private val key: () -> String) {
             "&with_watch_monetization_types=flatrate%7Cads&sort_by=popularity.desc&vote_count.gte=20&page=$page"
     )).map { Title(it.id, type, it.name, it.year, it.overview, it.poster, it.rating) }
 
+    class Person(val name: String, val role: String, val photo: String?)
+
+    /** TMDB-nummer van een serie via het TVDB-nummer. */
+    fun findByTvdb(tvdb: Int): Int? = get("/find/$tvdb?external_source=tvdb_id").optJSONArray("tv_results")
+        ?.optJSONObject(0)?.optInt("id")?.takeIf { it > 0 }
+
+    /** Belangrijkste acteurs (max. 12). */
+    fun cast(type: String, id: Int): List<Person> {
+        val o = get(if (type == "tv") "/tv/$id/aggregate_credits" else "/movie/$id/credits")
+        val arr = o.optJSONArray("cast") ?: return emptyList()
+        return (0 until minOf(arr.length(), 12)).map { arr.getJSONObject(it) }.map { c ->
+            val role = c.optString("character").ifEmpty { c.optJSONArray("roles")?.optJSONObject(0)?.optString("character").orEmpty() }
+            Person(c.optString("name"), role, c.optString("profile_path").takeIf { it.startsWith("/") }?.let { "${IMG}w185$it" })
+        }
+    }
+
     /** TVDB-nummer van een serie (Sonarr werkt daarmee). */
     fun tvdbId(id: Int): Int? = get("/tv/$id/external_ids").optInt("tvdb_id").takeIf { it > 0 }
 

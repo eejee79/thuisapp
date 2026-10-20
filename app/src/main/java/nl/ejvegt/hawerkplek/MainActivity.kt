@@ -4834,7 +4834,7 @@ class MainActivity : Activity() {
                         val a = r.getOrNull() ?: run { note("Mislukt: ${r.exceptionOrNull()?.message}"); return }
                         val items = (0 until minOf(a.length(), 18)).map { a.getJSONObject(it) }
                         if (items.isEmpty()) { note("Niets gevonden"); return }
-                        grid(items, { o -> openLookup(kind, o) { dialog.dismiss() } }) { o ->
+                        grid(items, { o -> showLookupDetail(kind, o) { dialog.dismiss() } }) { o ->
                             listOfNotNull(o.optInt("year").takeIf { it > 0 }?.toString(),
                                 if (o.optInt("id") > 0) "✓ in bibliotheek" else "＋ toevoegen").joinToString(" · ")
                         }
@@ -5145,14 +5145,123 @@ class MainActivity : Activity() {
             }
             return
         }
-        // Nieuw: korte samenvatting en dan profiel kiezen
+        showLookupDetail(kind, o, closeParent)
+    }
+
+    /** Details van een zoekresultaat: data, ratings, acteurs (TMDB) en waar te streamen; dan toevoegen. */
+    private fun showLookupDetail(kind: String, o: JSONObject, closeParent: () -> Unit) {
         val name = if (kind == "s") "Sonarr" else "Radarr"
-        AlertDialog.Builder(this)
-            .setTitle(o.optString("title") + (o.optInt("year").takeIf { it > 0 }?.let { " ($it)" } ?: ""))
-            .setMessage(o.optString("overview").ifEmpty { "Geen beschrijving." }.take(600))
-            .setPositiveButton("Toevoegen aan $name") { _, _ -> addArrObject(kind, o, closeParent) }
-            .setNegativeButton("Annuleren", null)
-            .show()
+        val content = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(dp(18), dp(14), dp(18), dp(18)) }
+        val dialog = sheetDialog(ScrollView(this).apply { addView(content) })
+        val dateFmt = java.text.SimpleDateFormat("d MMM yyyy", NL)
+        fun date(k: String) = o.optString(k).takeIf { it.length >= 10 && it != "null" }?.let { s ->
+            runCatching { dateFmt.format(java.text.SimpleDateFormat("yyyy-MM-dd", java.util.Locale.ROOT).parse(s.take(10))!!) }.getOrNull()
+        }
+        content.addView(LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            addView(ImageView(this@MainActivity).apply {
+                scaleType = ImageView.ScaleType.CENTER_CROP; clipToOutline = true
+                background = GradientDrawable().apply { setColor(0xFF1A1A1A.toInt()); cornerRadius = dp(8).toFloat() }
+                layoutParams = LinearLayout.LayoutParams(dp(100), dp(150)).apply { marginEnd = dp(14) }
+                ArrApi.poster(o)?.let { loadImage(this, it) }
+            })
+            addView(LinearLayout(this@MainActivity).apply {
+                orientation = LinearLayout.VERTICAL
+                layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
+                addView(TextView(this@MainActivity).apply { text = o.optString("title"); textSize = 19f; setTextColor(Color.WHITE); setTypeface(typeface, Typeface.BOLD) })
+                // Kerngegevens
+                val genres = o.optJSONArray("genres")?.let { g -> (0 until minOf(g.length(), 3)).joinToString(", ") { g.optString(it) } }
+                val lines = ArrayList<String>()
+                if (kind == "s") {
+                    lines.add(listOfNotNull(o.optString("network").takeIf { it.isNotEmpty() && it != "null" },
+                        when (o.optString("status")) { "continuing" -> "lopend"; "ended" -> "afgelopen"; "upcoming" -> "binnenkort"; else -> null },
+                        o.optInt("runtime").takeIf { it > 0 }?.let { "$it min" }).joinToString(" · "))
+                    date("firstAired")?.let { lines.add("Eerste uitzending: $it") }
+                    date("lastAired")?.let { lines.add("Laatste uitzending: $it") }
+                    o.optJSONArray("seasons")?.let { se -> (0 until se.length()).count { se.getJSONObject(it).optInt("seasonNumber") > 0 } }
+                        ?.takeIf { it > 0 }?.let { lines.add("$it seizoenen") }
+                } else {
+                    lines.add(listOfNotNull(o.optInt("year").takeIf { it > 0 }?.toString(), o.optString("studio").takeIf { it.isNotEmpty() && it != "null" },
+                        o.optInt("runtime").takeIf { it > 0 }?.let { "${it / 60} u ${it % 60} min" }).joinToString(" · "))
+                    date("inCinemas")?.let { lines.add("In de bioscoop: $it") }
+                    date("digitalRelease")?.let { lines.add("Digitaal: $it") }
+                }
+                genres?.takeIf { it.isNotEmpty() }?.let { lines.add(it) }
+                o.optString("certification").takeIf { it.isNotEmpty() && it != "null" }?.let { lines.add("Leeftijd: $it") }
+                addView(TextView(this@MainActivity).apply {
+                    text = lines.filter { it.isNotBlank() }.joinToString("\n"); textSize = 12f; setTextColor(0xFFB8B8B8.toInt()); setPadding(0, dp(4), 0, 0)
+                })
+                // Ratings
+                val r = o.optJSONObject("ratings")
+                val rt = ArrayList<String>()
+                if (kind == "s") r?.optDouble("value", 0.0)?.takeIf { it > 0 }?.let { rt.add(String.format(NL, "★ %.1f", it) + (r.optInt("votes").takeIf { v -> v > 0 }?.let { v -> " ($v stemmen)" } ?: "")) }
+                else {
+                    r?.optJSONObject("imdb")?.optDouble("value", 0.0)?.takeIf { it > 0 }?.let { rt.add(String.format(NL, "IMDb %.1f", it)) }
+                    r?.optJSONObject("tmdb")?.optDouble("value", 0.0)?.takeIf { it > 0 }?.let { rt.add(String.format(NL, "TMDB %.1f", it)) }
+                    r?.optJSONObject("rottenTomatoes")?.optInt("value")?.takeIf { it > 0 }?.let { rt.add("RT $it%") }
+                    r?.optJSONObject("metacritic")?.optInt("value")?.takeIf { it > 0 }?.let { rt.add("MC $it") }
+                }
+                if (rt.isNotEmpty()) addView(TextView(this@MainActivity).apply {
+                    text = rt.joinToString("  ·  "); textSize = 13f; setTextColor(0xFFFFC966.toInt()); setTypeface(typeface, Typeface.BOLD); setPadding(0, dp(6), 0, 0)
+                })
+            })
+        })
+        content.addView(TextView(this).apply {
+            text = o.optString("overview").ifEmpty { "Geen beschrijving." }; textSize = 13f; setTextColor(0xFFCCCCCC.toInt()); setPadding(0, dp(12), 0, 0)
+        })
+        val stream = TextView(this).apply { textSize = 13f; setTextColor(0xFF7CE38A.toInt()); setPadding(0, dp(10), 0, 0); visibility = View.GONE }
+        content.addView(stream)
+        val castHeader = TextView(this).apply {
+            text = "ACTEURS"; textSize = 12f; letterSpacing = 0.06f; setTypeface(typeface, Typeface.BOLD)
+            setTextColor(0xFFCCCCCC.toInt()); setPadding(dp(2), dp(14), 0, dp(8)); visibility = View.GONE
+        }
+        content.addView(castHeader)
+        val castRow = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
+        content.addView(android.widget.HorizontalScrollView(this).apply { isHorizontalScrollBarEnabled = false; addView(castRow) })
+        val inLib = o.optInt("id") > 0
+        content.addView(View(this), LinearLayout.LayoutParams(1, dp(14)))
+        content.addView(if (inLib) sheetRow("✓   Al in $name · openen", 0xFF1F3A2A.toInt()) {
+            dialog.dismiss(); openLookup(kind, o, closeParent)
+        } else sheetRow("＋   Toevoegen aan $name", if (kind == "s") 0xFF35C5F4.toInt() else 0xFFFFC230.toInt(), dark = true) {
+            dialog.dismiss(); addArrObject(kind, o, closeParent)
+        })
+        dialog.show()
+        // Acteurs + streamingdiensten via TMDB (als er een sleutel is)
+        if (!prefs().getString(KEY_TMDB, "").isNullOrBlank()) thread {
+            val tmdbId = if (kind == "s") (o.optInt("tmdbId").takeIf { it > 0 } ?: runCatching { tmdb.findByTvdb(o.optInt("tvdbId")) }.getOrNull())
+                else o.optInt("tmdbId").takeIf { it > 0 }
+            if (tmdbId == null) return@thread
+            val type = if (kind == "s") "tv" else "movie"
+            val people = runCatching { tmdb.cast(type, tmdbId) }.getOrNull().orEmpty()
+            val svcs = runCatching { tmdb.providerIds(TmdbApi.Title(tmdbId, type, o.optString("title"), "", "", null, 0.0)) }.getOrNull()
+                .orEmpty().mapNotNull { svcForProvider(it) }.distinct()
+            runOnUiThread {
+                if (!dialog.isShowing) return@runOnUiThread
+                if (svcs.isNotEmpty()) { stream.text = "Ook te zien op " + svcs.joinToString(", ") { it.name }; stream.visibility = View.VISIBLE }
+                if (people.isNotEmpty()) castHeader.visibility = View.VISIBLE
+                people.forEach { p ->
+                    castRow.addView(LinearLayout(this).apply {
+                        orientation = LinearLayout.VERTICAL
+                        gravity = Gravity.CENTER_HORIZONTAL
+                        layoutParams = LinearLayout.LayoutParams(dp(78), ViewGroup.LayoutParams.WRAP_CONTENT).apply { marginEnd = dp(8) }
+                        addView(ImageView(this@MainActivity).apply {
+                            scaleType = ImageView.ScaleType.CENTER_CROP; clipToOutline = true
+                            background = GradientDrawable().apply { setColor(0xFF2A2A2A.toInt()); cornerRadius = dp(32).toFloat() }
+                            layoutParams = LinearLayout.LayoutParams(dp(64), dp(64))
+                            p.photo?.let { loadImage(this, it) }
+                        })
+                        addView(TextView(this@MainActivity).apply {
+                            text = p.name; textSize = 11f; setTextColor(Color.WHITE); gravity = Gravity.CENTER; maxLines = 2
+                            ellipsize = android.text.TextUtils.TruncateAt.END; setPadding(0, dp(4), 0, 0)
+                        })
+                        if (p.role.isNotEmpty()) addView(TextView(this@MainActivity).apply {
+                            text = p.role; textSize = 10f; setTextColor(0xFF9A9A9A.toInt()); gravity = Gravity.CENTER; maxLines = 2
+                            ellipsize = android.text.TextUtils.TruncateAt.END
+                        })
+                    })
+                }
+            }
+        }
     }
 
     /** Lookup-object toevoegen aan Sonarr/Radarr met gekozen kwaliteitsprofiel, en meteen zoeken. */
