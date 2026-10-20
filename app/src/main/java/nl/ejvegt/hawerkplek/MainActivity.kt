@@ -5156,16 +5156,37 @@ class MainActivity : Activity() {
                     runOnUiThread { mediaStatus.text = if (r.isSuccess) "$name zoekt naar $title" else "Zoeken mislukt: ${r.exceptionOrNull()?.message}" }
                 }
                 4 -> {
-                    var withFiles = false
+                    val opts = booleanArrayOf(true, false)
                     AlertDialog.Builder(this).setTitle("$title verwijderen?")
-                        .setMultiChoiceItems(arrayOf("Ook de bestanden van de schijf verwijderen"), booleanArrayOf(false)) { _, _, c -> withFiles = c }
+                        .setMultiChoiceItems(arrayOf("Lopende downloads stoppen en weggooien", "Ook de bestanden van de schijf verwijderen"), opts) { _, i, c -> opts[i] = c }
                         .setPositiveButton("Verwijderen") { _, _ ->
                             thread {
-                                val q = if (kind == "s") "?deleteFiles=$withFiles" else "?deleteFiles=$withFiles&addImportExclusion=false"
+                                val id = o.optInt("id")
+                                // 1. Eerst de downloads in de wachtrij (anders gaan die gewoon door)
+                                var stopped = 0
+                                if (opts[0]) runCatching {
+                                    val recs = api.records(if (kind == "s") "/queue?pageSize=200&seriesId=$id" else "/queue?pageSize=200&movieId=$id")
+                                    for (i in 0 until recs.length()) {
+                                        val rec = recs.getJSONObject(i)
+                                        val mine = if (kind == "s") rec.optInt("seriesId") == id else rec.optInt("movieId") == id
+                                        if (!mine) continue
+                                        runCatching { api.delete("/queue/${rec.optInt("id")}?removeFromClient=true&blocklist=false") }.onSuccess { stopped++ }
+                                    }
+                                }
+                                // 2. Dan de serie/film zelf
+                                val q = if (kind == "s") "?deleteFiles=${opts[1]}" else "?deleteFiles=${opts[1]}&addImportExclusion=false"
                                 val r = runCatching { api.delete(path + q) }
+                                // 3. Controleren of hij echt weg is
+                                val gone = r.isSuccess && runCatching { api.obj(path) }.isFailure
                                 runOnUiThread {
-                                    mediaStatus.text = if (r.isSuccess) "$title verwijderd uit $name" + (if (withFiles) " (met bestanden)" else "")
-                                        else "Verwijderen mislukt: ${r.exceptionOrNull()?.message}"
+                                    mediaStatus.text = when {
+                                        r.isFailure -> "Verwijderen mislukt: ${r.exceptionOrNull()?.message}"
+                                        !gone -> "$title lijkt nog in $name te staan, probeer het opnieuw"
+                                        else -> "$title verwijderd uit $name" + listOfNotNull(
+                                            if (stopped > 0) "$stopped download(s) gestopt" else null,
+                                            if (opts[1]) "bestanden gewist" else null,
+                                        ).joinToString(", ", " (", ")").let { if (it == " ()") "" else it }
+                                    }
                                     if (r.isSuccess) refresh()
                                 }
                             }
