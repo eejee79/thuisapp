@@ -4577,6 +4577,17 @@ class MainActivity : Activity() {
             visibility = View.GONE
         }
         content.addView(diskBar)
+        val searchInput = EditText(this).apply {
+            hint = "Zoek een nieuwe film of serie"
+            setHintTextColor(0xFF777777.toInt())
+            setTextColor(Color.WHITE)
+            setSingleLine()
+            textSize = 15f
+            background = GradientDrawable().apply { setColor(0xFF2A2A2A.toInt()); cornerRadius = dp(20).toFloat() }
+            setPadding(dp(16), dp(9), dp(16), dp(9))
+            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { topMargin = dp(12) }
+        }
+        content.addView(searchInput)
         val tabs = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; setPadding(0, dp(12), 0, dp(4)) }
         content.addView(tabs)
         val body = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
@@ -4806,6 +4817,33 @@ class MainActivity : Activity() {
                 }
             }
         }
+        fun lookup(q: String) {
+            val my = ++seq
+            body.removeAllViews(); note("Zoeken naar \"$q\"…")
+            thread {
+                val enc = Uri.encode(q)
+                val sr = if (sonarr.configured()) runCatching { sonarr.arr("/series/lookup?term=$enc") } else null
+                val mr = if (radarr.configured()) runCatching { radarr.arr("/movie/lookup?term=$enc") } else null
+                runOnUiThread {
+                    if (my != seq) return@runOnUiThread
+                    body.removeAllViews()
+                    fun section(title: String, kind: String, r: Result<JSONArray>?) {
+                        if (r == null) return
+                        header(title)
+                        val a = r.getOrNull() ?: run { note("Mislukt: ${r.exceptionOrNull()?.message}"); return }
+                        val items = (0 until minOf(a.length(), 18)).map { a.getJSONObject(it) }
+                        if (items.isEmpty()) { note("Niets gevonden"); return }
+                        grid(items, { o -> openLookup(kind, o) { dialog.dismiss() } }) { o ->
+                            listOfNotNull(o.optInt("year").takeIf { it > 0 }?.toString(),
+                                if (o.optInt("id") > 0) "✓ in bibliotheek" else "＋ toevoegen").joinToString(" · ")
+                        }
+                    }
+                    section("Series (Sonarr)", "s", sr)
+                    section("Films (Radarr)", "r", mr)
+                }
+            }
+        }
+        var lastTab = 0
         val tabNames = listOfNotNull("Overzicht", if (sonarr.configured()) "Series" else null, if (radarr.configured()) "Films" else null)
         val tabViews = ArrayList<TextView>()
         fun select(i: Int) {
@@ -4813,6 +4851,7 @@ class MainActivity : Activity() {
                 v.setTextColor(if (i == j) 0xFF0B2430.toInt() else Color.WHITE)
                 v.background = GradientDrawable().apply { setColor(if (i == j) 0xFF4FC3F7.toInt() else 0xFF2A2A2A.toInt()); cornerRadius = dp(16).toFloat() }
             }
+            lastTab = i
             when (tabNames[i]) { "Series" -> seriesList(); "Films" -> movieList(); else -> overview() }
         }
         tabNames.forEachIndexed { i, n ->
@@ -4823,6 +4862,16 @@ class MainActivity : Activity() {
             }
             tabViews.add(v); tabs.addView(v)
         }
+        val typed = Runnable {
+            val q = searchInput.text.toString().trim()
+            if (q.length >= 2) lookup(q) else select(lastTab)
+        }
+        searchInput.addTextChangedListener(object : android.text.TextWatcher {
+            override fun beforeTextChanged(x: CharSequence?, a: Int, b: Int, c: Int) {}
+            override fun onTextChanged(x: CharSequence?, a: Int, b: Int, c: Int) {}
+            override fun afterTextChanged(e: android.text.Editable?) { handler.removeCallbacks(typed); handler.postDelayed(typed, 500) }
+        })
+        dialog.setOnDismissListener { handler.removeCallbacks(typed) }
         dialog.show()
         select(0)
     }
@@ -5019,6 +5068,74 @@ class MainActivity : Activity() {
             })
         }
         dialog.show()
+    }
+
+    /** Zoekresultaat uit Sonarr/Radarr: al in de bibliotheek → openen, anders toevoegen. */
+    private fun openLookup(kind: String, o: JSONObject, closeParent: () -> Unit) {
+        val api = if (kind == "s") sonarr else radarr
+        val id = o.optInt("id")
+        if (id > 0) {
+            thread {
+                val full = runCatching { api.obj(if (kind == "s") "/series/$id" else "/movie/$id") }.getOrDefault(o)
+                runOnUiThread { if (kind == "s") showArrSeries(full) else showArrMovie(full) }
+            }
+            return
+        }
+        // Nieuw: korte samenvatting en dan profiel kiezen
+        val name = if (kind == "s") "Sonarr" else "Radarr"
+        AlertDialog.Builder(this)
+            .setTitle(o.optString("title") + (o.optInt("year").takeIf { it > 0 }?.let { " ($it)" } ?: ""))
+            .setMessage(o.optString("overview").ifEmpty { "Geen beschrijving." }.take(600))
+            .setPositiveButton("Toevoegen aan $name") { _, _ -> addArrObject(kind, o, closeParent) }
+            .setNegativeButton("Annuleren", null)
+            .show()
+    }
+
+    /** Lookup-object toevoegen aan Sonarr/Radarr met gekozen kwaliteitsprofiel, en meteen zoeken. */
+    private fun addArrObject(kind: String, o: JSONObject, done: () -> Unit) {
+        val api = if (kind == "s") sonarr else radarr
+        val name = if (kind == "s") "Sonarr" else "Radarr"
+        thread {
+            val r = runCatching {
+                val profiles = api.arr("/qualityprofile").let { a -> (0 until a.length()).map { a.getJSONObject(it) } }
+                val roots = api.arr("/rootfolder").let { a -> (0 until a.length()).map { a.getJSONObject(it).optString("path") } }
+                profiles to roots
+            }
+            runOnUiThread {
+                val (profiles, roots) = r.getOrNull() ?: run { mediaStatus.text = "$name: ${r.exceptionOrNull()?.message}"; return@runOnUiThread }
+                if (profiles.isEmpty() || roots.isEmpty()) { mediaStatus.text = "$name: geen kwaliteitsprofiel of map ingesteld"; return@runOnUiThread }
+                val lastKey = "arr_profile_$kind"
+                var pick = profiles.indexOfFirst { it.optInt("id") == prefs().getInt(lastKey, -1) }.coerceAtLeast(0)
+                AlertDialog.Builder(this)
+                    .setTitle("Kwaliteit voor ${o.optString("title")}")
+                    .setSingleChoiceItems(profiles.map { it.optString("name") }.toTypedArray(), pick) { _, w -> pick = w }
+                    .setPositiveButton("Toevoegen en zoeken") { _, _ ->
+                        val prof = profiles[pick].optInt("id")
+                        prefs().edit().putInt(lastKey, prof).apply()
+                        mediaStatus.text = "${o.optString("title")} toevoegen aan $name…"
+                        thread {
+                            val add = runCatching {
+                                o.put("qualityProfileId", prof).put("rootFolderPath", roots.first()).put("monitored", true)
+                                if (kind == "s") {
+                                    o.put("seasonFolder", true).put("addOptions", JSONObject().put("searchForMissingEpisodes", true).put("monitor", "all"))
+                                    runCatching { sonarr.arr("/languageprofile").optJSONObject(0)?.optInt("id") }.getOrNull()?.let { o.put("languageProfileId", it) }
+                                    sonarr.post("/series", o)
+                                } else {
+                                    o.put("addOptions", JSONObject().put("searchForMovie", true))
+                                    radarr.post("/movie", o)
+                                }
+                            }
+                            runOnUiThread {
+                                mediaStatus.text = if (add.isSuccess) "${o.optString("title")} toegevoegd aan $name, zoeken gestart"
+                                    else "Toevoegen mislukt: ${add.exceptionOrNull()?.message}"
+                                if (add.isSuccess) { done(); Toast.makeText(this, "Toegevoegd aan $name", Toast.LENGTH_SHORT).show() }
+                            }
+                        }
+                    }
+                    .setNegativeButton("Annuleren", null)
+                    .show()
+            }
+        }
     }
 
     /** Vanuit Films & series: staat hij al in Sonarr/Radarr, en anders toevoegen (met kwaliteitsprofiel). */
