@@ -69,6 +69,9 @@ class TmdbApi(private val key: () -> String) {
             "&with_watch_monetization_types=flatrate%7Cads&sort_by=popularity.desc&vote_count.gte=20&page=$page"
     )).map { Title(it.id, type, it.name, it.year, it.overview, it.poster, it.rating) }
 
+    /** TVDB-nummer van een serie (Sonarr werkt daarmee). */
+    fun tvdbId(id: Int): Int? = get("/tv/$id/external_ids").optInt("tvdb_id").takeIf { it > 0 }
+
     /** Seizoenen van een serie (specials achteraan). */
     fun seasons(id: Int): List<Season> {
         val arr = get("/tv/$id?language=nl-NL").optJSONArray("seasons") ?: return emptyList()

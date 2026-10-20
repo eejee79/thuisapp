@@ -3711,6 +3711,7 @@ class MainActivity : Activity() {
             "spotify" to { second -> spotifyTile(second) },
             "music" to { second -> musicTile(second) },
             "films" to { second -> searchTile(second) },
+            "library" to { second -> libraryTile(second) },
         ) + MEDIA_APPS.map { app -> app.pkg to { second: Boolean -> appTile(app, second) } }
 
     private fun tileOrder(): List<String> {
@@ -4197,6 +4198,7 @@ class MainActivity : Activity() {
         })
         // Komt de titel uit een dienst-rij, dan staat die knop er meteen
         from?.let { svcButton(it) }
+        if (arrConfigured()) arrStatusFor(t, content, dialog)
         var openSvc: StreamSvc? = from
         // Serie: seizoenen en afleveringen
         if (t.type == "tv") {
@@ -4430,6 +4432,681 @@ class MainActivity : Activity() {
             runOnUiThread {
                 mediaStatus.text = "\"$title\" staat klaar op de tv"
                 handler.postDelayed({ refreshMedia() }, 2_500)
+            }
+        }
+    }
+
+    // ================= Bibliotheek: Sonarr + Radarr, afspelen via Kodi =================
+
+    private val sonarr by lazy { ArrApi({ prefs().getString("arr_sonarr_url", "") ?: "" }, { prefs().getString("arr_sonarr_key", "") ?: "" }) }
+    private val radarr by lazy { ArrApi({ prefs().getString("arr_radarr_url", "") ?: "" }, { prefs().getString("arr_radarr_key", "") ?: "" }) }
+    private fun arrConfigured() = sonarr.configured() || radarr.configured()
+
+    private fun libraryTile(second: Boolean): View = LinearLayout(this).apply {
+        orientation = LinearLayout.VERTICAL
+        gravity = Gravity.CENTER
+        addView(TextView(this@MainActivity).apply {
+            text = "▤"
+            textSize = 22f
+            setTextColor(Color.WHITE)
+            gravity = Gravity.CENTER
+        })
+        addView(TextView(this@MainActivity).apply {
+            text = "Bibliotheek"
+            textSize = 13f
+            setTextColor(Color.WHITE)
+            setTypeface(typeface, Typeface.BOLD)
+            gravity = Gravity.CENTER
+        })
+        setupTile(0xFF2A3540.toInt(), second) { showLibrary() }
+    }
+
+    /** Adres + sleutel van Sonarr en Radarr invullen (blijft alleen op dit toestel). */
+    private fun showArrSettings(onSaved: () -> Unit) {
+        val box = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(dp(20), dp(8), dp(20), 0) }
+        fun field(hint: String, key: String, secret: Boolean) = EditText(this).apply {
+            this.hint = hint
+            setText(prefs().getString(key, ""))
+            setSingleLine()
+            if (secret) inputType = android.text.InputType.TYPE_CLASS_TEXT or android.text.InputType.TYPE_TEXT_VARIATION_PASSWORD
+            box.addView(this)
+        }
+        fun label(t: String) = box.addView(TextView(this).apply { text = t; setPadding(0, dp(12), 0, 0); setTypeface(typeface, Typeface.BOLD) })
+        label("Sonarr")
+        val su = field("Adres, bijv. 192.168.50.10:8989", "arr_sonarr_url", false)
+        val sk = field("API-sleutel (Settings → General)", "arr_sonarr_key", true)
+        label("Radarr")
+        val ru = field("Adres, bijv. 192.168.50.10:7878", "arr_radarr_url", false)
+        val rk = field("API-sleutel (Settings → General)", "arr_radarr_key", true)
+        val status = TextView(this).apply { setPadding(0, dp(10), 0, 0) }
+        box.addView(status)
+        val d = AlertDialog.Builder(this)
+            .setTitle("Sonarr & Radarr")
+            .setView(ScrollView(this).apply { addView(box) })
+            .setPositiveButton("Opslaan en testen", null)
+            .setNegativeButton("Sluiten", null)
+            .show()
+        d.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener {
+            prefs().edit()
+                .putString("arr_sonarr_url", su.text.toString().trim()).putString("arr_sonarr_key", sk.text.toString().trim())
+                .putString("arr_radarr_url", ru.text.toString().trim()).putString("arr_radarr_key", rk.text.toString().trim())
+                .remove("arr_map").apply()
+            status.text = "Testen…"
+            thread {
+                fun t(a: ArrApi) = if (!a.configured()) "niet ingevuld" else runCatching { "werkt ✓ (v${a.ping()})" }.getOrElse { "lukt niet: ${it.message}" }
+                val msg = "Sonarr: ${t(sonarr)}\nRadarr: ${t(radarr)}"
+                runOnUiThread { status.text = msg; onSaved() }
+            }
+        }
+    }
+
+    // ---- Pad van Sonarr/Radarr → pad in Kodi (automatisch gevonden via mapnamen) ----
+
+    @Volatile private var arrRoots: List<String>? = null
+
+    private fun arrRootFolders(): List<String> {
+        arrRoots?.let { return it }
+        val r = (listOf(sonarr, radarr).filter { it.configured() }.flatMap { a ->
+            runCatching { a.arr("/rootfolder") }.getOrNull()?.let { arr -> (0 until arr.length()).map { arr.getJSONObject(it).optString("path") } }.orEmpty()
+        }).filter { it.isNotEmpty() }.map { it.replace('\\', '/').trimEnd('/') + "/" }.sortedByDescending { it.length }
+        arrRoots = r
+        return r
+    }
+
+    /** Vertaalt bijv. /tv/Yellowstone/Season 5/x.mkv naar smb://…/series/Yellowstone/Season 5/x.mkv. Blokkeert. */
+    private fun kodiPathFor(arrPath: String): String? {
+        val p = arrPath.replace('\\', '/')
+        val root = arrRootFolders().firstOrNull { p.startsWith(it) } ?: (p.substringBeforeLast('/').substringBeforeLast('/') + "/")
+        val rel = p.removePrefix(root)
+        val map = runCatching { JSONObject(prefs().getString("arr_map", "{}") ?: "{}") }.getOrDefault(JSONObject())
+        map.optString(root).takeIf { it.isNotEmpty() }?.let { return it + rel }
+        if (!kodiConfigured()) return null
+        val first = rel.substringBefore('/')
+        val candidates = (runCatching { kodiRoot() }.getOrNull().orEmpty() + runCatching { kodi.sources() }.getOrNull().orEmpty())
+            .filter { it.isDir }.distinctBy { it.file.trimEnd('/') }
+        for (c in candidates) {
+            val items = runCatching { kodi.list(c.file) }.getOrNull() ?: continue
+            if (items.any { it.isDir && it.file.trimEnd('/').substringAfterLast('/').equals(first, true) }) {
+                val base = c.file.trimEnd('/') + "/"
+                map.put(root, base)
+                prefs().edit().putString("arr_map", map.toString()).apply()
+                return base + rel
+            }
+        }
+        return null
+    }
+
+    /** Bestand via Kodi afspelen (met kijkstatus/verder kijken). */
+    private fun playArrFile(arrPath: String, label: String, onStarted: () -> Unit) {
+        mediaStatus.text = "$label zoeken in Kodi…"
+        thread {
+            val kp = runCatching { kodiPathFor(arrPath) }.getOrNull()
+            val e = kp?.let { f -> runCatching { kodi.details(KodiApi.Entry(label, f, false, false, 0.0, 0.0)) }.getOrElse { KodiApi.Entry(label, f, false, false, 0.0, 0.0) } }
+            runOnUiThread {
+                if (e == null) { mediaStatus.text = "Kan $label niet vinden in de Kodi-bronnen"; return@runOnUiThread }
+                kodiPlay(KodiApi.Entry(label, e.file, false, e.played, e.resumeSec, e.totalSec), onStarted)
+            }
+        }
+    }
+
+    // ---- Het overzicht ----
+
+    private fun showLibrary() {
+        if (!arrConfigured()) { showArrSettings { if (arrConfigured()) showLibrary() }; return }
+        val content = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(dp(16), dp(12), dp(16), dp(16)) }
+        val dialog = sheetDialog(content)
+        val disk = TextView(this).apply { textSize = 12f; setTextColor(0xFFA8A8A8.toInt()) }
+        content.addView(LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            addView(TextView(this@MainActivity).apply {
+                text = "Bibliotheek"; textSize = 20f; setTextColor(Color.WHITE); setTypeface(typeface, Typeface.BOLD)
+                layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
+            })
+            addView(disk)
+            addView(TextView(this@MainActivity).apply {
+                text = "⚙"; textSize = 20f; setTextColor(0xFFB0B0B0.toInt()); setPadding(dp(14), dp(4), dp(4), dp(4))
+                isClickable = true
+                setOnClickListener { dialog.dismiss(); showArrSettings { } }
+            })
+        })
+        val diskBar = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            background = GradientDrawable().apply { setColor(0xFF333333.toInt()); cornerRadius = dp(3).toFloat() }
+            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(6)).apply { topMargin = dp(8) }
+            visibility = View.GONE
+        }
+        content.addView(diskBar)
+        val tabs = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; setPadding(0, dp(12), 0, dp(4)) }
+        content.addView(tabs)
+        val body = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        content.addView(ScrollView(this).apply {
+            addView(body)
+            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, (resources.displayMetrics.heightPixels * 0.72).toInt())
+        })
+        var seq = 0
+        fun header(t: String) = body.addView(TextView(this).apply {
+            text = t.uppercase(NL); textSize = 12f; letterSpacing = 0.06f; setTypeface(typeface, Typeface.BOLD)
+            setTextColor(0xFFCCCCCC.toInt()); setPadding(dp(2), dp(14), 0, dp(8))
+        })
+        fun note(t: String) = body.addView(TextView(this).apply { text = t; textSize = 13f; setTextColor(0xFF888888.toInt()); setPadding(dp(2), 0, 0, dp(4)) })
+        fun badge(kind: String) = TextView(this).apply {
+            text = if (kind == "s") "SONARR" else "RADARR"
+            textSize = 9f; setTypeface(typeface, Typeface.BOLD)
+            setTextColor(if (kind == "s") 0xFF06222C.toInt() else 0xFF2B1E00.toInt())
+            setPadding(dp(5), dp(1), dp(5), dp(1))
+            background = GradientDrawable().apply { setColor(if (kind == "s") 0xFF35C5F4.toInt() else 0xFFFFC230.toInt()); cornerRadius = dp(5).toFloat() }
+        }
+        fun row(kind: String, title: String, sub: String, poster: String?, progress: Float?, onTap: (() -> Unit)?) {
+            body.addView(LinearLayout(this).apply {
+                orientation = LinearLayout.HORIZONTAL
+                gravity = Gravity.CENTER_VERTICAL
+                setPadding(dp(10), dp(9), dp(10), dp(9))
+                background = GradientDrawable().apply { setColor(0xFF262626.toInt()); cornerRadius = dp(12).toFloat() }
+                layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { bottomMargin = dp(6) }
+                addView(ImageView(this@MainActivity).apply {
+                    scaleType = ImageView.ScaleType.CENTER_CROP; clipToOutline = true
+                    background = GradientDrawable().apply { setColor(0xFF1A1A1A.toInt()); cornerRadius = dp(5).toFloat() }
+                    layoutParams = LinearLayout.LayoutParams(dp(36), dp(54)).apply { marginEnd = dp(10) }
+                    poster?.let { loadImage(this, it) }
+                })
+                addView(LinearLayout(this@MainActivity).apply {
+                    orientation = LinearLayout.VERTICAL
+                    layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
+                    addView(LinearLayout(this@MainActivity).apply {
+                        orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL
+                        addView(badge(kind))
+                        addView(TextView(this@MainActivity).apply {
+                            text = title; textSize = 14f; setTextColor(Color.WHITE); setTypeface(typeface, Typeface.BOLD)
+                            maxLines = 1; ellipsize = android.text.TextUtils.TruncateAt.END; setPadding(dp(6), 0, 0, 0)
+                        })
+                    })
+                    if (progress != null) addView(LinearLayout(this@MainActivity).apply {
+                        orientation = LinearLayout.HORIZONTAL
+                        background = GradientDrawable().apply { setColor(0xFF3A3A3A.toInt()); cornerRadius = dp(2).toFloat() }
+                        layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(4)).apply { topMargin = dp(6); bottomMargin = dp(4) }
+                        addView(View(this@MainActivity).apply {
+                            background = GradientDrawable().apply { setColor(if (kind == "s") 0xFF35C5F4.toInt() else 0xFFFFC230.toInt()); cornerRadius = dp(2).toFloat() }
+                        }, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.MATCH_PARENT, progress + 0.0001f))
+                        addView(View(this@MainActivity), LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.MATCH_PARENT, 1f - progress + 0.0001f))
+                    })
+                    addView(TextView(this@MainActivity).apply { text = sub; textSize = 12f; setTextColor(0xFFA8A8A8.toInt()); setPadding(0, dp(2), 0, 0) })
+                })
+                if (onTap != null) { isClickable = true; setOnClickListener { onTap() } }
+            })
+        }
+        val iso = java.text.SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss'Z'", java.util.Locale.ROOT).apply { timeZone = java.util.TimeZone.getTimeZone("UTC") }
+        fun parseIso(s: String): Long? = runCatching { iso.parse(s.substringBefore('.').removeSuffix("Z") + "Z")?.time }.getOrNull()
+        val dayFmt = java.text.SimpleDateFormat("EEE d MMM", NL)
+        val hmFmt = java.text.SimpleDateFormat("HH:mm", NL)
+        fun ep(e: JSONObject?) = if (e == null) "" else "S%02dE%02d".format(e.optInt("seasonNumber"), e.optInt("episodeNumber"))
+
+        fun overview() {
+            val my = ++seq
+            body.removeAllViews()
+            note("Laden…")
+            thread {
+                val qS = if (sonarr.configured()) runCatching { sonarr.records("/queue?pageSize=50&includeSeries=true&includeEpisode=true") }.getOrNull() else null
+                val qR = if (radarr.configured()) runCatching { radarr.records("/queue?pageSize=50&includeMovie=true") }.getOrNull() else null
+                val hS = if (sonarr.configured()) runCatching { sonarr.records("/history?pageSize=40&sortKey=date&sortDirection=descending&eventType=3&includeSeries=true&includeEpisode=true") }.getOrNull() else null
+                val hR = if (radarr.configured()) runCatching { radarr.records("/history?pageSize=20&sortKey=date&sortDirection=descending&eventType=3&includeMovie=true") }.getOrNull() else null
+                val now = System.currentTimeMillis()
+                val start = iso.format(java.util.Date(now - 6 * 3_600_000L))
+                val end = iso.format(java.util.Date(now + 8 * 86_400_000L))
+                val cS = if (sonarr.configured()) runCatching { sonarr.arr("/calendar?start=$start&end=$end&includeSeries=true") }.getOrNull() else null
+                val cR = if (radarr.configured()) runCatching { radarr.arr("/calendar?start=$start&end=$end") }.getOrNull() else null
+                val dk = (if (sonarr.configured()) runCatching { sonarr.arr("/diskspace") }.getOrNull() else null)
+                    ?: (if (radarr.configured()) runCatching { radarr.arr("/diskspace") }.getOrNull() else null)
+                val err = listOfNotNull(
+                    if (sonarr.configured() && qS == null && hS == null) "Sonarr niet bereikbaar" else null,
+                    if (radarr.configured() && qR == null && hR == null) "Radarr niet bereikbaar" else null,
+                )
+                runOnUiThread {
+                    if (my != seq) return@runOnUiThread
+                    body.removeAllViews()
+                    err.forEach { note("⚠ $it (⚙ om te controleren)") }
+                    // Schijfruimte: de grootste schijf
+                    dk?.let { arr ->
+                        val d = (0 until arr.length()).map { arr.getJSONObject(it) }.maxByOrNull { it.optLong("totalSpace") }
+                        if (d != null && d.optLong("totalSpace") > 0) {
+                            val free = d.optLong("freeSpace"); val tot = d.optLong("totalSpace")
+                            disk.text = String.format(NL, "%.1f TB vrij", free / 1e12)
+                            val used = (1f - free.toFloat() / tot).coerceIn(0f, 1f)
+                            diskBar.removeAllViews()
+                            diskBar.addView(View(this).apply { background = GradientDrawable().apply { setColor(if (used > 0.9f) 0xFFE57000.toInt() else 0xFF7E9BAA.toInt()); cornerRadius = dp(3).toFloat() } },
+                                LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.MATCH_PARENT, used + 0.0001f))
+                            diskBar.addView(View(this), LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.MATCH_PARENT, 1f - used + 0.0001f))
+                            diskBar.visibility = View.VISIBLE
+                        }
+                    }
+                    // Downloaden
+                    val queue = ArrayList<Triple<String, JSONObject, String>>()
+                    qS?.let { a -> for (i in 0 until a.length()) queue.add(Triple("s", a.getJSONObject(i), "")) }
+                    qR?.let { a -> for (i in 0 until a.length()) queue.add(Triple("r", a.getJSONObject(i), "")) }
+                    header("Bezig met downloaden · ${queue.size}")
+                    if (queue.isEmpty()) note("Niets in de wachtrij")
+                    queue.forEach { (k, q, _) ->
+                        val size = q.optDouble("size", 0.0); val left = q.optDouble("sizeleft", 0.0)
+                        val frac = if (size > 0) ((size - left) / size).toFloat().coerceIn(0f, 1f) else 0f
+                        val title = if (k == "s") "${q.optJSONObject("series")?.optString("title") ?: q.optString("title")} · ${ep(q.optJSONObject("episode"))}"
+                            else q.optJSONObject("movie")?.let { "${it.optString("title")} (${it.optInt("year")})" } ?: q.optString("title")
+                        val tl = q.optString("timeleft").takeIf { it.isNotEmpty() && it != "null" }?.let { t ->
+                            val p = t.split(':'); runCatching { val h = p[0].substringAfterLast('.').toInt(); val m = p[1].toInt(); if (h > 0) "nog $h u $m min" else "nog $m min" }.getOrNull()
+                        }
+                        val st = q.optString("trackedDownloadState").ifEmpty { q.optString("status") }
+                        row(k, title, listOfNotNull("${(frac * 100).toInt()}%", tl, st.takeIf { it.isNotEmpty() && it != "downloading" }).joinToString(" · "),
+                            ArrApi.poster(q.optJSONObject(if (k == "s") "series" else "movie")), frac, null)
+                    }
+                    // Net binnen
+                    header("Net binnen · tik = afspelen op Kodi")
+                    val recent = ArrayList<Pair<Long, () -> Unit>>()
+                    var shown = 0
+                    val seen = HashSet<String>()
+                    fun addRecent(k: String, h: JSONObject) {
+                        val path = h.optJSONObject("data")?.optString("importedPath").orEmpty()
+                        val title: String; val poster: String?
+                        if (k == "s") {
+                            val s = h.optJSONObject("series"); val e = h.optJSONObject("episode")
+                            title = "${s?.optString("title").orEmpty()} · ${ep(e)}"; poster = ArrApi.poster(s)
+                        } else {
+                            val m = h.optJSONObject("movie")
+                            title = m?.let { "${it.optString("title")} (${it.optInt("year")})" } ?: h.optString("sourceTitle"); poster = ArrApi.poster(m)
+                        }
+                        if (!seen.add(title) || shown >= 12) return
+                        shown++
+                        val t = parseIso(h.optString("date"))
+                        val ago = t?.let { val d = (now - it) / 86_400_000L; when (d) { 0L -> "vandaag"; 1L -> "gisteren"; else -> "$d dagen geleden" } }.orEmpty()
+                        row(k, title, ago, poster, null, if (path.isNotEmpty()) ({ playArrFile(path, title) { dialog.dismiss() } }) else null)
+                    }
+                    val all = ArrayList<Pair<String, JSONObject>>()
+                    hS?.let { a -> for (i in 0 until a.length()) all.add("s" to a.getJSONObject(i)) }
+                    hR?.let { a -> for (i in 0 until a.length()) all.add("r" to a.getJSONObject(i)) }
+                    all.sortedByDescending { parseIso(it.second.optString("date")) ?: 0L }.forEach { (k, h) -> addRecent(k, h) }
+                    if (shown == 0) note("Nog niets binnengekomen")
+                    // Komt eraan
+                    header("Komt eraan")
+                    val upcoming = ArrayList<Triple<Long, String, Pair<String, String?>>>()
+                    cS?.let { a -> for (i in 0 until a.length()) { val e = a.getJSONObject(i)
+                        if (e.optBoolean("hasFile")) continue
+                        val t = parseIso(e.optString("airDateUtc")) ?: continue
+                        upcoming.add(Triple(t, "s", "${e.optJSONObject("series")?.optString("title").orEmpty()} · ${ep(e)}" to ArrApi.poster(e.optJSONObject("series"))))
+                    } }
+                    cR?.let { a -> for (i in 0 until a.length()) { val m = a.getJSONObject(i)
+                        if (m.optBoolean("hasFile")) continue
+                        val t = listOf("digitalRelease", "physicalRelease", "inCinemas").mapNotNull { k -> parseIso(m.optString(k)) }.filter { it >= now - 86_400_000L }.minOrNull() ?: continue
+                        upcoming.add(Triple(t, "r", "${m.optString("title")} (${m.optInt("year")})" to ArrApi.poster(m)))
+                    } }
+                    if (upcoming.isEmpty()) note("Niets gepland deze week")
+                    upcoming.sortedBy { it.first }.forEach { (t, k, tp) ->
+                        val d = java.util.Date(t)
+                        row(k, tp.first, (if (k == "s") "${dayFmt.format(d)} · ${hmFmt.format(d)}" else "${dayFmt.format(d)} · digitaal uit"), tp.second, null, null)
+                    }
+                }
+            }
+        }
+
+        fun grid(items: List<JSONObject>, onTap: (JSONObject) -> Unit, sub: (JSONObject) -> String) {
+            items.chunked(3).forEach { chunk ->
+                body.addView(LinearLayout(this).apply {
+                    orientation = LinearLayout.HORIZONTAL
+                    setPadding(0, 0, 0, dp(12))
+                    chunk.forEach { o ->
+                        addView(LinearLayout(this@MainActivity).apply {
+                            orientation = LinearLayout.VERTICAL
+                            layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f).apply { marginEnd = dp(8) }
+                            isClickable = true
+                            setOnClickListener { onTap(o) }
+                            addView(ImageView(this@MainActivity).apply {
+                                scaleType = ImageView.ScaleType.CENTER_CROP; clipToOutline = true
+                                background = GradientDrawable().apply { setColor(0xFF1A1A1A.toInt()); cornerRadius = dp(8).toFloat() }
+                                layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(150))
+                                ArrApi.poster(o)?.let { loadImage(this, it) }
+                            })
+                            addView(TextView(this@MainActivity).apply {
+                                text = o.optString("title"); textSize = 12f; setTextColor(0xFFDDDDDD.toInt()); maxLines = 2
+                                ellipsize = android.text.TextUtils.TruncateAt.END; setPadding(dp(2), dp(4), dp(2), 0)
+                            })
+                            addView(TextView(this@MainActivity).apply { text = sub(o); textSize = 11f; setTextColor(0xFF9A9A9A.toInt()); setPadding(dp(2), 0, 0, 0) })
+                        })
+                    }
+                    repeat(3 - chunk.size) { addView(View(this@MainActivity), LinearLayout.LayoutParams(0, 1, 1f)) }
+                })
+            }
+        }
+        fun seriesList() {
+            val my = ++seq
+            body.removeAllViews(); note("Laden…")
+            thread {
+                val r = runCatching { sonarr.arr("/series") }
+                runOnUiThread {
+                    if (my != seq) return@runOnUiThread
+                    body.removeAllViews()
+                    val a = r.getOrNull() ?: run { note("Sonarr: ${r.exceptionOrNull()?.message}"); return@runOnUiThread }
+                    val items = (0 until a.length()).map { a.getJSONObject(it) }.sortedBy { it.optString("sortTitle", it.optString("title")) }
+                    grid(items, { s -> showArrSeries(s) }) { s ->
+                        val st = s.optJSONObject("statistics")
+                        val have = st?.optInt("episodeFileCount") ?: 0; val tot = st?.optInt("episodeCount") ?: 0
+                        if (tot > have) "$have/$tot · ${tot - have} ontbreken" else "$have afl."
+                    }
+                }
+            }
+        }
+        fun movieList() {
+            val my = ++seq
+            body.removeAllViews(); note("Laden…")
+            thread {
+                val r = runCatching { radarr.arr("/movie") }
+                runOnUiThread {
+                    if (my != seq) return@runOnUiThread
+                    body.removeAllViews()
+                    val a = r.getOrNull() ?: run { note("Radarr: ${r.exceptionOrNull()?.message}"); return@runOnUiThread }
+                    val items = (0 until a.length()).map { a.getJSONObject(it) }
+                        .sortedWith(compareBy<JSONObject>({ if (it.optBoolean("hasFile")) 0 else 1 }, { it.optString("sortTitle", it.optString("title")) }))
+                    grid(items, { m -> showArrMovie(m) }) { m -> "${m.optInt("year")} · ${if (m.optBoolean("hasFile")) "binnen" else "ontbreekt"}" }
+                }
+            }
+        }
+        val tabNames = listOfNotNull("Overzicht", if (sonarr.configured()) "Series" else null, if (radarr.configured()) "Films" else null)
+        val tabViews = ArrayList<TextView>()
+        fun select(i: Int) {
+            tabViews.forEachIndexed { j, v ->
+                v.setTextColor(if (i == j) 0xFF0B2430.toInt() else Color.WHITE)
+                v.background = GradientDrawable().apply { setColor(if (i == j) 0xFF4FC3F7.toInt() else 0xFF2A2A2A.toInt()); cornerRadius = dp(16).toFloat() }
+            }
+            when (tabNames[i]) { "Series" -> seriesList(); "Films" -> movieList(); else -> overview() }
+        }
+        tabNames.forEachIndexed { i, n ->
+            val v = TextView(this).apply {
+                text = n; textSize = 13f; setTypeface(typeface, Typeface.BOLD); setPadding(dp(14), dp(7), dp(14), dp(7))
+                layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { marginEnd = dp(8) }
+                isClickable = true; setOnClickListener { select(i) }
+            }
+            tabViews.add(v); tabs.addView(v)
+        }
+        dialog.show()
+        select(0)
+    }
+
+    /** Serie uit Sonarr: seizoenen, per aflevering de status uit Sonarr én de kijkstatus uit Kodi. */
+    private fun showArrSeries(s: JSONObject) {
+        val content = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(dp(16), dp(12), dp(16), dp(16)) }
+        val dialog = sheetDialog(ScrollView(this).apply { addView(content) })
+        val id = s.optInt("id")
+        val st = s.optJSONObject("statistics")
+        val missing = (st?.optInt("episodeCount") ?: 0) - (st?.optInt("episodeFileCount") ?: 0)
+        content.addView(LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            addView(ImageView(this@MainActivity).apply {
+                scaleType = ImageView.ScaleType.CENTER_CROP; clipToOutline = true
+                background = GradientDrawable().apply { setColor(0xFF1A1A1A.toInt()); cornerRadius = dp(6).toFloat() }
+                layoutParams = LinearLayout.LayoutParams(dp(60), dp(90)).apply { marginEnd = dp(12) }
+                ArrApi.poster(s)?.let { loadImage(this, it) }
+            })
+            addView(LinearLayout(this@MainActivity).apply {
+                orientation = LinearLayout.VERTICAL
+                addView(TextView(this@MainActivity).apply { text = s.optString("title"); textSize = 19f; setTextColor(Color.WHITE); setTypeface(typeface, Typeface.BOLD) })
+                addView(TextView(this@MainActivity).apply {
+                    text = listOf(s.optInt("year").takeIf { it > 0 }?.toString(), if (s.optString("status") == "continuing") "lopend" else "afgelopen",
+                        if (s.optBoolean("monitored")) "gevolgd" else "niet gevolgd").filterNotNull().joinToString(" · ")
+                    textSize = 12f; setTextColor(0xFFA8A8A8.toInt())
+                })
+                if (missing > 0) addView(TextView(this@MainActivity).apply { text = "$missing afleveringen ontbreken"; textSize = 12f; setTextColor(0xFFFFC966.toInt()) })
+            })
+        })
+        content.addView(sheetRow("🔍   Ontbrekende zoeken", 0xFF35C5F4.toInt(), dark = true) {
+            thread {
+                val r = runCatching { sonarr.post("/command", JSONObject().put("name", "SeriesSearch").put("seriesId", id)) }
+                runOnUiThread { mediaStatus.text = if (r.isSuccess) "Sonarr zoekt naar ${s.optString("title")}" else "Zoeken mislukt: ${r.exceptionOrNull()?.message}" }
+            }
+        }.apply { (layoutParams as LinearLayout.LayoutParams).topMargin = dp(12) })
+        val seasonRow = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; setPadding(0, dp(8), 0, dp(6)) }
+        content.addView(android.widget.HorizontalScrollView(this).apply { isHorizontalScrollBarEnabled = false; addView(seasonRow) })
+        val list = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        content.addView(list)
+        list.addView(TextView(this).apply { text = "Afleveringen laden…"; textSize = 13f; setTextColor(0xFF888888.toInt()) })
+        dialog.show()
+        thread {
+            val eps = runCatching { sonarr.arr("/episode?seriesId=$id") }.getOrNull()
+            val files = runCatching { sonarr.arr("/episodefile?seriesId=$id") }.getOrNull()
+            val queue = runCatching { sonarr.records("/queue?pageSize=50&seriesId=$id&includeEpisode=true") }.getOrNull()
+            val fileById = HashMap<Int, JSONObject>()
+            files?.let { a -> for (i in 0 until a.length()) a.getJSONObject(i).let { fileById[it.optInt("id")] = it } }
+            val dl = HashMap<Int, Float>()
+            queue?.let { a -> for (i in 0 until a.length()) a.getJSONObject(i).let { q ->
+                val size = q.optDouble("size", 0.0); val left = q.optDouble("sizeleft", 0.0)
+                dl[q.optInt("episodeId")] = if (size > 0) ((size - left) / size).toFloat() else 0f
+            } }
+            val all = eps?.let { a -> (0 until a.length()).map { a.getJSONObject(it) } }.orEmpty()
+            val seasons = all.map { it.optInt("seasonNumber") }.distinct().sortedBy { if (it == 0) 999 else it }
+            runOnUiThread {
+                if (!dialog.isShowing) return@runOnUiThread
+                list.removeAllViews()
+                if (all.isEmpty()) { list.addView(TextView(this).apply { text = "Geen afleveringen"; setTextColor(0xFF888888.toInt()) }); return@runOnUiThread }
+                val chips = ArrayList<Pair<Int, TextView>>()
+                val dateFmt = java.text.SimpleDateFormat("d MMM yyyy", NL)
+                val iso = java.text.SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss", java.util.Locale.ROOT).apply { timeZone = java.util.TimeZone.getTimeZone("UTC") }
+                fun showSeason(n: Int) {
+                    chips.forEach { (num, c) ->
+                        val on = num == n
+                        c.setTextColor(if (on) 0xFF0B2430.toInt() else Color.WHITE)
+                        c.background = GradientDrawable().apply { setColor(if (on) 0xFF4FC3F7.toInt() else 0xFF2A2A2A.toInt()); cornerRadius = dp(16).toFloat() }
+                    }
+                    list.removeAllViews()
+                    val now = System.currentTimeMillis()
+                    all.filter { it.optInt("seasonNumber") == n }.sortedBy { it.optInt("episodeNumber") }.forEach { e ->
+                        val f = fileById[e.optInt("episodeFileId")]
+                        val air = runCatching { iso.parse(e.optString("airDateUtc").take(19))?.time }.getOrNull()
+                        val label = "${e.optInt("episodeNumber")}. ${e.optString("title")}"
+                        val status = TextView(this).apply { textSize = 11f; setPadding(0, dp(2), 0, 0) }
+                        val icon = TextView(this).apply { textSize = 15f; setPadding(0, 0, dp(10), 0); setTypeface(typeface, Typeface.BOLD) }
+                        val row = LinearLayout(this).apply {
+                            orientation = LinearLayout.HORIZONTAL
+                            gravity = Gravity.CENTER_VERTICAL
+                            setPadding(dp(10), dp(10), dp(10), dp(10))
+                            background = GradientDrawable().apply { setColor(0xFF262626.toInt()); cornerRadius = dp(12).toFloat() }
+                            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { bottomMargin = dp(6) }
+                            addView(icon)
+                            addView(LinearLayout(this@MainActivity).apply {
+                                orientation = LinearLayout.VERTICAL
+                                layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
+                                addView(TextView(this@MainActivity).apply {
+                                    text = label; textSize = 14f; setTextColor(Color.WHITE); setTypeface(typeface, Typeface.BOLD)
+                                    maxLines = 2; ellipsize = android.text.TextUtils.TruncateAt.END
+                                })
+                                addView(status)
+                            })
+                        }
+                        val q = dl[e.optInt("id")]
+                        when {
+                            f != null -> {
+                                val quality = f.optJSONObject("quality")?.optJSONObject("quality")?.optString("name").orEmpty()
+                                icon.text = "✓"; icon.setTextColor(0xFF7CE38A.toInt())
+                                status.text = quality; status.setTextColor(0xFFA8A8A8.toInt())
+                                val path = f.optString("path")
+                                row.isClickable = true
+                                row.setOnClickListener { playArrFile(path, "${s.optString("title")} ${"S%02dE%02d".format(n, e.optInt("episodeNumber"))}") { dialog.dismiss() } }
+                                // Kijkstatus uit Kodi erbij
+                                thread {
+                                    val k = runCatching { kodiPathFor(path)?.let { kodi.details(KodiApi.Entry(label, it, false, false, 0.0, 0.0)) } }.getOrNull()
+                                    if (k != null) runOnUiThread {
+                                        when {
+                                            k.played -> { status.text = "$quality · bekeken"; icon.text = "✓" }
+                                            k.resumeSec > 0 -> { status.text = "$quality · verder bij ${fmtSec(k.resumeSec)}"; status.setTextColor(0xFFFFC966.toInt()); icon.text = "◐"; icon.setTextColor(0xFFFFC966.toInt()) }
+                                            else -> { status.text = "$quality · nieuw"; icon.text = "▶"; icon.setTextColor(0xFF18BCF2.toInt()) }
+                                        }
+                                    }
+                                }
+                            }
+                            q != null -> { icon.text = "↓"; icon.setTextColor(0xFF35C5F4.toInt()); status.text = "downloaden · ${(q * 100).toInt()}%"; status.setTextColor(0xFF35C5F4.toInt()) }
+                            air != null && air > now -> { icon.text = "◷"; icon.setTextColor(0xFF9A9A9A.toInt()); status.text = "verwacht ${dateFmt.format(java.util.Date(air))}"; status.setTextColor(0xFF9A9A9A.toInt()); row.alpha = 0.6f }
+                            else -> {
+                                icon.text = "!"; icon.setTextColor(0xFFFFC966.toInt())
+                                status.text = "ontbreekt" + (air?.let { " · uitgezonden ${dateFmt.format(java.util.Date(it))}" } ?: ""); status.setTextColor(0xFFFFC966.toInt())
+                                row.addView(TextView(this).apply {
+                                    text = "Zoek"; textSize = 13f; setTextColor(Color.WHITE); setTypeface(typeface, Typeface.BOLD)
+                                    setPadding(dp(12), dp(7), dp(12), dp(7))
+                                    background = GradientDrawable().apply { setColor(0xFF2A2A2A.toInt()); setStroke(dp(1), 0xFF555555.toInt()); cornerRadius = dp(15).toFloat() }
+                                    isClickable = true
+                                    setOnClickListener {
+                                        text = "…"
+                                        thread {
+                                            val r = runCatching { sonarr.post("/command", JSONObject().put("name", "EpisodeSearch").put("episodeIds", JSONArray().put(e.optInt("id")))) }
+                                            runOnUiThread { text = if (r.isSuccess) "Zoekt" else "Mislukt" }
+                                        }
+                                    }
+                                })
+                            }
+                        }
+                        list.addView(row)
+                    }
+                }
+                seasons.forEach { n ->
+                    val inS = all.filter { it.optInt("seasonNumber") == n }
+                    val have = inS.count { fileById.containsKey(it.optInt("episodeFileId")) }
+                    val c = TextView(this).apply {
+                        text = (if (n == 0) "Specials" else "Seizoen $n") + " · $have/${inS.size}"
+                        textSize = 13f; setTypeface(typeface, Typeface.BOLD); setPadding(dp(14), dp(7), dp(14), dp(7))
+                        layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { marginEnd = dp(8) }
+                        isClickable = true; setOnClickListener { showSeason(n) }
+                    }
+                    chips.add(n to c); seasonRow.addView(c)
+                }
+                // Begin bij het laatste seizoen met afleveringen
+                showSeason(seasons.filter { it != 0 }.lastOrNull { n -> all.any { it.optInt("seasonNumber") == n && it.optBoolean("hasFile") } } ?: seasons.first())
+            }
+        }
+    }
+
+    /** Film uit Radarr: afspelen via Kodi of zoeken. */
+    private fun showArrMovie(m: JSONObject) {
+        val content = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(dp(18), dp(14), dp(18), dp(18)) }
+        val dialog = sheetDialog(content)
+        content.addView(LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            addView(ImageView(this@MainActivity).apply {
+                scaleType = ImageView.ScaleType.CENTER_CROP; clipToOutline = true
+                background = GradientDrawable().apply { setColor(0xFF1A1A1A.toInt()); cornerRadius = dp(8).toFloat() }
+                layoutParams = LinearLayout.LayoutParams(dp(100), dp(150)).apply { marginEnd = dp(14) }
+                ArrApi.poster(m)?.let { loadImage(this, it) }
+            })
+            addView(LinearLayout(this@MainActivity).apply {
+                orientation = LinearLayout.VERTICAL
+                layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
+                addView(TextView(this@MainActivity).apply { text = m.optString("title"); textSize = 19f; setTextColor(Color.WHITE); setTypeface(typeface, Typeface.BOLD) })
+                addView(TextView(this@MainActivity).apply {
+                    val q = m.optJSONObject("movieFile")?.optJSONObject("quality")?.optJSONObject("quality")?.optString("name")
+                    text = listOfNotNull(m.optInt("year").takeIf { it > 0 }?.toString(), if (m.optBoolean("hasFile")) "binnen" else "ontbreekt", q).joinToString(" · ")
+                    textSize = 13f; setTextColor(0xFF4FC3F7.toInt()); setPadding(0, dp(2), 0, dp(6))
+                })
+                addView(TextView(this@MainActivity).apply {
+                    text = m.optString("overview").ifEmpty { "Geen beschrijving." }; textSize = 13f; setTextColor(0xFFCCCCCC.toInt()); maxLines = 8
+                    ellipsize = android.text.TextUtils.TruncateAt.END
+                })
+            })
+        })
+        content.addView(View(this), LinearLayout.LayoutParams(1, dp(12)))
+        val path = m.optJSONObject("movieFile")?.optString("path").orEmpty()
+        if (m.optBoolean("hasFile") && path.isNotEmpty()) {
+            content.addView(sheetRow("▶   Afspelen op Kodi", 0xFF18BCF2.toInt(), dark = true) {
+                playArrFile(path, m.optString("title")) { dialog.dismiss() }
+            })
+        } else {
+            content.addView(sheetRow("🔍   Nu zoeken in Radarr", 0xFFFFC230.toInt(), dark = true) {
+                thread {
+                    val r = runCatching { radarr.post("/command", JSONObject().put("name", "MoviesSearch").put("movieIds", JSONArray().put(m.optInt("id")))) }
+                    runOnUiThread { dialog.dismiss(); mediaStatus.text = if (r.isSuccess) "Radarr zoekt naar ${m.optString("title")}" else "Zoeken mislukt: ${r.exceptionOrNull()?.message}" }
+                }
+            })
+        }
+        dialog.show()
+    }
+
+    /** Vanuit Films & series: staat hij al in Sonarr/Radarr, en anders toevoegen (met kwaliteitsprofiel). */
+    private fun arrStatusFor(t: TmdbApi.Title, into: LinearLayout, parent: Dialog) {
+        val api = if (t.type == "tv") sonarr else radarr
+        if (!api.configured()) return
+        val name = if (t.type == "tv") "Sonarr" else "Radarr"
+        val color = if (t.type == "tv") 0xFF35C5F4.toInt() else 0xFFFFC230.toInt()
+        val holder = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(0, dp(10), 0, 0) }
+        into.addView(holder)
+        holder.addView(TextView(this).apply { text = "$name controleren…"; textSize = 12f; setTextColor(0xFF888888.toInt()) })
+        thread {
+            val r = runCatching {
+                if (t.type == "tv") {
+                    val tvdb = tmdb.tvdbId(t.id) ?: throw IOException("geen TVDB-nummer bij TMDB")
+                    val have = sonarr.arr("/series?tvdbId=$tvdb").let { if (it.length() > 0) it.getJSONObject(0) else null }
+                    Triple(have, tvdb, null as JSONObject?)
+                } else {
+                    val have = radarr.arr("/movie?tmdbId=${t.id}").let { if (it.length() > 0) it.getJSONObject(0) else null }
+                    Triple(have, 0, null as JSONObject?)
+                }
+            }
+            runOnUiThread {
+                holder.removeAllViews()
+                val res = r.getOrNull() ?: run {
+                    holder.addView(TextView(this).apply { text = "$name: ${r.exceptionOrNull()?.message}"; textSize = 12f; setTextColor(0xFF888888.toInt()) })
+                    return@runOnUiThread
+                }
+                val have = res.first
+                if (have != null) {
+                    holder.addView(sheetRow("✓   Al in $name · openen", 0xFF1F3A2A.toInt()) {
+                        parent.dismiss()
+                        if (t.type == "tv") showArrSeries(have) else showArrMovie(have)
+                    })
+                } else {
+                    holder.addView(sheetRow("＋   Toevoegen aan $name", color, dark = true) { addToArr(t, res.second) { parent.dismiss() } })
+                }
+            }
+        }
+    }
+
+    private fun addToArr(t: TmdbApi.Title, tvdb: Int, done: () -> Unit) {
+        val api = if (t.type == "tv") sonarr else radarr
+        val name = if (t.type == "tv") "Sonarr" else "Radarr"
+        mediaStatus.text = "$name: profielen ophalen…"
+        thread {
+            val r = runCatching {
+                val profiles = api.arr("/qualityprofile").let { a -> (0 until a.length()).map { a.getJSONObject(it) } }
+                val roots = api.arr("/rootfolder").let { a -> (0 until a.length()).map { a.getJSONObject(it).optString("path") } }
+                profiles to roots
+            }
+            runOnUiThread {
+                val (profiles, roots) = r.getOrNull() ?: run { mediaStatus.text = "$name: ${r.exceptionOrNull()?.message}"; return@runOnUiThread }
+                if (profiles.isEmpty() || roots.isEmpty()) { mediaStatus.text = "$name: geen kwaliteitsprofiel of map ingesteld"; return@runOnUiThread }
+                val lastKey = "arr_profile_${if (t.type == "tv") "s" else "r"}"
+                val last = prefs().getInt(lastKey, -1)
+                val names = profiles.map { it.optString("name") }.toTypedArray()
+                var pick = profiles.indexOfFirst { it.optInt("id") == last }.coerceAtLeast(0)
+                AlertDialog.Builder(this)
+                    .setTitle("${t.name} → $name")
+                    .setSingleChoiceItems(names, pick) { _, w -> pick = w }
+                    .setPositiveButton("Toevoegen en zoeken") { _, _ ->
+                        val prof = profiles[pick].optInt("id")
+                        prefs().edit().putInt(lastKey, prof).apply()
+                        mediaStatus.text = "${t.name} toevoegen aan $name…"
+                        thread {
+                            val add = runCatching {
+                                if (t.type == "tv") {
+                                    val base = sonarr.arr("/series/lookup?term=tvdb:$tvdb").getJSONObject(0)
+                                    base.put("qualityProfileId", prof).put("rootFolderPath", roots.first()).put("monitored", true).put("seasonFolder", true)
+                                        .put("addOptions", JSONObject().put("searchForMissingEpisodes", true).put("monitor", "all"))
+                                    runCatching { sonarr.arr("/languageprofile").optJSONObject(0)?.optInt("id") }.getOrNull()?.let { base.put("languageProfileId", it) }
+                                    sonarr.post("/series", base)
+                                } else {
+                                    val base = radarr.obj("/movie/lookup/tmdb?tmdbId=${t.id}")
+                                    base.put("qualityProfileId", prof).put("rootFolderPath", roots.first()).put("monitored", true)
+                                        .put("addOptions", JSONObject().put("searchForMovie", true))
+                                    radarr.post("/movie", base)
+                                }
+                            }
+                            runOnUiThread {
+                                mediaStatus.text = if (add.isSuccess) "${t.name} toegevoegd aan $name, zoeken gestart" else "Toevoegen mislukt: ${add.exceptionOrNull()?.message}"
+                                if (add.isSuccess) done()
+                            }
+                        }
+                    }
+                    .setNegativeButton("Annuleren", null)
+                    .show()
             }
         }
     }
