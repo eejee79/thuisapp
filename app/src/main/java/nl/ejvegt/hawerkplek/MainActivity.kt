@@ -5110,16 +5110,33 @@ class MainActivity : Activity() {
             }
         }
         val monitored = o.optBoolean("monitored")
-        val items = arrayOf(
+        val items = listOfNotNull(
             if (monitored) "Niet meer volgen" else "Weer volgen",
+            if (kind == "s") "Welke afleveringen volgen…" else null,
             "Kwaliteitsprofiel wijzigen",
             if (kind == "s") "Alles opnieuw zoeken" else "Opnieuw zoeken",
             "Verwijderen…",
-        )
-        AlertDialog.Builder(this).setTitle(title).setItems(items) { _, w ->
+        ).toTypedArray()
+        AlertDialog.Builder(this).setTitle(title).setItems(items) { _, w0 ->
+            // Films hebben geen afleveringskeuze: dan schuift alles één op
+            val w = if (kind != "s" && w0 >= 1) w0 + 1 else w0
             when (w) {
                 0 -> save({ it.put("monitored", !monitored) }, if (monitored) "wordt niet meer gevolgd" else "wordt weer gevolgd")
-                1 -> thread {
+                1 -> AlertDialog.Builder(this).setTitle("Welke afleveringen volgen?")
+                    .setItems(SONARR_MONITOR.map { it.second }.toTypedArray()) { _, p ->
+                        val mon = SONARR_MONITOR[p].first
+                        thread {
+                            val body = JSONObject()
+                                .put("series", JSONArray().put(JSONObject().put("id", o.optInt("id")).put("monitored", mon != "none")))
+                                .put("monitoringOptions", JSONObject().put("monitor", mon))
+                            val r = runCatching { sonarr.post("/seasonpass", body) }
+                            runOnUiThread {
+                                mediaStatus.text = if (r.isSuccess) "$title: ${SONARR_MONITOR[p].second.lowercase(NL)}" else "Sonarr: ${r.exceptionOrNull()?.message}"
+                                if (r.isSuccess) refresh()
+                            }
+                        }
+                    }.show()
+                2 -> thread {
                     val profiles = runCatching { api.arr("/qualityprofile").let { a -> (0 until a.length()).map { a.getJSONObject(it) } } }.getOrNull().orEmpty()
                     runOnUiThread {
                         if (profiles.isEmpty()) { mediaStatus.text = "$name: geen profielen"; return@runOnUiThread }
@@ -5132,13 +5149,13 @@ class MainActivity : Activity() {
                             .setNegativeButton("Annuleren", null).show()
                     }
                 }
-                2 -> thread {
+                3 -> thread {
                     val cmd = if (kind == "s") JSONObject().put("name", "SeriesSearch").put("seriesId", o.optInt("id"))
                         else JSONObject().put("name", "MoviesSearch").put("movieIds", JSONArray().put(o.optInt("id")))
                     val r = runCatching { api.post("/command", cmd) }
                     runOnUiThread { mediaStatus.text = if (r.isSuccess) "$name zoekt naar $title" else "Zoeken mislukt: ${r.exceptionOrNull()?.message}" }
                 }
-                3 -> {
+                4 -> {
                     var withFiles = false
                     AlertDialog.Builder(this).setTitle("$title verwijderen?")
                         .setMultiChoiceItems(arrayOf("Ook de bestanden van de schijf verwijderen"), booleanArrayOf(false)) { _, _, c -> withFiles = c }
@@ -5289,6 +5306,19 @@ class MainActivity : Activity() {
         }
     }
 
+    /** Welke afleveringen Sonarr moet volgen (waarde voor addOptions.monitor / seasonpass). */
+    private val SONARR_MONITOR = listOf(
+        "all" to "Alle afleveringen",
+        "future" to "Alleen nieuwe afleveringen (vanaf nu)",
+        "missing" to "Ontbrekende afleveringen",
+        "existing" to "Alleen al uitgezonden afleveringen",
+        "recent" to "Recente afleveringen (laatste 90 dagen)",
+        "firstSeason" to "Alleen het eerste seizoen",
+        "lastSeason" to "Alleen het laatste seizoen",
+        "pilot" to "Alleen de pilot",
+        "none" to "Niets volgen (alleen toevoegen)",
+    )
+
     /** Lookup-object toevoegen aan Sonarr/Radarr met gekozen kwaliteitsprofiel, en meteen zoeken. */
     private fun addArrObject(kind: String, o: JSONObject, done: () -> Unit) {
         val api = if (kind == "s") sonarr else radarr
@@ -5307,15 +5337,16 @@ class MainActivity : Activity() {
                 AlertDialog.Builder(this)
                     .setTitle("Kwaliteit voor ${o.optString("title")}")
                     .setSingleChoiceItems(profiles.map { it.optString("name") }.toTypedArray(), pick) { _, w -> pick = w }
-                    .setPositiveButton("Toevoegen en zoeken") { _, _ ->
+                    .setPositiveButton(if (kind == "s") "Verder" else "Toevoegen en zoeken") { _, _ ->
                         val prof = profiles[pick].optInt("id")
                         prefs().edit().putInt(lastKey, prof).apply()
+                        fun go(monitor: String, search: Boolean) {
                         mediaStatus.text = "${o.optString("title")} toevoegen aan $name…"
                         thread {
                             val add = runCatching {
-                                o.put("qualityProfileId", prof).put("rootFolderPath", roots.first()).put("monitored", true)
+                                o.put("qualityProfileId", prof).put("rootFolderPath", roots.first()).put("monitored", monitor != "none")
                                 if (kind == "s") {
-                                    o.put("seasonFolder", true).put("addOptions", JSONObject().put("searchForMissingEpisodes", true).put("monitor", "all"))
+                                    o.put("seasonFolder", true).put("addOptions", JSONObject().put("searchForMissingEpisodes", search).put("monitor", monitor))
                                     runCatching { sonarr.arr("/languageprofile").optJSONObject(0)?.optInt("id") }.getOrNull()?.let { o.put("languageProfileId", it) }
                                     sonarr.post("/series", o)
                                 } else {
@@ -5324,11 +5355,38 @@ class MainActivity : Activity() {
                                 }
                             }
                             runOnUiThread {
-                                mediaStatus.text = if (add.isSuccess) "${o.optString("title")} toegevoegd aan $name, zoeken gestart"
+                                mediaStatus.text = if (add.isSuccess) "${o.optString("title")} toegevoegd aan $name" + (if (search) ", zoeken gestart" else "")
                                     else "Toevoegen mislukt: ${add.exceptionOrNull()?.message}"
                                 if (add.isSuccess) { done(); Toast.makeText(this, "Toegevoegd aan $name", Toast.LENGTH_SHORT).show() }
                             }
                         }
+                        }
+                        if (kind != "s") { go("all", true); return@setPositiveButton }
+                        // Series: welke afleveringen volgen, en meteen zoeken?
+                        val monKey = "arr_monitor"
+                        var mPick = SONARR_MONITOR.indexOfFirst { it.first == prefs().getString(monKey, "all") }.coerceAtLeast(0)
+                        var search = true
+                        val box = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(dp(8), dp(4), dp(8), 0) }
+                        val group = android.widget.RadioGroup(this)
+                        SONARR_MONITOR.forEachIndexed { i, (_, label) ->
+                            group.addView(android.widget.RadioButton(this).apply { text = label; id = 1000 + i; isChecked = i == mPick })
+                        }
+                        group.setOnCheckedChangeListener { _, cid -> mPick = cid - 1000 }
+                        box.addView(group)
+                        box.addView(android.widget.CheckBox(this).apply {
+                            text = "Meteen zoeken naar wat er al is"; isChecked = true
+                            setOnCheckedChangeListener { _, c -> search = c }
+                        })
+                        AlertDialog.Builder(this)
+                            .setTitle("Welke afleveringen?")
+                            .setView(ScrollView(this).apply { addView(box) })
+                            .setPositiveButton("Toevoegen") { _, _ ->
+                                val mon = SONARR_MONITOR[mPick].first
+                                prefs().edit().putString(monKey, mon).apply()
+                                go(mon, search && mon != "none" && mon != "future")
+                            }
+                            .setNegativeButton("Annuleren", null)
+                            .show()
                     }
                     .setNegativeButton("Annuleren", null)
                     .show()
@@ -5376,52 +5434,16 @@ class MainActivity : Activity() {
     }
 
     private fun addToArr(t: TmdbApi.Title, tvdb: Int, done: () -> Unit) {
-        val api = if (t.type == "tv") sonarr else radarr
-        val name = if (t.type == "tv") "Sonarr" else "Radarr"
-        mediaStatus.text = "$name: profielen ophalen…"
+        val kind = if (t.type == "tv") "s" else "r"
+        mediaStatus.text = "${t.name} opzoeken…"
         thread {
             val r = runCatching {
-                val profiles = api.arr("/qualityprofile").let { a -> (0 until a.length()).map { a.getJSONObject(it) } }
-                val roots = api.arr("/rootfolder").let { a -> (0 until a.length()).map { a.getJSONObject(it).optString("path") } }
-                profiles to roots
+                if (kind == "s") sonarr.arr("/series/lookup?term=tvdb:$tvdb").getJSONObject(0)
+                else radarr.obj("/movie/lookup/tmdb?tmdbId=${t.id}")
             }
             runOnUiThread {
-                val (profiles, roots) = r.getOrNull() ?: run { mediaStatus.text = "$name: ${r.exceptionOrNull()?.message}"; return@runOnUiThread }
-                if (profiles.isEmpty() || roots.isEmpty()) { mediaStatus.text = "$name: geen kwaliteitsprofiel of map ingesteld"; return@runOnUiThread }
-                val lastKey = "arr_profile_${if (t.type == "tv") "s" else "r"}"
-                val last = prefs().getInt(lastKey, -1)
-                val names = profiles.map { it.optString("name") }.toTypedArray()
-                var pick = profiles.indexOfFirst { it.optInt("id") == last }.coerceAtLeast(0)
-                AlertDialog.Builder(this)
-                    .setTitle("${t.name} → $name")
-                    .setSingleChoiceItems(names, pick) { _, w -> pick = w }
-                    .setPositiveButton("Toevoegen en zoeken") { _, _ ->
-                        val prof = profiles[pick].optInt("id")
-                        prefs().edit().putInt(lastKey, prof).apply()
-                        mediaStatus.text = "${t.name} toevoegen aan $name…"
-                        thread {
-                            val add = runCatching {
-                                if (t.type == "tv") {
-                                    val base = sonarr.arr("/series/lookup?term=tvdb:$tvdb").getJSONObject(0)
-                                    base.put("qualityProfileId", prof).put("rootFolderPath", roots.first()).put("monitored", true).put("seasonFolder", true)
-                                        .put("addOptions", JSONObject().put("searchForMissingEpisodes", true).put("monitor", "all"))
-                                    runCatching { sonarr.arr("/languageprofile").optJSONObject(0)?.optInt("id") }.getOrNull()?.let { base.put("languageProfileId", it) }
-                                    sonarr.post("/series", base)
-                                } else {
-                                    val base = radarr.obj("/movie/lookup/tmdb?tmdbId=${t.id}")
-                                    base.put("qualityProfileId", prof).put("rootFolderPath", roots.first()).put("monitored", true)
-                                        .put("addOptions", JSONObject().put("searchForMovie", true))
-                                    radarr.post("/movie", base)
-                                }
-                            }
-                            runOnUiThread {
-                                mediaStatus.text = if (add.isSuccess) "${t.name} toegevoegd aan $name, zoeken gestart" else "Toevoegen mislukt: ${add.exceptionOrNull()?.message}"
-                                if (add.isSuccess) done()
-                            }
-                        }
-                    }
-                    .setNegativeButton("Annuleren", null)
-                    .show()
+                val o = r.getOrNull() ?: run { mediaStatus.text = "Opzoeken mislukt: ${r.exceptionOrNull()?.message}"; return@runOnUiThread }
+                addArrObject(kind, o, done)
             }
         }
     }
