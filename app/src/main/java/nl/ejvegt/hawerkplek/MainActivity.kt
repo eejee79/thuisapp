@@ -801,6 +801,27 @@ class MainActivity : Activity() {
         menuItem(R.id.menuMusic, R.drawable.ic_folder_music, PAGE_MUSIC)
         findViewById<Button>(R.id.saveMusic).setOnClickListener { saveMusicSettings() }
         menuItem(R.id.menuKodi, R.drawable.logo_kodi, PAGE_KODI)
+        // Sonarr & Radarr bij de andere API's (zelfde scherm als het tandwiel in Series & Films)
+        (findViewById<View>(R.id.menuKodi).parent as? LinearLayout)?.let { menu ->
+            val kodiItem = findViewById<TextView>(R.id.menuKodi)
+            menu.addView(TextView(this).apply {
+                text = "Sonarr & Radarr"
+                textSize = 17f
+                setTextColor(Color.WHITE)
+                setBackgroundColor(0xFF1E1E1E.toInt())
+                gravity = Gravity.CENTER_VERTICAL
+                setPadding(dp(18), dp(18), dp(18), dp(18))
+                compoundDrawablePadding = dp(16)
+                getDrawable(R.drawable.logo_kodi)?.mutate()?.let { d ->
+                    val h = dp(28); val w = if (d.intrinsicHeight > 0) h * d.intrinsicWidth / d.intrinsicHeight else h
+                    d.setBounds(0, 0, w, h); setCompoundDrawablesRelative(d, null, null, null)
+                }
+                layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
+                    .apply { bottomMargin = dp(12) }
+                isClickable = true
+                setOnClickListener { showArrSettings { } }
+            }, menu.indexOfChild(kodiItem) + 1)
+        }
         findViewById<Button>(R.id.saveKodi).setOnClickListener { saveKodiSettings() }
         menuItem(R.id.menuTmdb, R.drawable.ic_search, PAGE_TMDB)
         findViewById<Button>(R.id.saveTmdb).setOnClickListener { saveTmdbSettings() }
