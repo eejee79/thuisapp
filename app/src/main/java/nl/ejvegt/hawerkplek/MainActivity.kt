@@ -4593,8 +4593,9 @@ class MainActivity : Activity() {
         val body = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
         content.addView(ScrollView(this).apply {
             addView(body)
-            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, (resources.displayMetrics.heightPixels * 0.72).toInt())
+            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, (resources.displayMetrics.heightPixels * 0.64).toInt())
         })
+        if (kodiConfigured()) content.addView(kodiMiniBar(dialog))
         var seq = 0
         fun header(t: String) = body.addView(TextView(this).apply {
             text = t.uppercase(NL); textSize = 12f; letterSpacing = 0.06f; setTypeface(typeface, Typeface.BOLD)
@@ -4875,6 +4876,84 @@ class MainActivity : Activity() {
         dialog.setOnDismissListener { handler.removeCallbacks(typed) }
         dialog.show()
         select(0)
+    }
+
+    /** Speelbalk onderin: wat Kodi nu afspeelt, met voortgang, pauze en ondertitels. Ververst elke 2 s. */
+    private fun kodiMiniBar(dialog: Dialog): View {
+        val title = TextView(this).apply {
+            textSize = 14f; setTextColor(Color.WHITE); setTypeface(typeface, Typeface.BOLD)
+            maxLines = 1; ellipsize = android.text.TextUtils.TruncateAt.END
+        }
+        val sub = TextView(this).apply { textSize = 12f; setTextColor(0xFFA8A8A8.toInt()) }
+        val prog = View(this).apply { background = GradientDrawable().apply { setColor(0xFF18BCF2.toInt()); cornerRadius = dp(2).toFloat() } }
+        val track = android.widget.FrameLayout(this).apply {
+            background = GradientDrawable().apply { setColor(0xFF444444.toInt()); cornerRadius = dp(2).toFloat() }
+            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(3)).apply { topMargin = dp(6) }
+            addView(prog, android.widget.FrameLayout.LayoutParams(0, ViewGroup.LayoutParams.MATCH_PARENT))
+        }
+        var pid = -1
+        var playing = false
+        fun btn(label: String, desc: String, white: Boolean, onTap: () -> Unit) = TextView(this).apply {
+            text = label; textSize = if (white) 15f else 13f; gravity = Gravity.CENTER; contentDescription = desc
+            setTextColor(if (white) Color.BLACK else Color.WHITE); setTypeface(typeface, Typeface.BOLD)
+            background = GradientDrawable().apply {
+                if (white) { setColor(Color.WHITE); shape = GradientDrawable.OVAL } else { setColor(0xFF333333.toInt()); cornerRadius = dp(18).toFloat() }
+            }
+            layoutParams = LinearLayout.LayoutParams(dp(44), dp(44)).apply { marginStart = dp(8) }
+            isClickable = true; setOnClickListener { onTap() }
+        }
+        val playBtn = btn("❚❚", "Afspelen of pauzeren", true) {
+            if (pid < 0) return@btn
+            playing = !playing
+            thread { runCatching { kodi.rpc("Player.PlayPause", JSONObject().put("playerid", pid)) } }
+        }
+        val bar = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(10), dp(8), dp(8), dp(8))
+            background = GradientDrawable().apply { setColor(0xFF13303A.toInt()); setStroke(dp(1), 0xFF1E5A6E.toInt()); cornerRadius = dp(14).toFloat() }
+            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { topMargin = dp(10) }
+            visibility = View.GONE
+            addView(LinearLayout(this@MainActivity).apply {
+                orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL
+                addView(LinearLayout(this@MainActivity).apply {
+                    orientation = LinearLayout.VERTICAL
+                    layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
+                    addView(title); addView(sub)
+                })
+                addView(btn("CC", "Ondertitels en audio", false) { showKodiSubsSheet() })
+                addView(btn("⌖", "Afstandsbediening", false) { showRemoteSheet(MEDIA_REMOTE, false) })
+                addView(playBtn)
+            })
+            addView(track)
+            isClickable = true
+            setOnClickListener { showRemoteSheet(MEDIA_REMOTE, false) }
+        }
+        lateinit var tick: Runnable
+        tick = Runnable {
+            if (!dialog.isShowing) return@Runnable
+            thread {
+                val p = runCatching { kodi.progress() }.getOrNull()
+                val st = if (p != null && title.text.isNullOrEmpty() || p != null && System.currentTimeMillis() % 10_000 < 2_100)
+                    runCatching { kodi.state() }.getOrNull() else null
+                runOnUiThread {
+                    if (p == null) { bar.visibility = View.GONE; title.text = "" }
+                    else {
+                        pid = p.first; playing = p.third
+                        st?.let { title.text = it.title }
+                        val (pos, dur) = p.second
+                        sub.text = "${fmtSec(pos)} / ${fmtSec(dur)} · Kodi"
+                        playBtn.text = if (playing) "❚❚" else "▶"
+                        val w = track.width
+                        if (w > 0 && dur > 0) prog.layoutParams = (prog.layoutParams as android.widget.FrameLayout.LayoutParams).apply { width = (w * (pos / dur)).toInt() }
+                        prog.requestLayout()
+                        bar.visibility = View.VISIBLE
+                    }
+                    handler.postDelayed(tick, 2_000)
+                }
+            }
+        }
+        handler.post(tick)
+        return bar
     }
 
     /** Serie uit Sonarr: seizoenen, per aflevering de status uit Sonarr én de kijkstatus uit Kodi. */
