@@ -4935,7 +4935,9 @@ class MainActivity : Activity() {
                 val chips = ArrayList<Pair<Int, TextView>>()
                 val dateFmt = java.text.SimpleDateFormat("d MMM yyyy", NL)
                 val iso = java.text.SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss", java.util.Locale.ROOT).apply { timeZone = java.util.TimeZone.getTimeZone("UTC") }
+                var currentSeason = -1
                 fun showSeason(n: Int) {
+                    currentSeason = n
                     chips.forEach { (num, c) ->
                         val on = num == n
                         c.setTextColor(if (on) 0xFF0B2430.toInt() else Color.WHITE)
@@ -5021,8 +5023,31 @@ class MainActivity : Activity() {
                     }
                     chips.add(n to c); seasonRow.addView(c)
                 }
-                // Begin bij het laatste seizoen met afleveringen
-                showSeason(seasons.filter { it != 0 }.lastOrNull { n -> all.any { it.optInt("seasonNumber") == n && it.optBoolean("hasFile") } } ?: seasons.first())
+                // Beginnen waar je gebleven bent: eerst wat de app onthouden heeft, daarna bij Kodi nagaan
+                val seasonKey = "arr_season_$id"
+                val remembered = prefs().getInt(seasonKey, -1).takeIf { it in seasons }
+                val start = remembered ?: seasons.firstOrNull { it != 0 } ?: seasons.first()
+                showSeason(start)
+                if (kodiConfigured()) thread {
+                    // Eerste aflevering (op volgorde) die binnen is maar nog niet (helemaal) bekeken
+                    val ordered = all.filter { it.optInt("seasonNumber") != 0 && fileById.containsKey(it.optInt("episodeFileId")) }
+                        .sortedWith(compareBy({ it.optInt("seasonNumber") }, { it.optInt("episodeNumber") }))
+                    var found: Int? = null
+                    var anyWatched = false
+                    for (e in ordered) {
+                        val path = fileById[e.optInt("episodeFileId")]?.optString("path") ?: continue
+                        val k = runCatching { kodiPathFor(path)?.let { kodi.details(KodiApi.Entry("", it, false, false, 0.0, 0.0)) } }.getOrNull() ?: break
+                        if (k.played) { anyWatched = true; continue }
+                        if (k.resumeSec > 0 || anyWatched) found = e.optInt("seasonNumber")
+                        break
+                    }
+                    // Nog niets gekeken: bij het begin; alles gekeken: bij het laatste seizoen
+                    val target = found ?: if (anyWatched) ordered.lastOrNull()?.optInt("seasonNumber") else ordered.firstOrNull()?.optInt("seasonNumber")
+                    if (target != null) runOnUiThread {
+                        prefs().edit().putInt(seasonKey, target).apply()
+                        if (dialog.isShowing && currentSeason == start && target != start) showSeason(target)
+                    }
+                }
             }
         }
     }
