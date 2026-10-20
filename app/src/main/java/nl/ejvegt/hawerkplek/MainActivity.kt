@@ -810,6 +810,18 @@ class MainActivity : Activity() {
             spStatus.text = "Uitgelogd."
         }
         menuItem(R.id.menuUpdate, R.drawable.ic_update, PAGE_UPDATE)
+        // Instellingen meenemen naar een ander toestel (versleuteld met een pincode)
+        (findViewById<View>(R.id.menuUpdate).parent as? LinearLayout)?.let { menu ->
+            fun row(t: String, onTap: () -> Unit) = menu.addView(TextView(this).apply {
+                text = t; textSize = 17f; setTextColor(Color.WHITE)
+                setBackgroundColor(0xFF1E1E1E.toInt()); setPadding(dp(18), dp(18), dp(18), dp(18))
+                layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
+                    .apply { topMargin = dp(12) }
+                isClickable = true; setOnClickListener { onTap() }
+            })
+            row("⇪   Instellingen exporteren") { exportSettings() }
+            row("⇩   Instellingen importeren") { importSettings() }
+        }
         findViewById<Button>(R.id.updateSaveButton).setOnClickListener { saveUpdateSettings() }
         findViewById<Button>(R.id.checkUpdateButton).setOnClickListener {
             saveUpdateSettings(close = false)
@@ -1067,6 +1079,97 @@ class MainActivity : Activity() {
     }
 
     /** Menu-item met het logo van het tabblad ervoor (hoogte 28dp, breedte naar verhouding). */
+    // ---------- Instellingen exporteren / importeren ----------
+
+    private var pendingExport: String? = null
+    private var pendingImportPin: String? = null
+    private val REQ_EXPORT = 7101
+    private val REQ_IMPORT = 7102
+
+    private fun pinDialog(title: String, twice: Boolean, onPin: (String) -> Unit) {
+        val box = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(dp(20), dp(8), dp(20), 0) }
+        fun field(h: String) = EditText(this).apply {
+            hint = h
+            inputType = android.text.InputType.TYPE_CLASS_NUMBER or android.text.InputType.TYPE_NUMBER_VARIATION_PASSWORD
+            box.addView(this)
+        }
+        val a = field("Pincode (minstens 4 cijfers)")
+        val b = if (twice) field("Pincode nog een keer") else null
+        val msg = TextView(this).apply { setPadding(0, dp(8), 0, 0); setTextColor(0xFFFF8A80.toInt()) }
+        box.addView(msg)
+        val d = AlertDialog.Builder(this).setTitle(title).setView(box)
+            .setPositiveButton("OK", null).setNegativeButton("Annuleren", null).show()
+        d.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener {
+            val p = a.text.toString()
+            when {
+                p.length < 4 -> msg.text = "Minstens 4 cijfers"
+                b != null && b.text.toString() != p -> msg.text = "De pincodes zijn niet gelijk"
+                else -> { d.dismiss(); onPin(p) }
+            }
+        }
+    }
+
+    private fun exportSettings() {
+        pinDialog("Instellingen exporteren", twice = true) { pin ->
+            mediaStatus.text = "Versleutelen…"
+            thread {
+                val r = runCatching { SettingsBackup.export(prefs(), pin) }
+                runOnUiThread {
+                    val data = r.getOrNull() ?: run { Toast.makeText(this, "Mislukt: ${r.exceptionOrNull()?.message}", Toast.LENGTH_LONG).show(); return@runOnUiThread }
+                    pendingExport = data
+                    val day = java.text.SimpleDateFormat("yyyy-MM-dd", java.util.Locale.ROOT).format(java.util.Date())
+                    startActivityForResult(Intent(Intent.ACTION_CREATE_DOCUMENT).apply {
+                        addCategory(Intent.CATEGORY_OPENABLE)
+                        type = "application/octet-stream"
+                        putExtra(Intent.EXTRA_TITLE, "thuisbasis-instellingen-$day.tbk")
+                    }, REQ_EXPORT)
+                }
+            }
+        }
+    }
+
+    private fun importSettings() {
+        startActivityForResult(Intent(Intent.ACTION_OPEN_DOCUMENT).apply {
+            addCategory(Intent.CATEGORY_OPENABLE)
+            type = "*/*"
+        }, REQ_IMPORT)
+    }
+
+    @Deprecated("Activity-resultaat voor het opslaan/openen van het instellingenbestand")
+    override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
+        super.onActivityResult(requestCode, resultCode, data)
+        val uri = data?.data
+        if (resultCode != RESULT_OK || uri == null) { pendingExport = null; return }
+        when (requestCode) {
+            REQ_EXPORT -> {
+                val text = pendingExport ?: return
+                pendingExport = null
+                val ok = runCatching { contentResolver.openOutputStream(uri, "wt")?.use { it.write(text.toByteArray()) } }.isSuccess
+                AlertDialog.Builder(this)
+                    .setTitle(if (ok) "Opgeslagen" else "Opslaan mislukt")
+                    .setMessage(if (ok) "Stuur dit bestand naar het nieuwe toestel (WhatsApp, mail, Drive) en kies daar ⚙ → Instellingen importeren. Zonder de pincode is het onleesbaar."
+                        else "Het bestand kon niet worden geschreven.")
+                    .setPositiveButton("OK", null).show()
+            }
+            REQ_IMPORT -> {
+                val text = runCatching { contentResolver.openInputStream(uri)?.bufferedReader()?.use { it.readText() } }.getOrNull()
+                if (text.isNullOrBlank()) { Toast.makeText(this, "Bestand kon niet worden gelezen", Toast.LENGTH_LONG).show(); return }
+                pinDialog("Pincode van het bestand", twice = false) { pin ->
+                    thread {
+                        val r = runCatching { SettingsBackup.import(prefs(), text, pin) }
+                        runOnUiThread {
+                            if (r.isSuccess) {
+                                Toast.makeText(this, "${r.getOrNull()} instellingen teruggezet", Toast.LENGTH_LONG).show()
+                                recreate()   // alles opnieuw opbouwen met de nieuwe instellingen
+                            } else AlertDialog.Builder(this).setTitle("Importeren mislukt")
+                                .setMessage(r.exceptionOrNull()?.message ?: "Onbekende fout").setPositiveButton("OK", null).show()
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     private fun menuItem(viewId: Int, iconRes: Int, page: Int) {
         val item = findViewById<TextView>(viewId)
         getDrawable(iconRes)?.let { d ->
