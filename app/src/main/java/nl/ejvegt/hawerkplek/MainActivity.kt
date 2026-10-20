@@ -6867,7 +6867,9 @@ class MainActivity : Activity() {
             }
         }
 
-        dialog.setContentView(content)
+        // Omlaag vegen sluit; de letterbalk rechts blijft gewoon sleepbaar
+        dialog.setContentView(SwipeSheet(this, content, noIntercept = strip, onUp = {}, onDown = { dialog.dismiss() },
+            scroller = scroll, canSwipeUp = false))
         dialog.window?.apply {
             setBackgroundDrawable(GradientDrawable().apply {
                 setColor(0xFF1E1E1E.toInt())
@@ -7591,7 +7593,9 @@ class MainActivity : Activity() {
         val topGap = (resources.displayMetrics.heightPixels * 0.12).toInt()
         dialog.setContentView(android.widget.FrameLayout(this).apply {
             setOnClickListener { dialog.dismiss() }   // tik boven het blad = sluiten
-            addView(content, android.widget.FrameLayout.LayoutParams(
+            // Omlaag vegen sluit (als de lijst bovenaan staat)
+            addView(SwipeSheet(this@MainActivity, content, noIntercept = null, onUp = {}, onDown = { dialog.dismiss() },
+                scroller = scroll, canSwipeUp = false), android.widget.FrameLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT
             ).apply { topMargin = topGap })
             content.isClickable = true
