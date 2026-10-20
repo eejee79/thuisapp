@@ -3712,7 +3712,7 @@ class MainActivity : Activity() {
             "music" to { second -> musicTile(second) },
             "films" to { second -> searchTile(second) },
             "library" to { second -> libraryTile(second) },
-        ) + MEDIA_APPS.map { app -> app.pkg to { second: Boolean -> appTile(app, second) } }
+        ) + MEDIA_APPS.filter { it.pkg != KODI_PKG }.map { app -> app.pkg to { second: Boolean -> appTile(app, second) } }
 
     private fun tileOrder(): List<String> {
         val all = tileMakers().map { it.first }
@@ -3801,7 +3801,9 @@ class MainActivity : Activity() {
     private fun kodiTileMenu() {
         AlertDialog.Builder(this)
             .setTitle("Kodi")
-            .setItems(arrayOf("⏹  Kodi geforceerd stoppen", "↻  Kodi herstarten")) { _, i ->
+            .setItems(arrayOf("⏹  Kodi geforceerd stoppen", "↻  Kodi herstarten", "▶  Kodi openen op de tv", "📁  Mappen bladeren")) { _, i ->
+                if (i == 2) { MEDIA_APPS.firstOrNull { it.pkg == KODI_PKG }?.let { launchApp(it) }; return@setItems }
+                if (i == 3) { showKodiSheet(); return@setItems }
                 mediaStatus.text = if (i == 0) "Kodi stoppen…" else "Kodi herstarten…"
                 thread {
                     quietService("androidtv/adb_command", JSONObject().put("entity_id", MEDIA_ADB)
@@ -3855,7 +3857,7 @@ class MainActivity : Activity() {
                     target.scaleX = 1f; target.scaleY = 1f
                     if (target === v && e.localState == key) {
                         // Kodi ingedrukt gehouden en losgelaten zonder te verslepen: Kodi-menu
-                        if (!tileMoved && key == KODI_PKG) tileGrid.post { kodiTileMenu() }
+                        if (!tileMoved && (key == KODI_PKG || key == "library")) tileGrid.post { kodiTileMenu() }
                         // Na het slepen alles opnieuw tekenen in de nieuwe volgorde
                         v.alpha = 1f
                         tileGrid.post { buildTiles() }
@@ -4442,23 +4444,26 @@ class MainActivity : Activity() {
     private val radarr by lazy { ArrApi({ prefs().getString("arr_radarr_url", "") ?: "" }, { prefs().getString("arr_radarr_key", "") ?: "" }, 7878) }
     private fun arrConfigured() = sonarr.configured() || radarr.configured()
 
+    /** Tegel "Series & Films": Kodi-logo (de bestaande afbeelding) met de tekst eronder. */
     private fun libraryTile(second: Boolean): View = LinearLayout(this).apply {
         orientation = LinearLayout.VERTICAL
         gravity = Gravity.CENTER
-        addView(TextView(this@MainActivity).apply {
-            text = "▤"
-            textSize = 22f
-            setTextColor(Color.WHITE)
-            gravity = Gravity.CENTER
+        addView(ImageView(this@MainActivity).apply {
+            setImageResource(R.drawable.logo_kodi)
+            scaleType = ImageView.ScaleType.CENTER_CROP
+            layoutParams = LinearLayout.LayoutParams(dp(84), dp(30))
+            contentDescription = "Kodi"
         })
         addView(TextView(this@MainActivity).apply {
-            text = "Bibliotheek"
-            textSize = 13f
-            setTextColor(Color.WHITE)
+            text = "Series & Films"
+            textSize = 12f
+            setTextColor(0xFF18BCF2.toInt())
             setTypeface(typeface, Typeface.BOLD)
             gravity = Gravity.CENTER
+            setPadding(0, dp(2), 0, 0)
         })
-        setupTile(0xFF2A3540.toInt(), second) { showLibrary() }
+        setupTile(0xFF131313.toInt(), second) { showLibrary() }
+        background = GradientDrawable().apply { setColor(0xFF131313.toInt()); cornerRadius = dp(16).toFloat(); setStroke(dp(2), 0xFF18BCF2.toInt()) }
     }
 
     /** Adres + sleutel van Sonarr en Radarr invullen (blijft alleen op dit toestel). */
@@ -4846,7 +4851,8 @@ class MainActivity : Activity() {
             }
         }
         var lastTab = 0
-        val tabNames = listOfNotNull("Overzicht", if (sonarr.configured()) "Series" else null, if (radarr.configured()) "Films" else null)
+        val tabNames = listOfNotNull("Overzicht", if (sonarr.configured()) "Series" else null, if (radarr.configured()) "Films" else null,
+            if (kodiConfigured()) "Mappen" else null)
         val tabViews = ArrayList<TextView>()
         fun select(i: Int) {
             tabViews.forEachIndexed { j, v ->
@@ -4860,7 +4866,9 @@ class MainActivity : Activity() {
             val v = TextView(this).apply {
                 text = n; textSize = 13f; setTypeface(typeface, Typeface.BOLD); setPadding(dp(14), dp(7), dp(14), dp(7))
                 layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { marginEnd = dp(8) }
-                isClickable = true; setOnClickListener { select(i) }
+                isClickable = true
+                // Mappen = de mappenweergave van Kodi (losse bestanden, downloads) als eigen blad
+                setOnClickListener { if (n == "Mappen") showKodiSheet() else select(i) }
             }
             tabViews.add(v); tabs.addView(v)
         }
