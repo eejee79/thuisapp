@@ -42,7 +42,7 @@ object TvGuide {
 
     /** Gids (bij)laden; blokkeert, dus in een achtergrondthread aanroepen. Geeft een foutmelding of null. */
     /** Eigen archief: programma's van de afgelopen dagen blijven bewaard, ook als de bron ze niet meer levert. */
-    private const val KEEP_MS = 8 * 24 * 3_600_000L
+    private const val KEEP_MS = 7 * 24 * 3_600_000L   // zoals terugkijken bij KPN: 7 dagen
     @Volatile var histDir: File? = null
 
     fun ensure(cacheDir: File, channels: List<String>, force: Boolean = false): String? {
