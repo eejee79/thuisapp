@@ -5474,7 +5474,9 @@ class MainActivity : Activity() {
     /** Onderblad-dialoog in dezelfde stijl als Mijn muziek. */
     private fun sheetDialog(content: View): Dialog {
         val dialog = sheet()
-        dialog.setContentView(content)
+        // Omlaag vegen sluit het blad (zoals bij de andere bladen); de lijst erin scrollt eerst zelf
+        dialog.setContentView(SwipeSheet(this, content, noIntercept = null, onUp = {}, onDown = { dialog.dismiss() },
+            scroller = null, canSwipeUp = false))
         dialog.window?.apply {
             setBackgroundDrawable(GradientDrawable().apply {
                 setColor(0xFF1E1E1E.toInt())
@@ -10136,6 +10138,15 @@ class SwipeSheet(
 
     init { addView(child) }
 
+    /** Eerste verticale scroller in het blad (voor bladen die zelf geen scroller opgeven). */
+    private fun findVScroll(v: View): View? {
+        if (v is android.widget.ScrollView || v is android.widget.ListView) return v
+        if (v is android.view.ViewGroup && v !is android.widget.HorizontalScrollView) {
+            for (i in 0 until v.childCount) findVScroll(v.getChildAt(i))?.let { return it }
+        }
+        return null
+    }
+
     private fun inNoIntercept(x: Float, y: Float): Boolean {
         val v = noIntercept ?: return false
         if (v.visibility != View.VISIBLE) return false
@@ -10161,7 +10172,8 @@ class SwipeSheet(
                 val dx = ev.x - downX
                 if (!dragging && !blocked && kotlin.math.abs(dy) > slop && kotlin.math.abs(dy) > kotlin.math.abs(dx)) {
                     val down = dy > 0
-                    val ok = if (down) scroller?.canScrollVertically(-1) != true else canSwipeUp
+                    val sc = scroller ?: findVScroll(content)
+                    val ok = if (down) sc?.canScrollVertically(-1) != true else canSwipeUp
                     if (ok) {
                         dragging = true
                         // Knoppen/lijst laten weten dat dit gebaar niet voor hen is
