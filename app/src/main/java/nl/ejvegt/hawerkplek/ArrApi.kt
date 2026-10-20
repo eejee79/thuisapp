@@ -7,12 +7,15 @@ import java.net.HttpURLConnection
 import java.net.URL
 
 /** Sonarr / Radarr (API v3). Adres en sleutel komen uit de instellingen van de app, nooit uit de code. */
-class ArrApi(private val base: () -> String, private val key: () -> String) {
+class ArrApi(private val base: () -> String, private val key: () -> String, private val defaultPort: Int) {
 
     fun configured() = base().isNotBlank() && key().isNotBlank()
 
     private fun call(method: String, path: String, body: JSONObject? = null): String {
-        val b = base().trim().trimEnd('/').let { if (it.startsWith("http")) it else "http://$it" }
+        var b = base().trim().trimEnd('/').let { if (it.startsWith("http")) it else "http://$it" }
+        // Geen poort opgegeven? Dan de standaardpoort (Sonarr 8989, Radarr 7878) i.p.v. poort 80 van de NAS
+        val hostPart = b.substringAfter("://").substringBefore('/')
+        if (!hostPart.contains(':')) b = b.replaceFirst(hostPart, "$hostPart:$defaultPort")
         val conn = URL("$b/api/v3$path").openConnection() as HttpURLConnection
         conn.requestMethod = method
         conn.connectTimeout = 6_000

@@ -4438,8 +4438,8 @@ class MainActivity : Activity() {
 
     // ================= Bibliotheek: Sonarr + Radarr, afspelen via Kodi =================
 
-    private val sonarr by lazy { ArrApi({ prefs().getString("arr_sonarr_url", "") ?: "" }, { prefs().getString("arr_sonarr_key", "") ?: "" }) }
-    private val radarr by lazy { ArrApi({ prefs().getString("arr_radarr_url", "") ?: "" }, { prefs().getString("arr_radarr_key", "") ?: "" }) }
+    private val sonarr by lazy { ArrApi({ prefs().getString("arr_sonarr_url", "") ?: "" }, { prefs().getString("arr_sonarr_key", "") ?: "" }, 8989) }
+    private val radarr by lazy { ArrApi({ prefs().getString("arr_radarr_url", "") ?: "" }, { prefs().getString("arr_radarr_key", "") ?: "" }, 7878) }
     private fun arrConfigured() = sonarr.configured() || radarr.configured()
 
     private fun libraryTile(second: Boolean): View = LinearLayout(this).apply {
