@@ -39,6 +39,8 @@ class ArrApi(private val base: () -> String, private val key: () -> String, priv
     /** Pagina-antwoord (queue, history): de records. */
     fun records(path: String): JSONArray = obj(path).optJSONArray("records") ?: JSONArray()
     fun post(path: String, body: JSONObject): String = call("POST", path, body)
+    fun put(path: String, body: JSONObject): String = call("PUT", path, body)
+    fun delete(path: String): String = call("DELETE", path)
 
     fun ping(): String = obj("/system/status").optString("version")
 

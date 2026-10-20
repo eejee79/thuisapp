@@ -4756,7 +4756,7 @@ class MainActivity : Activity() {
             }
         }
 
-        fun grid(items: List<JSONObject>, onTap: (JSONObject) -> Unit, sub: (JSONObject) -> String) {
+        fun grid(items: List<JSONObject>, onTap: (JSONObject) -> Unit, onLong: ((JSONObject) -> Unit)? = null, sub: (JSONObject) -> String) {
             items.chunked(3).forEach { chunk ->
                 body.addView(LinearLayout(this).apply {
                     orientation = LinearLayout.HORIZONTAL
@@ -4767,6 +4767,7 @@ class MainActivity : Activity() {
                             layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f).apply { marginEnd = dp(8) }
                             isClickable = true
                             setOnClickListener { onTap(o) }
+                            if (onLong != null) setOnLongClickListener { onLong(o); true }
                             addView(ImageView(this@MainActivity).apply {
                                 scaleType = ImageView.ScaleType.CENTER_CROP; clipToOutline = true
                                 background = GradientDrawable().apply { setColor(0xFF1A1A1A.toInt()); cornerRadius = dp(8).toFloat() }
@@ -4794,7 +4795,7 @@ class MainActivity : Activity() {
                     body.removeAllViews()
                     val a = r.getOrNull() ?: run { note("Sonarr: ${r.exceptionOrNull()?.message}"); return@runOnUiThread }
                     val items = (0 until a.length()).map { a.getJSONObject(it) }.sortedBy { it.optString("sortTitle", it.optString("title")) }
-                    grid(items, { s -> showArrSeries(s) }) { s ->
+                    grid(items, { s -> showArrSeries(s) }, { s -> arrManage("s", s) { seriesList() } }) { s ->
                         val st = s.optJSONObject("statistics")
                         val have = st?.optInt("episodeFileCount") ?: 0; val tot = st?.optInt("episodeCount") ?: 0
                         if (tot > have) "$have/$tot · ${tot - have} ontbreken" else "$have afl."
@@ -4813,7 +4814,7 @@ class MainActivity : Activity() {
                     val a = r.getOrNull() ?: run { note("Radarr: ${r.exceptionOrNull()?.message}"); return@runOnUiThread }
                     val items = (0 until a.length()).map { a.getJSONObject(it) }
                         .sortedWith(compareBy<JSONObject>({ if (it.optBoolean("hasFile")) 0 else 1 }, { it.optString("sortTitle", it.optString("title")) }))
-                    grid(items, { m -> showArrMovie(m) }) { m -> "${m.optInt("year")} · ${if (m.optBoolean("hasFile")) "binnen" else "ontbreekt"}" }
+                    grid(items, { m -> showArrMovie(m) }, { m -> arrManage("r", m) { movieList() } }) { m -> "${m.optInt("year")} · ${if (m.optBoolean("hasFile")) "binnen" else "ontbreekt"}" }
                 }
             }
         }
@@ -5068,6 +5069,69 @@ class MainActivity : Activity() {
             })
         }
         dialog.show()
+    }
+
+    /** Lang indrukken in de bibliotheek: volgen aan/uit, kwaliteit wijzigen of verwijderen. */
+    private fun arrManage(kind: String, o: JSONObject, refresh: () -> Unit) {
+        val api = if (kind == "s") sonarr else radarr
+        val name = if (kind == "s") "Sonarr" else "Radarr"
+        val path = if (kind == "s") "/series/${o.optInt("id")}" else "/movie/${o.optInt("id")}"
+        val title = o.optString("title")
+        fun save(change: (JSONObject) -> Unit, msg: String) = thread {
+            val r = runCatching { val full = api.obj(path); change(full); api.put(path, full) }
+            runOnUiThread {
+                mediaStatus.text = if (r.isSuccess) "$title: $msg" else "$name: ${r.exceptionOrNull()?.message}"
+                if (r.isSuccess) refresh()
+            }
+        }
+        val monitored = o.optBoolean("monitored")
+        val items = arrayOf(
+            if (monitored) "Niet meer volgen" else "Weer volgen",
+            "Kwaliteitsprofiel wijzigen",
+            if (kind == "s") "Alles opnieuw zoeken" else "Opnieuw zoeken",
+            "Verwijderen…",
+        )
+        AlertDialog.Builder(this).setTitle(title).setItems(items) { _, w ->
+            when (w) {
+                0 -> save({ it.put("monitored", !monitored) }, if (monitored) "wordt niet meer gevolgd" else "wordt weer gevolgd")
+                1 -> thread {
+                    val profiles = runCatching { api.arr("/qualityprofile").let { a -> (0 until a.length()).map { a.getJSONObject(it) } } }.getOrNull().orEmpty()
+                    runOnUiThread {
+                        if (profiles.isEmpty()) { mediaStatus.text = "$name: geen profielen"; return@runOnUiThread }
+                        val cur = profiles.indexOfFirst { it.optInt("id") == o.optInt("qualityProfileId") }
+                        AlertDialog.Builder(this).setTitle("Kwaliteit voor $title")
+                            .setSingleChoiceItems(profiles.map { it.optString("name") }.toTypedArray(), cur) { d, p ->
+                                d.dismiss()
+                                save({ it.put("qualityProfileId", profiles[p].optInt("id")) }, "kwaliteit nu ${profiles[p].optString("name")}")
+                            }
+                            .setNegativeButton("Annuleren", null).show()
+                    }
+                }
+                2 -> thread {
+                    val cmd = if (kind == "s") JSONObject().put("name", "SeriesSearch").put("seriesId", o.optInt("id"))
+                        else JSONObject().put("name", "MoviesSearch").put("movieIds", JSONArray().put(o.optInt("id")))
+                    val r = runCatching { api.post("/command", cmd) }
+                    runOnUiThread { mediaStatus.text = if (r.isSuccess) "$name zoekt naar $title" else "Zoeken mislukt: ${r.exceptionOrNull()?.message}" }
+                }
+                3 -> {
+                    var withFiles = false
+                    AlertDialog.Builder(this).setTitle("$title verwijderen?")
+                        .setMultiChoiceItems(arrayOf("Ook de bestanden van de schijf verwijderen"), booleanArrayOf(false)) { _, _, c -> withFiles = c }
+                        .setPositiveButton("Verwijderen") { _, _ ->
+                            thread {
+                                val q = if (kind == "s") "?deleteFiles=$withFiles" else "?deleteFiles=$withFiles&addImportExclusion=false"
+                                val r = runCatching { api.delete(path + q) }
+                                runOnUiThread {
+                                    mediaStatus.text = if (r.isSuccess) "$title verwijderd uit $name" + (if (withFiles) " (met bestanden)" else "")
+                                        else "Verwijderen mislukt: ${r.exceptionOrNull()?.message}"
+                                    if (r.isSuccess) refresh()
+                                }
+                            }
+                        }
+                        .setNegativeButton("Annuleren", null).show()
+                }
+            }
+        }.show()
     }
 
     /** Zoekresultaat uit Sonarr/Radarr: al in de bibliotheek → openen, anders toevoegen. */
