@@ -1854,7 +1854,16 @@ class MainActivity : Activity() {
                     }
                     val buckets = netBuckets(sums)
                     val imp = buckets.values.sum(); val exp = total(sums, ids.export)
-                    val gas = if (ids.gas.isEmpty()) null else total(sums, ids.gas)
+                    // Gas: per periode de nieuwe gasmeter als die er al was, anders de oude; nooit negatief
+                    // (de oude sensor maakte een terugsprong toen HomeWizard hem afschafte)
+                    val gas = if (ids.gas.isEmpty()) null else {
+                        val (newIds, oldIds) = ids.gas.partition { "gas_meter" in it }
+                        fun perBucket(l: List<String>) = HashMap<Long, Double>().also { m ->
+                            l.forEach { id -> sums[id].orEmpty().forEach { p -> m[p.start] = (m[p.start] ?: 0.0) + p.value.coerceAtLeast(0.0) } }
+                        }
+                        val nw = perBucket(newIds); val od = perBucket(oldIds)
+                        (nw.keys + od.keys).sumOf { t -> nw[t] ?: od[t] ?: 0.0 }
+                    }
                     val car = if (ids.charger.isEmpty()) null else total(sums, ids.charger)
                     // Vanaf wanneer meet HA de laadpaal? (eerste tijdvak met gegevens)
                     val carFirst = ids.charger.mapNotNull { c -> sums[c]?.minOfOrNull { it.start } }.minOrNull()
