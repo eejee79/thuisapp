@@ -4283,8 +4283,8 @@ class MainActivity : Activity() {
                 val (name, match) = HEOS_STATIONS[which]
                 mediaStatus.text = "Spelers zoeken…"
                 thread {
-                    // Woonkamer via HEOS + alle Music Assistant-spelers (PiCore, Kamer Denise…), behalve de Denon zelf
-                    val others = maPlayers().filter { (_, n) -> n.lowercase(NL).let { "denon" !in it && "heos" !in it } }
+                    // Woonkamer via HEOS + alleen PiCore en Kamer Denise uit Music Assistant
+                    val others = maPlayers().filter { (_, n) -> n.lowercase(NL).let { "picore" in it || "denise" in it } }
                         .sortedBy { (_, n) -> if ("picore" in n.lowercase(NL)) 0 else 1 }
                     runOnUiThread {
                         mediaStatus.text = ""
