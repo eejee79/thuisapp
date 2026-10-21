@@ -1746,7 +1746,7 @@ class MainActivity : Activity() {
             .filter { it !in imp }
         // Gas: oude sensor bij de P1-meter én de nieuwe op het aparte apparaat "Gasmeter" (na een update van HomeWizard)
         val gas = all.filter { (id, u) -> "gas" in id && (u.contains("m³") || u.contains("m3")) }.keys
-            .let { g -> g.filter { Regex("total|totaal").containsMatchIn(it) }.ifEmpty { g.toList() } }
+            .let { g -> g.filter { Regex("total|totaal|gas_meter").containsMatchIn(it) }.ifEmpty { g.toList() } }
         // Laadpaal (Peblar): de totale meterstand, niet die van één laadsessie
         // Alle totaalmeters van de laadpaal (oud én nieuw, na opnieuw toevoegen van de integratie)
         val charger = kwh.filter { "peblar" in it && !Regex("sessie|session").containsMatchIn(it) }
