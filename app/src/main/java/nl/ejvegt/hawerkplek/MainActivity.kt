@@ -1725,19 +1725,29 @@ class MainActivity : Activity() {
     private fun haStats(): HaStats = HaStats(haBase(), haToken())
 
     /** Welke statistieken horen bij de P1-meter: afname, teruglevering, gas; plus de uurprijs. */
+    @Volatile private var usageKwhSeen: List<String> = emptyList()
+
     private fun findUsageIds(): UsageIds {
         usageIds?.let { return it }
         val all = haStats().listIds()
-        val kwh = all.filter { it.value.equals("kWh", true) }.keys
-        fun pick(word: String): List<String> {
-            val pref = kwh.filter { "p1" in it }.ifEmpty { kwh }
-            pref.firstOrNull { word in it && "tariff" !in it }?.let { return listOf(it) }
-            return pref.filter { word in it && "tariff" in it }
+        val kwh = all.filter { it.value.equals("kWh", true) || it.value.equals("Wh", true) }.keys.toList()
+        usageKwhSeen = kwh
+        // Eerst de statistieken van dezelfde P1-meter als "Stroom nu" (zelfde voorvoegsel)
+        val prefix = DASH_POWER.substringBeforeLast("_active_power").substringBeforeLast("_")
+        val p1 = kwh.filter { it.startsWith(prefix) || "p1" in it }.ifEmpty { kwh }
+        val tariff = Regex("tarif|tariff|_t1|_t2|_t_1|_t_2|_dal|_piek|_normaal")
+        fun pick(words: List<String>): List<String> {
+            val hits = p1.filter { id -> words.any { it in id } }
+            hits.filter { !tariff.containsMatchIn(it) }.let { if (it.isNotEmpty()) return listOf(it.minByOrNull { s -> s.length }!!) }
+            return hits   // alleen per tarief beschikbaar: dan alle tarieven optellen
         }
+        val imp = pick(listOf("energy_import", "power_import", "energie_import", "import", "afname", "verbruik", "consumption"))
+        val exp = pick(listOf("energy_export", "power_export", "energie_export", "export", "teruglever", "production", "productie"))
+            .filter { it !in imp }
         val gas = all.filter { (id, u) -> "gas" in id && (u.contains("m³") || u.contains("m3")) }.keys
-            .let { g -> g.firstOrNull { "total_gas" in it } ?: g.firstOrNull() }
-        val r = UsageIds(pick("energy_import"), pick("energy_export"), gas, DASH_PRICE.takeIf { it in all.keys })
-        usageIds = r
+            .let { g -> g.firstOrNull { "total" in it || "totaal" in it } ?: g.firstOrNull() }
+        val r = UsageIds(imp, exp, gas, DASH_PRICE.takeIf { it in all.keys })
+        if (imp.isNotEmpty()) usageIds = r
         return r
     }
 
@@ -1795,7 +1805,8 @@ class MainActivity : Activity() {
             thread {
                 val r = runCatching {
                     val ids = findUsageIds()
-                    if (ids.import.isEmpty()) throw IOException("geen meterstanden van de P1-meter gevonden in HA")
+                    if (ids.import.isEmpty()) throw IOException("geen meterstand voor afname gevonden. Energie-statistieken in HA: " +
+                        usageKwhSeen.take(12).joinToString(", ").ifEmpty { "geen (staat de P1-meter in het Energie-dashboard?)" })
                     val span = to - from
                     val period = when { span <= 2 * 86_400_000L -> "hour"; span <= 62 * 86_400_000L -> "day"; else -> "month" }
                     val st = haStats()

@@ -20,8 +20,8 @@ android {
         applicationId = "nl.ejvegt.hawerkplek"
         minSdk = 26
         targetSdk = 35
-        versionCode = 169
-        versionName = "2.68"
+        versionCode = 170
+        versionName = "2.69"
 
         buildConfigField("String", "HA_URL", "\"${localProp("HA_URL")}\"")
         buildConfigField("String", "HA_URL_LOCAL", "\"${localProp("HA_URL_LOCAL")}\"")
