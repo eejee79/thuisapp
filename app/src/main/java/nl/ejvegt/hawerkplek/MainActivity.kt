@@ -5284,8 +5284,12 @@ class MainActivity : Activity() {
             }
         }
 
+        // Posters: op de tablet 5 per rij; hoogte altijd in posterverhouding 2:3 zodat er niets wordt afgekapt
+        val cols = if (isTablet) 5 else 3
+        val sheetDp = if (isTablet) minOf(resources.configuration.screenWidthDp, 720) else resources.configuration.screenWidthDp
+        val posterH = (((sheetDp - 32) / cols - 8) * 1.5f).toInt().coerceIn(120, 260)
         fun grid(items: List<JSONObject>, onTap: (JSONObject) -> Unit, onLong: ((JSONObject) -> Unit)? = null, sub: (JSONObject) -> String) {
-            items.chunked(3).forEach { chunk ->
+            items.chunked(cols).forEach { chunk ->
                 body.addView(LinearLayout(this).apply {
                     orientation = LinearLayout.HORIZONTAL
                     setPadding(0, 0, 0, dp(12))
@@ -5299,7 +5303,7 @@ class MainActivity : Activity() {
                             addView(ImageView(this@MainActivity).apply {
                                 scaleType = ImageView.ScaleType.CENTER_CROP; clipToOutline = true
                                 background = GradientDrawable().apply { setColor(0xFF1A1A1A.toInt()); cornerRadius = dp(8).toFloat() }
-                                layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(150))
+                                layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(posterH))
                                 ArrApi.poster(o)?.let { loadImage(this, it) }
                             })
                             addView(TextView(this@MainActivity).apply {
@@ -5309,7 +5313,7 @@ class MainActivity : Activity() {
                             addView(TextView(this@MainActivity).apply { text = sub(o); textSize = 11f; setTextColor(0xFF9A9A9A.toInt()); setPadding(dp(2), 0, 0, 0) })
                         })
                     }
-                    repeat(3 - chunk.size) { addView(View(this@MainActivity), LinearLayout.LayoutParams(0, 1, 1f)) }
+                    repeat(cols - chunk.size) { addView(View(this@MainActivity), LinearLayout.LayoutParams(0, 1, 1f).apply { marginEnd = dp(8) }) }
                 })
             }
         }
