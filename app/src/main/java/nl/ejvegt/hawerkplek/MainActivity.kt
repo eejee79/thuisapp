@@ -705,6 +705,7 @@ class MainActivity : Activity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_main)
+        if (isTablet) applyTabletLayout()
 
         haPanel = findViewById(R.id.haPanel)
         pvePanel = findViewById(R.id.pvePanel)
@@ -928,6 +929,51 @@ class MainActivity : Activity() {
         thread {
             quietService("media_player/volume_set", JSONObject().put("entity_id", DASH_RECEIVER).put("volume_level", v))
         }
+    }
+
+    // ================= Tablet (Tab S10+ e.d.): navigatie links, kaarten in kolommen, smallere bladen =================
+
+    private val isTablet get() = resources.configuration.smallestScreenWidthDp >= 600
+
+    /** Onderbladen op een tablet niet over de hele breedte, maar gecentreerd en max. 720 dp breed. */
+    private fun sheetWidth(): Int =
+        if (isTablet) minOf(resources.displayMetrics.widthPixels, dp(720)) else ViewGroup.LayoutParams.MATCH_PARENT
+
+    private fun applyTabletLayout() {
+        val root = findViewById<LinearLayout>(R.id.root)
+        val tabBar = findViewById<View>(R.id.tabHa).parent as LinearLayout
+        val content = root.getChildAt(1)
+        // Lijnen en kaartenlijsten vervangen door kolom-lijsten (zelfde id, dus de rest van de app merkt niets)
+        listOf(R.id.dashList, R.id.groupList, R.id.vmList, R.id.fritzList).forEach { id ->
+            val old = findViewById<LinearLayout>(id)
+            val parent = old.parent as ViewGroup
+            val i = parent.indexOfChild(old)
+            val m = ColumnLayout(this, dp(10)).apply {
+                this.id = id
+                orientation = LinearLayout.VERTICAL
+                setPadding(old.paddingLeft, old.paddingTop, old.paddingRight, old.paddingBottom)
+            }
+            parent.removeViewAt(i)
+            parent.addView(m, i, old.layoutParams)
+        }
+        // Tabbladen als smalle balk links i.p.v. onderin
+        root.removeView(tabBar)
+        root.removeViewAt(2)   // de lijn boven de tabbladen
+        root.removeView(content)
+        tabBar.orientation = LinearLayout.VERTICAL
+        tabBar.setPadding(0, dp(12), 0, dp(12))
+        for (i in 0 until tabBar.childCount) {
+            val c = tabBar.getChildAt(i)
+            c.layoutParams = if (c is LinearLayout) LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(84)).apply { bottomMargin = dp(4) }
+            else LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0)   // scheidingslijntjes weg
+        }
+        root.addView(LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            addView(tabBar, LinearLayout.LayoutParams(dp(96), ViewGroup.LayoutParams.MATCH_PARENT))
+            addView(View(this@MainActivity).apply { setBackgroundColor(0xFF2A2A2A.toInt()) },
+                LinearLayout.LayoutParams(dp(1), ViewGroup.LayoutParams.MATCH_PARENT))
+            addView(content, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.MATCH_PARENT, 1f))
+        }, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f))
     }
 
     /** Dialoog/onderblad waarin de volumeknoppen van de telefoon gewoon de receiver blijven regelen. */
@@ -6114,7 +6160,7 @@ class MainActivity : Activity() {
                 cornerRadii = floatArrayOf(dp(22).toFloat(), dp(22).toFloat(), dp(22).toFloat(), dp(22).toFloat(), 0f, 0f, 0f, 0f)
             })
             setGravity(Gravity.BOTTOM)
-            setLayout(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
+            setLayout(sheetWidth(), ViewGroup.LayoutParams.WRAP_CONTENT)
         }
         return dialog
     }
@@ -7249,7 +7295,7 @@ class MainActivity : Activity() {
                 cornerRadii = floatArrayOf(dp(22).toFloat(), dp(22).toFloat(), dp(22).toFloat(), dp(22).toFloat(), 0f, 0f, 0f, 0f)
             })
             setGravity(Gravity.BOTTOM)
-            setLayout(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
+            setLayout(sheetWidth(), ViewGroup.LayoutParams.WRAP_CONTENT)
         }
         dialog.show()
         thread {
@@ -8555,7 +8601,7 @@ class MainActivity : Activity() {
                 cornerRadii = floatArrayOf(dp(22).toFloat(), dp(22).toFloat(), dp(22).toFloat(), dp(22).toFloat(), 0f, 0f, 0f, 0f)
             })
             setGravity(Gravity.BOTTOM)
-            setLayout(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
+            setLayout(sheetWidth(), ViewGroup.LayoutParams.WRAP_CONTENT)
         }
         dialog.setOnDismissListener { handler.removeCallbacks(ticker) }
         dialog.show()
@@ -8585,8 +8631,8 @@ class MainActivity : Activity() {
     }
 
     /** Tegels: 3 naast elkaar, verhouding past precies bij de logo's (480×300). */
-    private val TILE_COLS = 3
-    private val TILE_H = 72
+    private val TILE_COLS get() = if (isTablet) 5 else 3
+    private val TILE_H get() = if (isTablet) 96 else 72
     private val TILE_GAP = 10
 
     private fun View.setupTile(color: Int, second: Boolean, onTap: () -> Unit) {
@@ -9095,7 +9141,7 @@ class MainActivity : Activity() {
                 cornerRadii = floatArrayOf(dp(22).toFloat(), dp(22).toFloat(), dp(22).toFloat(), dp(22).toFloat(), 0f, 0f, 0f, 0f)
             })
             setGravity(Gravity.BOTTOM)
-            setLayout(ViewGroup.LayoutParams.MATCH_PARENT, (resources.displayMetrics.heightPixels * 0.85).toInt())
+            setLayout(sheetWidth(), (resources.displayMetrics.heightPixels * 0.85).toInt())
         }
         dialog.show()
     }
@@ -9351,7 +9397,7 @@ class MainActivity : Activity() {
                 cornerRadii = floatArrayOf(dp(22).toFloat(), dp(22).toFloat(), dp(22).toFloat(), dp(22).toFloat(), 0f, 0f, 0f, 0f)
             })
             setGravity(Gravity.BOTTOM)
-            setLayout(ViewGroup.LayoutParams.MATCH_PARENT, (resources.displayMetrics.heightPixels * 0.85).toInt())
+            setLayout(sheetWidth(), (resources.displayMetrics.heightPixels * 0.85).toInt())
         }
         dialog.show()
     }
@@ -9473,7 +9519,7 @@ class MainActivity : Activity() {
                 cornerRadii = floatArrayOf(dp(22).toFloat(), dp(22).toFloat(), dp(22).toFloat(), dp(22).toFloat(), 0f, 0f, 0f, 0f)
             })
             setGravity(Gravity.BOTTOM)
-            setLayout(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
+            setLayout(sheetWidth(), ViewGroup.LayoutParams.WRAP_CONTENT)
         }
         dialog.show()
     }
@@ -9909,7 +9955,7 @@ class MainActivity : Activity() {
                 cornerRadii = floatArrayOf(dp(22).toFloat(), dp(22).toFloat(), dp(22).toFloat(), dp(22).toFloat(), 0f, 0f, 0f, 0f)
             })
             setGravity(Gravity.BOTTOM)
-            setLayout(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
+            setLayout(sheetWidth(), ViewGroup.LayoutParams.WRAP_CONTENT)
         }
         dialog.setOnDismissListener { handler.removeCallbacks(ticker) }
         dialog.show()
@@ -10264,7 +10310,7 @@ class MainActivity : Activity() {
                 cornerRadii = floatArrayOf(dp(22).toFloat(), dp(22).toFloat(), dp(22).toFloat(), dp(22).toFloat(), 0f, 0f, 0f, 0f)
             })
             setGravity(Gravity.BOTTOM)
-            setLayout(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
+            setLayout(sheetWidth(), ViewGroup.LayoutParams.WRAP_CONTENT)
         }
         dialog.show()
     }
@@ -10881,5 +10927,58 @@ class SwipeSheet(
             }
         }
         return super.dispatchTouchEvent(ev)
+    }
+}
+
+
+/**
+ * Kaartenlijst die op een brede (tablet)scherm de kaarten naast elkaar zet: 2 of 3 kolommen,
+ * links-naar-rechts op volgorde. Op een smal scherm gewoon een verticale lijst.
+ */
+class ColumnLayout(ctx: Context, private val gap: Int) : LinearLayout(ctx) {
+    private val minCol = (330 * ctx.resources.displayMetrics.density).toInt()
+    private fun cols(w: Int) = ((w + gap) / (minCol + gap)).coerceIn(1, 3)
+
+    override fun onMeasure(widthMeasureSpec: Int, heightMeasureSpec: Int) {
+        val w = MeasureSpec.getSize(widthMeasureSpec) - paddingLeft - paddingRight
+        val n = cols(w)
+        if (n == 1 || MeasureSpec.getMode(widthMeasureSpec) == MeasureSpec.UNSPECIFIED) {
+            super.onMeasure(widthMeasureSpec, heightMeasureSpec); return
+        }
+        val colW = (w - gap * (n - 1)) / n
+        val heights = IntArray(n)
+        var k = 0
+        for (i in 0 until childCount) {
+            val c = getChildAt(i)
+            if (c.visibility == GONE) continue
+            val lp = c.layoutParams as LayoutParams
+            val cw = colW - lp.leftMargin - lp.rightMargin
+            val hs = if (lp.height >= 0) MeasureSpec.makeMeasureSpec(lp.height, MeasureSpec.EXACTLY)
+                else MeasureSpec.makeMeasureSpec(0, MeasureSpec.UNSPECIFIED)
+            c.measure(MeasureSpec.makeMeasureSpec(cw.coerceAtLeast(0), MeasureSpec.EXACTLY), hs)
+            heights[k % n] += lp.topMargin + c.measuredHeight + lp.bottomMargin
+            k++
+        }
+        setMeasuredDimension(MeasureSpec.getSize(widthMeasureSpec), (heights.maxOrNull() ?: 0) + paddingTop + paddingBottom)
+    }
+
+    override fun onLayout(changed: Boolean, l: Int, t: Int, r: Int, b: Int) {
+        val w = r - l - paddingLeft - paddingRight
+        val n = cols(w)
+        if (n == 1) { super.onLayout(changed, l, t, r, b); return }
+        val colW = (w - gap * (n - 1)) / n
+        val y = IntArray(n) { paddingTop }
+        var k = 0
+        for (i in 0 until childCount) {
+            val c = getChildAt(i)
+            if (c.visibility == GONE) continue
+            val lp = c.layoutParams as LayoutParams
+            val col = k % n
+            val x = paddingLeft + col * (colW + gap) + lp.leftMargin
+            val top = y[col] + lp.topMargin
+            c.layout(x, top, x + c.measuredWidth, top + c.measuredHeight)
+            y[col] = top + c.measuredHeight + lp.bottomMargin
+            k++
+        }
     }
 }
