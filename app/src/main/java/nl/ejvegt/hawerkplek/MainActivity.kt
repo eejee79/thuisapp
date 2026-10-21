@@ -1719,7 +1719,7 @@ class MainActivity : Activity() {
 
     // ================= Verbruik (HomeWizard via HA-statistieken), van–tot =================
 
-    private class UsageIds(val import: List<String>, val export: List<String>, val gas: String?, val price: String?, val charger: List<String>)
+    private class UsageIds(val import: List<String>, val export: List<String>, val gas: List<String>, val price: String?, val charger: List<String>)
     @Volatile private var usageIds: UsageIds? = null
 
     private fun haStats(): HaStats = HaStats(haBase(), haToken())
@@ -1744,8 +1744,9 @@ class MainActivity : Activity() {
         val imp = pick(listOf("energy_import", "power_import", "energie_import", "import", "afname", "verbruik", "consumption"))
         val exp = pick(listOf("energy_export", "power_export", "energie_export", "export", "teruglever", "production", "productie"))
             .filter { it !in imp }
+        // Gas: oude sensor bij de P1-meter én de nieuwe op het aparte apparaat "Gasmeter" (na een update van HomeWizard)
         val gas = all.filter { (id, u) -> "gas" in id && (u.contains("m³") || u.contains("m3")) }.keys
-            .let { g -> g.firstOrNull { "total" in it || "totaal" in it } ?: g.firstOrNull() }
+            .let { g -> g.filter { Regex("total|totaal").containsMatchIn(it) }.ifEmpty { g.toList() } }
         // Laadpaal (Peblar): de totale meterstand, niet die van één laadsessie
         // Alle totaalmeters van de laadpaal (oud én nieuw, na opnieuw toevoegen van de integratie)
         val charger = kwh.filter { "peblar" in it && !Regex("sessie|session").containsMatchIn(it) }
@@ -1814,7 +1815,7 @@ class MainActivity : Activity() {
                     val span = to - from
                     val period = when { span <= 2 * 86_400_000L -> "hour"; span <= 62 * 86_400_000L -> "day"; else -> "month" }
                     val st = haStats()
-                    val wanted = ids.import + ids.export + listOfNotNull(ids.gas) + ids.charger
+                    val wanted = ids.import + ids.export + ids.gas + ids.charger
                     val sums = st.during(wanted, from, to, period, "change")
                     val prev = st.during(wanted, from - span, from, if (period == "hour") "day" else period, "change")
                     // Kosten: per uur afname × uurprijs (alleen bij een redelijke periode)
@@ -1853,7 +1854,7 @@ class MainActivity : Activity() {
                     }
                     val buckets = netBuckets(sums)
                     val imp = buckets.values.sum(); val exp = total(sums, ids.export)
-                    val gas = ids.gas?.let { total(sums, listOf(it)) }
+                    val gas = if (ids.gas.isEmpty()) null else total(sums, ids.gas)
                     val car = if (ids.charger.isEmpty()) null else total(sums, ids.charger)
                     // Vanaf wanneer meet HA de laadpaal? (eerste tijdvak met gegevens)
                     val carFirst = ids.charger.mapNotNull { c -> sums[c]?.minOfOrNull { it.start } }.minOrNull()
