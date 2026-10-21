@@ -4276,10 +4276,87 @@ class MainActivity : Activity() {
         background = GradientDrawable().apply { setColor(0xFF1A1410.toInt()); cornerRadius = dp(16).toFloat(); setStroke(dp(2), 0xFFFF8A3D.toInt()) }
     }
 
+    /** Radio-blad: zenders bovenaan, onderaan per kamer een afspeelbalk (pauze / stop). */
     private fun chooseStation() {
-        AlertDialog.Builder(this)
-            .setTitle("Zender kiezen")
-            .setItems(HEOS_STATIONS.map { it.first }.toTypedArray()) { _, which ->
+        val box = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(dp(16), dp(8), dp(16), dp(20)) }
+        val dialog = sheetDialog(box)
+        box.addView(TextView(this).apply {
+            text = "Radio"; textSize = 20f; setTextColor(Color.WHITE); setTypeface(typeface, Typeface.BOLD); setPadding(dp(4), dp(4), 0, dp(10))
+        })
+        HEOS_STATIONS.forEachIndexed { i, (n, _) ->
+            box.addView(sheetRow(n) { pickRadioRoom(i) }.apply {
+                layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { bottomMargin = dp(6) }
+            })
+        }
+        val bars = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(0, dp(8), 0, 0) }
+        box.addView(bars)
+        // Kamers: woonkamer (HEOS) + PiCore en Kamer Denise uit Music Assistant
+        fun rooms(): List<Pair<String, String>> = listOf(DASH_HEOS to "Woonkamer") +
+            maPlayers().filter { (_, n) -> n.lowercase(NL).let { "picore" in it || "denise" in it } }
+                .sortedBy { (_, n) -> if ("picore" in n.lowercase(NL)) 0 else 1 }
+        fun barBtn(label: String, desc: String, white: Boolean, onTap: () -> Unit) = TextView(this).apply {
+            text = label; textSize = if (white) 15f else 14f; gravity = Gravity.CENTER; contentDescription = desc
+            setTextColor(if (white) Color.BLACK else Color.WHITE); setTypeface(typeface, Typeface.BOLD)
+            background = GradientDrawable().apply {
+                if (white) { setColor(Color.WHITE); shape = GradientDrawable.OVAL } else { setColor(0xFF3A3026.toInt()); cornerRadius = dp(22).toFloat() }
+            }
+            layoutParams = LinearLayout.LayoutParams(dp(44), dp(44)).apply { marginStart = dp(8) }
+            isClickable = true; setOnClickListener { onTap() }
+        }
+        fun render(list: List<Triple<String, String, JSONObject?>>) {
+            bars.removeAllViews()
+            val active = list.filter { it.third?.optString("state") in listOf("playing", "paused") }
+            if (active.isEmpty()) {
+                bars.addView(TextView(this).apply { text = "Er speelt nu nergens radio of muziek."; textSize = 13f; setTextColor(0xFF8A8A8A.toInt()); setPadding(dp(4), dp(6), 0, 0) })
+                return
+            }
+            active.forEach { (entity, room, st) ->
+                val playing = isPlaying(st)
+                bars.addView(LinearLayout(this).apply {
+                    orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL
+                    setPadding(dp(12), dp(8), dp(8), dp(8))
+                    background = GradientDrawable().apply { setColor(0xFF2A1F16.toInt()); setStroke(dp(1), 0xFF6B4320.toInt()); cornerRadius = dp(14).toFloat() }
+                    layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { topMargin = dp(8) }
+                    addView(LinearLayout(this@MainActivity).apply {
+                        orientation = LinearLayout.VERTICAL
+                        layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
+                        addView(TextView(this@MainActivity).apply {
+                            text = attr(st, "media_station", "media_album_name", "media_title") ?: "Speelt"
+                            textSize = 14f; setTextColor(Color.WHITE); setTypeface(typeface, Typeface.BOLD)
+                            maxLines = 1; ellipsize = android.text.TextUtils.TruncateAt.END
+                        })
+                        addView(TextView(this@MainActivity).apply {
+                            text = joinNonEmpty(room, if (playing) null else "gepauzeerd", attr(st, "media_artist"))
+                            textSize = 12f; setTextColor(0xFFC9A98A.toInt())
+                            maxLines = 1; ellipsize = android.text.TextUtils.TruncateAt.END
+                        })
+                    })
+                    addView(barBtn("■", "Stoppen op $room", false) {
+                        thread { quietService("media_player/media_stop", JSONObject().put("entity_id", entity)) }
+                        this.visibility = View.GONE
+                    })
+                    addView(barBtn(if (playing) "❚❚" else "▶", "Afspelen of pauzeren op $room", true) {
+                        thread { quietService("media_player/media_play_pause", JSONObject().put("entity_id", entity)) }
+                        (it as TextView).text = if ((it as TextView).text == "▶") "❚❚" else "▶"
+                    })
+                })
+            }
+        }
+        lateinit var tick: Runnable
+        tick = Runnable {
+            if (!dialog.isShowing) return@Runnable
+            thread {
+                val list = rooms().map { (e, n) -> Triple(e, n, stateOf(e)) }
+                runOnUiThread { if (dialog.isShowing) { render(list); handler.postDelayed(tick, 3_000) } }
+            }
+        }
+        dialog.setOnShowListener { handler.post(tick) }
+        dialog.show()
+    }
+
+    private fun pickRadioRoom(which: Int) {
+        run {
+            run {
                 val (name, match) = HEOS_STATIONS[which]
                 mediaStatus.text = "Spelers zoeken…"
                 thread {
@@ -4310,8 +4387,7 @@ class MainActivity : Activity() {
                     }
                 }
             }
-            .setNegativeButton("Annuleren", null)
-            .show()
+        }
     }
 
     /** Zender via Music Assistant (radio-provider, bijv. Radio Browser of TuneIn) op een speler afspelen. */
