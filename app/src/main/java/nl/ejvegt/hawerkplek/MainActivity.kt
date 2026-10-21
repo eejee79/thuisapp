@@ -4255,13 +4255,25 @@ class MainActivity : Activity() {
         setupTile(0xFF1565C0.toInt(), second) { showChannelSheet() }
     }
 
-    /** Tegel "HEOS radio": kies een zender; receiver gaat aan op HEOS Music en speelt hem af. */
-    private fun heosTile(second: Boolean): View = ImageView(this).apply {
-        setImageResource(R.drawable.logo_heos)
-        scaleType = ImageView.ScaleType.CENTER_CROP
-        contentDescription = "HEOS radio"
-        clipToOutline = true
-        setupTile(0xFF000000.toInt(), second) { chooseStation() }
+    /** Tegel "Radio": kies een zender en daarna waar: woonkamer (Denon via HEOS) of PiCore boven. */
+    private fun heosTile(second: Boolean): View = LinearLayout(this).apply {
+        orientation = LinearLayout.VERTICAL
+        gravity = Gravity.CENTER
+        contentDescription = "Radio"
+        addView(ImageView(this@MainActivity).apply {
+            setImageResource(R.drawable.ic_radio)
+            layoutParams = LinearLayout.LayoutParams(dp(36), dp(36))
+        })
+        addView(TextView(this@MainActivity).apply {
+            text = "Radio"
+            textSize = 13f
+            setTextColor(0xFFFF8A3D.toInt())
+            setTypeface(typeface, Typeface.BOLD)
+            gravity = Gravity.CENTER
+            setPadding(0, dp(2), 0, 0)
+        })
+        setupTile(0xFF1A1410.toInt(), second) { chooseStation() }
+        background = GradientDrawable().apply { setColor(0xFF1A1410.toInt()); cornerRadius = dp(16).toFloat(); setStroke(dp(2), 0xFFFF8A3D.toInt()) }
     }
 
     private fun chooseStation() {
@@ -4269,14 +4281,51 @@ class MainActivity : Activity() {
             .setTitle("Zender kiezen")
             .setItems(HEOS_STATIONS.map { it.first }.toTypedArray()) { _, which ->
                 val (name, match) = HEOS_STATIONS[which]
-                mediaStatus.text = "$name: receiver aanzetten…"
-                thread {
-                    prepareReceiver("HEOS Music")
-                    playHeosRadio(match, name, mediaStatus)
-                }
+                val rooms = arrayOf("Woonkamer (Denon)", "PiCore (boven)")
+                val last = prefs().getInt("radio_room", 0)
+                AlertDialog.Builder(this)
+                    .setTitle("$name afspelen op")
+                    .setSingleChoiceItems(rooms, last) { d, room ->
+                        d.dismiss()
+                        prefs().edit().putInt("radio_room", room).apply()
+                        if (room == 1) playRadioOnPicore(name) else {
+                            zoneUp = false
+                            mediaStatus.text = "$name: receiver aanzetten…"
+                            thread {
+                                prepareReceiver("HEOS Music")
+                                playHeosRadio(match, name, mediaStatus)
+                            }
+                        }
+                    }
+                    .setNegativeButton("Annuleren", null)
+                    .show()
             }
             .setNegativeButton("Annuleren", null)
             .show()
+    }
+
+    /** Zender via Music Assistant (radio-provider, bijv. Radio Browser of TuneIn) op de PiCore afspelen. */
+    private fun playRadioOnPicore(name: String) {
+        mediaStatus.text = "$name zoeken voor PiCore…"
+        thread {
+            val p = picorePlayer()
+            val hit = runCatching {
+                val r = maCall("search", JSONObject().put("name", name).put("media_type", JSONArray().put("radio")).put("limit", 8))
+                val items = maList(r, "radio")
+                val words = name.lowercase(NL).split(' ').filter { it.length > 1 }
+                items.firstOrNull { it.name.equals(name, true) }
+                    ?: items.maxByOrNull { i -> words.count { it in i.name.lowercase(NL) } }
+            }
+            runOnUiThread {
+                when {
+                    p == null -> mediaStatus.text = "PiCore niet gevonden in Music Assistant"
+                    hit.isFailure -> mediaStatus.text = "Zoeken mislukt: ${hit.exceptionOrNull()?.message}"
+                    hit.getOrNull() == null -> mediaStatus.text =
+                        "$name niet gevonden. Zet in Music Assistant een radio-provider aan (Radio Browser of TuneIn)."
+                    else -> playOnMa(hit.getOrNull()!!, p.first, p.second)
+                }
+            }
+        }
     }
 
     // ================= Films & series zoeken (TMDB) en op de tv openen =================
