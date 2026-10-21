@@ -3477,6 +3477,7 @@ class MainActivity : Activity() {
             if (dashStates[DASH_HEATER] == "off") data.put("hvac_mode", heatMode(DASH_HEATER))
             haService("climate", "set_temperature", data)
         }
+        heaterCard.root.setOnLongClickListener { chooseHeaterMode(); true }
         dashList.addView(heaterCard.root)
 
         // Receiver: aan/uit, bronknop en volume
@@ -3879,6 +3880,78 @@ class MainActivity : Activity() {
             "climate", "set_hvac_mode",
             JSONObject().put("entity_id", id).put("hvac_mode", if (on) heatMode(id) else "off")
         )
+        // De Hombli-kachel kan na aanzetten op "antivorst" blijven staan: dan direct naar comfort
+        if (on && id == DASH_HEATER) thread {
+            Thread.sleep(2_000)
+            val m = heaterModes() ?: return@thread
+            val comfort = m.options.firstOrNull { "comfort" in it.lowercase(NL) } ?: return@thread
+            if (m.current.equals(comfort, true)) return@thread
+            m.set(comfort)
+            runOnUiThread { dashStatus.text = "Verwarming werkplek: ${m.current ?: "?"} → $comfort" }
+        }
+    }
+
+    /** Hoe de stand (comfort / eco / antivorst) van de kachel in HA te zetten is, als dat kan. */
+    private class HeaterModes(val source: String, val current: String?, val options: List<String>, val set: (String) -> Unit)
+
+    private fun heaterModes(): HeaterModes? {
+        // 1. Voorinstellingen van de climate-entiteit zelf
+        val st = stateOf(DASH_HEATER)?.optJSONObject("attributes")
+        st?.optJSONArray("preset_modes")?.let { arr ->
+            val opts = (0 until arr.length()).map { arr.optString(it) }
+            if (opts.isNotEmpty()) return HeaterModes("voorinstelling", st.optString("preset_mode").takeIf { it.isNotEmpty() && it != "null" }, opts) { v ->
+                quietService("climate/set_preset_mode", JSONObject().put("entity_id", DASH_HEATER).put("preset_mode", v))
+            }
+        }
+        // 2. Een keuzelijst (select) van hetzelfde apparaat, bijv. "Modus"
+        val tpl = "{% for e in device_entities(device_id('$DASH_HEATER')) if e.startswith('select.') %}" +
+            "{{ e }}|{{ states(e) }}|{{ state_attr(e, 'options') | join(';') }}\n{% endfor %}"
+        val rows = runCatching {
+            haRequest("POST", "/api/template", JSONObject().put("template", tpl).toString()).lines().filter { it.contains('|') }.map { it.split('|') }
+        }.getOrDefault(emptyList())
+        rows.firstOrNull { r -> r.getOrNull(2).orEmpty().lowercase(NL).let { "comfort" in it || "eco" in it || "frost" in it || "vorst" in it } }?.let { r ->
+            return HeaterModes("keuzelijst ${r[0]}", r[1], r[2].split(';').filter { it.isNotBlank() }) { v ->
+                quietService("select/select_option", JSONObject().put("entity_id", r[0]).put("option", v))
+            }
+        }
+        // 3. Smart Life-scènes ("Tap-to-Run") die HA als scene.* kent, met comfort/eco/antivorst in de naam
+        val sc = runCatching {
+            val t = "{% for s in states.scene %}{{ s.entity_id }}|{{ s.name }}\n{% endfor %}"
+            haRequest("POST", "/api/template", JSONObject().put("template", t).toString()).lines().filter { it.contains('|') }.map { it.split('|') }
+        }.getOrDefault(emptyList()).filter { r -> r[1].lowercase(NL).let { n -> listOf("comfort", "eco", "antivorst", "antifrost").any { it in n } } }
+        if (sc.isNotEmpty()) return HeaterModes("Smart Life-scène", null, sc.map { it[1] }) { v ->
+            sc.firstOrNull { it[1] == v }?.let { quietService("scene/turn_on", JSONObject().put("entity_id", it[0])) }
+        }
+        return null
+    }
+
+    /** Lang drukken op de kaart "Verwarming werkplek": stand kiezen. */
+    private fun chooseHeaterMode() {
+        dashStatus.text = "Standen van de kachel opvragen…"
+        thread {
+            val m = heaterModes()
+            runOnUiThread {
+                if (m == null) {
+                    dashStatus.text = ""
+                    AlertDialog.Builder(this)
+                        .setTitle("Stand van de kachel")
+                        .setMessage("Home Assistant kent de stand (comfort / eco / antivorst) van deze kachel niet. " +
+                            "Maak in Smart Life een Tap-to-Run-scène met in de naam 'Comfort' die de kachel op comfort zet; " +
+                            "HA neemt die over en de app gebruikt hem dan vanzelf bij aanzetten.")
+                        .setPositiveButton("OK", null).show()
+                    return@runOnUiThread
+                }
+                dashStatus.text = ""
+                AlertDialog.Builder(this)
+                    .setTitle("Stand van de kachel" + (m.current?.let { " · nu: $it" } ?: ""))
+                    .setItems(m.options.toTypedArray()) { _, i ->
+                        val v = m.options[i]
+                        dashStatus.text = "Verwarming werkplek → $v"
+                        thread { m.set(v); Thread.sleep(1_500); runOnUiThread { refreshCurrentTab(force = true) } }
+                    }
+                    .setNegativeButton("Annuleren", null).show()
+            }
+        }
     }
 
     /** Roept een Home Assistant-service aan en ververst daarna het dashboard. */
