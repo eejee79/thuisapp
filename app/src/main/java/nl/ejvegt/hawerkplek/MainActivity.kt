@@ -4333,12 +4333,14 @@ class MainActivity : Activity() {
                     })
                     addView(barBtn("■", "Stoppen op $room", false) {
                         thread { quietService("media_player/media_stop", JSONObject().put("entity_id", entity)) }
-                        this.visibility = View.GONE
+                        this@apply.visibility = View.GONE
                     })
-                    addView(barBtn(if (playing) "❚❚" else "▶", "Afspelen of pauzeren op $room", true) {
+                    var pp: TextView? = null
+                    pp = barBtn(if (playing) "❚❚" else "▶", "Afspelen of pauzeren op $room", true) {
                         thread { quietService("media_player/media_play_pause", JSONObject().put("entity_id", entity)) }
-                        (it as TextView).text = if ((it as TextView).text == "▶") "❚❚" else "▶"
-                    })
+                        pp?.let { b -> b.text = if (b.text == "▶") "❚❚" else "▶" }
+                    }
+                    addView(pp)
                 })
             }
         }
