@@ -20,8 +20,8 @@ android {
         applicationId = "nl.ejvegt.hawerkplek"
         minSdk = 26
         targetSdk = 35
-        versionCode = 167
-        versionName = "2.66"
+        versionCode = 168
+        versionName = "2.67"
 
         buildConfigField("String", "HA_URL", "\"${localProp("HA_URL")}\"")
         buildConfigField("String", "HA_URL_LOCAL", "\"${localProp("HA_URL_LOCAL")}\"")
@@ -87,4 +87,5 @@ android {
 // Eén extra bibliotheek: smbj, om muziek van de netwerkmap (SMB) te lezen.
 dependencies {
     implementation("com.hierynomus:smbj:0.13.0")
+    implementation("com.squareup.okhttp3:okhttp:4.12.0")   // websocket naar HA (statistieken)
 }

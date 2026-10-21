@@ -1717,6 +1717,174 @@ class MainActivity : Activity() {
         }
     }
 
+    // ================= Verbruik (HomeWizard via HA-statistieken), van–tot =================
+
+    private class UsageIds(val import: List<String>, val export: List<String>, val gas: String?, val price: String?)
+    @Volatile private var usageIds: UsageIds? = null
+
+    private fun haStats(): HaStats = HaStats(haBase(), haToken())
+
+    /** Welke statistieken horen bij de P1-meter: afname, teruglevering, gas; plus de uurprijs. */
+    private fun findUsageIds(): UsageIds {
+        usageIds?.let { return it }
+        val all = haStats().listIds()
+        val kwh = all.filter { it.value.equals("kWh", true) }.keys
+        fun pick(word: String): List<String> {
+            val pref = kwh.filter { "p1" in it }.ifEmpty { kwh }
+            pref.firstOrNull { word in it && "tariff" !in it }?.let { return listOf(it) }
+            return pref.filter { word in it && "tariff" in it }
+        }
+        val gas = all.filter { (id, u) -> "gas" in id && (u.contains("m³") || u.contains("m3")) }.keys
+            .let { g -> g.firstOrNull { "total_gas" in it } ?: g.firstOrNull() }
+        val r = UsageIds(pick("energy_import"), pick("energy_export"), gas, DASH_PRICE.takeIf { it in all.keys })
+        usageIds = r
+        return r
+    }
+
+    private fun buildUsageCard(): View {
+        val card = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(16), dp(12), dp(16), dp(14))
+            background = GradientDrawable().apply { setColor(0xFF1E1E1E.toInt()); cornerRadius = dp(14).toFloat() }
+            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { bottomMargin = dp(10) }
+        }
+        card.addView(TextView(this).apply { text = "📈  Verbruik"; textSize = 13f; setTextColor(0xFFB0B0B0.toInt()) })
+        val cal = java.util.Calendar.getInstance()
+        fun dayStart(c: java.util.Calendar) = (c.clone() as java.util.Calendar).apply {
+            set(java.util.Calendar.HOUR_OF_DAY, 0); set(java.util.Calendar.MINUTE, 0); set(java.util.Calendar.SECOND, 0); set(java.util.Calendar.MILLISECOND, 0)
+        }
+        var from = dayStart(cal).apply { set(java.util.Calendar.DAY_OF_MONTH, 1) }.timeInMillis
+        var to = dayStart(cal).apply { add(java.util.Calendar.DAY_OF_YEAR, 1) }.timeInMillis   // tot = einde van de dag (exclusief)
+        val dFmt = java.text.SimpleDateFormat("d MMM yyyy", NL)
+        fun dateBtn() = TextView(this).apply {
+            textSize = 15f; setTextColor(Color.WHITE); setTypeface(typeface, Typeface.BOLD); gravity = Gravity.CENTER
+            setPadding(dp(8), dp(10), dp(8), dp(10))
+            background = GradientDrawable().apply { setColor(0xFF2A2A2A.toInt()); cornerRadius = dp(12).toFloat() }
+            layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
+        }
+        val fromBtn = dateBtn(); val toBtn = dateBtn()
+        card.addView(LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL; setPadding(0, dp(10), 0, dp(4))
+            addView(TextView(this@MainActivity).apply { text = "van"; textSize = 12f; setTextColor(0xFF9A9A9A.toInt()); setPadding(0, 0, dp(8), 0) })
+            addView(fromBtn)
+            addView(TextView(this@MainActivity).apply { text = "tot"; textSize = 12f; setTextColor(0xFF9A9A9A.toInt()); setPadding(dp(10), 0, dp(8), 0) })
+            addView(toBtn)
+        })
+        val chips = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; setPadding(0, dp(6), 0, dp(6)) }
+        card.addView(android.widget.HorizontalScrollView(this).apply { isHorizontalScrollBarEnabled = false; addView(chips) })
+        val big = TextView(this).apply { textSize = 26f; setTextColor(Color.WHITE); setTypeface(typeface, Typeface.BOLD); text = "…" }
+        val cmp = TextView(this).apply { textSize = 12f; setTextColor(0xFF9A9A9A.toInt()) }
+        val details = TextView(this).apply { textSize = 13f; setTextColor(0xFFCFCFCF.toInt()); setPadding(0, dp(6), 0, 0) }
+        val bars = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL; gravity = Gravity.BOTTOM
+            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(90)).apply { topMargin = dp(10) }
+        }
+        val axis = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
+        val axisL = TextView(this).apply { textSize = 11f; setTextColor(0xFF8A8A8A.toInt()); layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f) }
+        val axisR = TextView(this).apply { textSize = 11f; setTextColor(0xFF8A8A8A.toInt()) }
+        axis.addView(axisL); axis.addView(axisR)
+        card.addView(big); card.addView(cmp); card.addView(details); card.addView(bars); card.addView(axis)
+        var seq = 0
+
+        fun fmt(v: Double, dec: Int = 1) = String.format(NL, "%,.${dec}f", v)
+        fun load() {
+            fromBtn.text = dFmt.format(java.util.Date(from))
+            toBtn.text = dFmt.format(java.util.Date(to - 1))
+            val my = ++seq
+            big.text = "…"; cmp.text = ""; details.text = "Laden…"
+            thread {
+                val r = runCatching {
+                    val ids = findUsageIds()
+                    if (ids.import.isEmpty()) throw IOException("geen meterstanden van de P1-meter gevonden in HA")
+                    val span = to - from
+                    val period = when { span <= 2 * 86_400_000L -> "hour"; span <= 62 * 86_400_000L -> "day"; else -> "month" }
+                    val st = haStats()
+                    val sums = st.during(ids.import + ids.export + listOfNotNull(ids.gas), from, to, period, "change")
+                    val prev = st.during(ids.import + ids.export + listOfNotNull(ids.gas), from - span, from, if (period == "hour") "day" else period, "change")
+                    // Kosten: per uur afname × uurprijs (alleen bij een redelijke periode)
+                    var cost: Double? = null
+                    if (ids.price != null && span <= 400 * 86_400_000L) {
+                        val hourly = st.during(ids.import, from, to, "hour", "change")
+                        val price = st.during(listOf(ids.price), from, to, "hour", "mean")[ids.price].orEmpty().associate { it.start to it.value }
+                        if (price.isNotEmpty()) {
+                            var c = 0.0
+                            val byHour = HashMap<Long, Double>()
+                            hourly.values.forEach { l -> l.forEach { byHour[it.start] = (byHour[it.start] ?: 0.0) + it.value } }
+                            byHour.forEach { (t, kwh) -> price[t]?.let { p -> c += kwh * (if (p > 10) p / 10_000_000.0 else p) } }
+                            cost = c
+                        }
+                    }
+                    Triple(ids, Triple(sums, prev, cost), period)
+                }
+                runOnUiThread {
+                    if (my != seq) return@runOnUiThread
+                    val res = r.getOrNull() ?: run { big.text = "—"; details.text = "Niet beschikbaar: ${r.exceptionOrNull()?.message}"; return@runOnUiThread }
+                    val (ids, data, period) = res
+                    val (sums, prev, cost) = data
+                    fun total(m: Map<String, List<HaStats.Point>>, l: List<String>) = l.sumOf { id -> m[id].orEmpty().sumOf { it.value } }
+                    val imp = total(sums, ids.import); val exp = total(sums, ids.export)
+                    val gas = ids.gas?.let { total(sums, listOf(it)) }
+                    val pImp = total(prev, ids.import)
+                    big.text = "${fmt(imp)} kWh"
+                    cmp.text = if (pImp > 0) "afgenomen · vorige periode ${fmt(pImp)} kWh (${if (imp >= pImp) "+" else ""}${fmt((imp - pImp) / pImp * 100, 0)}%)" else "afgenomen"
+                    details.text = listOfNotNull(
+                        if (ids.export.isNotEmpty()) "Teruggeleverd ${fmt(exp)} kWh · netto ${fmt(imp - exp)} kWh" else null,
+                        gas?.let { "Gas ${fmt(it, 2)} m³" },
+                        cost?.let { "Stroomkosten ca. € ${fmt(it, 2)} (Zonneplan-uurprijzen)" },
+                    ).joinToString("\n")
+                    // Staafjes: afname per uur/dag/maand
+                    val buckets = java.util.TreeMap<Long, Double>()
+                    ids.import.forEach { id -> sums[id].orEmpty().forEach { buckets[it.start] = (buckets[it.start] ?: 0.0) + it.value } }
+                    bars.removeAllViews()
+                    val max = (buckets.values.maxOrNull() ?: 0.0).coerceAtLeast(0.001)
+                    val lbl = java.text.SimpleDateFormat(when (period) { "hour" -> "EEE HH:mm"; "day" -> "EEE d MMM"; else -> "MMMM yyyy" }, NL)
+                    buckets.forEach { (t, v) ->
+                        bars.addView(View(this).apply {
+                            background = GradientDrawable().apply { setColor(0xFF26A69A.toInt()); cornerRadius = dp(2).toFloat() }
+                            layoutParams = LinearLayout.LayoutParams(0, (dp(90) * (v / max)).toInt().coerceAtLeast(dp(2)), 1f).apply { marginEnd = dp(1) }
+                            isClickable = true
+                            setOnClickListener { Toast.makeText(this@MainActivity, "${lbl.format(java.util.Date(t))}: ${fmt(v, 2)} kWh", Toast.LENGTH_SHORT).show() }
+                        })
+                    }
+                    val axFmt = java.text.SimpleDateFormat(when (period) { "hour" -> "EEE HH:mm"; "day" -> "d MMM"; else -> "MMM yyyy" }, NL)
+                    axisL.text = buckets.firstKey()?.let { axFmt.format(java.util.Date(it)) } ?: ""
+                    axisR.text = if (buckets.isEmpty()) "" else "${axFmt.format(java.util.Date(buckets.lastKey()))} · per ${when (period) { "hour" -> "uur"; "day" -> "dag"; else -> "maand" }}"
+                }
+            }
+        }
+        fun pickDate(isFrom: Boolean) {
+            val c = java.util.Calendar.getInstance().apply { timeInMillis = if (isFrom) from else to - 1 }
+            android.app.DatePickerDialog(this, { _, y, m, d ->
+                val picked = java.util.Calendar.getInstance().apply { set(y, m, d, 0, 0, 0); set(java.util.Calendar.MILLISECOND, 0) }.timeInMillis
+                if (isFrom) { from = picked; if (to <= from) to = from + 86_400_000L }
+                else { to = picked + 86_400_000L; if (from >= to) from = to - 86_400_000L }
+                load()
+            }, c.get(java.util.Calendar.YEAR), c.get(java.util.Calendar.MONTH), c.get(java.util.Calendar.DAY_OF_MONTH)).show()
+        }
+        fromBtn.isClickable = true; fromBtn.setOnClickListener { pickDate(true) }
+        toBtn.isClickable = true; toBtn.setOnClickListener { pickDate(false) }
+        fun chip(label: String, set: () -> Unit) = chips.addView(TextView(this).apply {
+            text = label; textSize = 12f; setTextColor(Color.WHITE); setTypeface(typeface, Typeface.BOLD)
+            setPadding(dp(12), dp(6), dp(12), dp(6))
+            background = GradientDrawable().apply { setColor(0xFF2A2A2A.toInt()); cornerRadius = dp(14).toFloat() }
+            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { marginEnd = dp(6) }
+            isClickable = true; setOnClickListener { set(); load() }
+        })
+        val today = { dayStart(java.util.Calendar.getInstance()) }
+        chip("Vandaag") { from = today().timeInMillis; to = from + 86_400_000L }
+        chip("Gisteren") { to = today().timeInMillis; from = to - 86_400_000L }
+        chip("7 dagen") { to = today().timeInMillis + 86_400_000L; from = to - 7 * 86_400_000L }
+        chip("Deze maand") { from = today().apply { set(java.util.Calendar.DAY_OF_MONTH, 1) }.timeInMillis; to = today().timeInMillis + 86_400_000L }
+        chip("Vorige maand") {
+            val s = today().apply { set(java.util.Calendar.DAY_OF_MONTH, 1); add(java.util.Calendar.MONTH, -1) }
+            from = s.timeInMillis; to = (s.clone() as java.util.Calendar).apply { add(java.util.Calendar.MONTH, 1) }.timeInMillis
+        }
+        chip("Dit jaar") { from = today().apply { set(java.util.Calendar.DAY_OF_YEAR, 1) }.timeInMillis; to = today().timeInMillis + 86_400_000L }
+        chip("12 maanden") { to = today().timeInMillis + 86_400_000L; from = today().apply { add(java.util.Calendar.YEAR, -1) }.timeInMillis }
+        card.post { load() }
+        return card
+    }
+
     // ================= Proxmox =================
 
     private class VmInfo(val node: String, val type: String, val name: String)
@@ -3250,6 +3418,8 @@ class MainActivity : Activity() {
         priceCard.root.addView(priceBars)
         priceCard.root.addView(priceCard.sub)
         dashList.addView(priceCard.root)
+        // Verbruik over een zelf gekozen periode (HomeWizard-meterstanden uit HA)
+        dashList.addView(buildUsageCard())
 
         // Laadlimiet auto
         chargeCard = DashCard("🚗  Škoda Elroq · laadlimiet")
