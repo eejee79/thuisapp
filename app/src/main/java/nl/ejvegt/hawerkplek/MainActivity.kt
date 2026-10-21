@@ -4281,34 +4281,44 @@ class MainActivity : Activity() {
             .setTitle("Zender kiezen")
             .setItems(HEOS_STATIONS.map { it.first }.toTypedArray()) { _, which ->
                 val (name, match) = HEOS_STATIONS[which]
-                val rooms = arrayOf("Woonkamer (Denon)", "PiCore (boven)")
-                val last = prefs().getInt("radio_room", 0)
-                AlertDialog.Builder(this)
-                    .setTitle("$name afspelen op")
-                    .setSingleChoiceItems(rooms, last) { d, room ->
-                        d.dismiss()
-                        prefs().edit().putInt("radio_room", room).apply()
-                        if (room == 1) playRadioOnPicore(name) else {
-                            zoneUp = false
-                            mediaStatus.text = "$name: receiver aanzetten…"
-                            thread {
-                                prepareReceiver("HEOS Music")
-                                playHeosRadio(match, name, mediaStatus)
+                mediaStatus.text = "Spelers zoeken…"
+                thread {
+                    // Woonkamer via HEOS + alle Music Assistant-spelers (PiCore, Kamer Denise…), behalve de Denon zelf
+                    val others = maPlayers().filter { (_, n) -> n.lowercase(NL).let { "denon" !in it && "heos" !in it } }
+                        .sortedBy { (_, n) -> if ("picore" in n.lowercase(NL)) 0 else 1 }
+                    runOnUiThread {
+                        mediaStatus.text = ""
+                        val rooms = listOf("WOONKAMER" to "Woonkamer (Denon)") + others
+                        val last = rooms.indexOfFirst { it.first == prefs().getString("radio_room_id", "WOONKAMER") }.coerceAtLeast(0)
+                        AlertDialog.Builder(this)
+                            .setTitle("$name afspelen op")
+                            .setSingleChoiceItems(rooms.map { it.second }.toTypedArray(), last) { d, i ->
+                                d.dismiss()
+                                val (id, room) = rooms[i]
+                                prefs().edit().putString("radio_room_id", id).apply()
+                                if (id != "WOONKAMER") playRadioOnMa(name, id, room) else {
+                                    zoneUp = false
+                                    mediaStatus.text = "$name: receiver aanzetten…"
+                                    thread {
+                                        prepareReceiver("HEOS Music")
+                                        playHeosRadio(match, name, mediaStatus)
+                                    }
+                                }
                             }
-                        }
+                            .setNegativeButton("Annuleren", null)
+                            .show()
                     }
-                    .setNegativeButton("Annuleren", null)
-                    .show()
+                }
             }
             .setNegativeButton("Annuleren", null)
             .show()
     }
 
-    /** Zender via Music Assistant (radio-provider, bijv. Radio Browser of TuneIn) op de PiCore afspelen. */
-    private fun playRadioOnPicore(name: String) {
-        mediaStatus.text = "$name zoeken voor PiCore…"
+    /** Zender via Music Assistant (radio-provider, bijv. Radio Browser of TuneIn) op een speler afspelen. */
+    private fun playRadioOnMa(name: String, entity: String, room: String) {
+        mediaStatus.text = "$name zoeken voor $room…"
         thread {
-            val p = picorePlayer()
+            val p = entity to room
             val hit = runCatching {
                 val r = maCall("search", JSONObject().put("name", name).put("media_type", JSONArray().put("radio")).put("limit", 8))
                 val items = maList(r, "radio")
@@ -4318,7 +4328,6 @@ class MainActivity : Activity() {
             }
             runOnUiThread {
                 when {
-                    p == null -> mediaStatus.text = "PiCore niet gevonden in Music Assistant"
                     hit.isFailure -> mediaStatus.text = "Zoeken mislukt: ${hit.exceptionOrNull()?.message}"
                     hit.getOrNull() == null -> mediaStatus.text =
                         "$name niet gevonden. Zet in Music Assistant een radio-provider aan (Radio Browser of TuneIn)."
