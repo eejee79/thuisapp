@@ -2661,7 +2661,7 @@ class MainActivity : Activity() {
                 layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
             })
             carEnabled = Switch(this@MainActivity).apply {
-            styleSwitch(this) visibility = View.GONE }
+            styleSwitch(this); visibility = View.GONE }
             addView(carEnabled)
         })
         fun timeBtn(onPick: (Int) -> Unit, get: () -> Int) = Button(this).apply {
