@@ -2555,7 +2555,7 @@ class MainActivity : Activity() {
     private lateinit var carInfo: TextView
     private var carFromMin = 23 * 60
     private lateinit var carPrices: LinearLayout
-    private var carPricesKey = ""
+    private var carPricesKey: String? = null
     private var carToMin = 7 * 60
     private var carDirty = false      // tijden gewijzigd maar nog niet opgeslagen
     @Volatile private var carNeedsRewrite = false   // automatisering gebruikte de verkeerde schakelaar
@@ -2735,13 +2735,13 @@ class MainActivity : Activity() {
             list.add(ts to v)
         }
         val pts = list.distinctBy { it.first }.sortedBy { it.first }
-        val key = pts.joinToString { "${it.first}:${it.second}" }
+        val key = (if (o == null) "x" else "o") + pts.joinToString { "${it.first}:${it.second}" }
         if (key == carPricesKey) return
         carPricesKey = key
         carPrices.removeAllViews()
         if (pts.isEmpty()) {
             carPrices.addView(TextView(this).apply {
-                text = if (o == null) "Zonneplan niet bereikbaar" else "Geen prijzen bekend"
+                text = if (o == null) "Zonneplan niet bereikbaar" else "Geen uurprijzen van Zonneplan ontvangen (${o.optString("entity_id")}: ${o.optString("state")}, ${fc?.length() ?: 0} in de verwachting). Herlaad de Zonneplan-integratie in HA."
                 setTextColor(0xFF9A9A9A.toInt())
             })
             return
