@@ -1719,7 +1719,7 @@ class MainActivity : Activity() {
 
     // ================= Verbruik (HomeWizard via HA-statistieken), van–tot =================
 
-    private class UsageIds(val import: List<String>, val export: List<String>, val gas: String?, val price: String?)
+    private class UsageIds(val import: List<String>, val export: List<String>, val gas: String?, val price: String?, val charger: String?)
     @Volatile private var usageIds: UsageIds? = null
 
     private fun haStats(): HaStats = HaStats(haBase(), haToken())
@@ -1746,7 +1746,10 @@ class MainActivity : Activity() {
             .filter { it !in imp }
         val gas = all.filter { (id, u) -> "gas" in id && (u.contains("m³") || u.contains("m3")) }.keys
             .let { g -> g.firstOrNull { "total" in it || "totaal" in it } ?: g.firstOrNull() }
-        val r = UsageIds(imp, exp, gas, DASH_PRICE.takeIf { it in all.keys })
+        // Laadpaal (Peblar): de totale meterstand, niet die van één laadsessie
+        val charger = kwh.filter { "peblar" in it && !Regex("sessie|session").containsMatchIn(it) }
+            .let { c -> c.firstOrNull { Regex("levensduur|lifetime|totaal|total").containsMatchIn(it) } ?: c.firstOrNull() }
+        val r = UsageIds(imp, exp, gas, DASH_PRICE.takeIf { it in all.keys }, charger)
         if (imp.isNotEmpty()) usageIds = r
         return r
     }
@@ -1810,17 +1813,20 @@ class MainActivity : Activity() {
                     val span = to - from
                     val period = when { span <= 2 * 86_400_000L -> "hour"; span <= 62 * 86_400_000L -> "day"; else -> "month" }
                     val st = haStats()
-                    val sums = st.during(ids.import + ids.export + listOfNotNull(ids.gas), from, to, period, "change")
-                    val prev = st.during(ids.import + ids.export + listOfNotNull(ids.gas), from - span, from, if (period == "hour") "day" else period, "change")
+                    val wanted = ids.import + ids.export + listOfNotNull(ids.gas, ids.charger)
+                    val sums = st.during(wanted, from, to, period, "change")
+                    val prev = st.during(wanted, from - span, from, if (period == "hour") "day" else period, "change")
                     // Kosten: per uur afname × uurprijs (alleen bij een redelijke periode)
                     var cost: Double? = null
                     if (ids.price != null && span <= 400 * 86_400_000L) {
-                        val hourly = st.during(ids.import, from, to, "hour", "change")
+                        val hourly = st.during(ids.import + listOfNotNull(ids.charger), from, to, "hour", "change")
                         val price = st.during(listOf(ids.price), from, to, "hour", "mean")[ids.price].orEmpty().associate { it.start to it.value }
                         if (price.isNotEmpty()) {
                             var c = 0.0
                             val byHour = HashMap<Long, Double>()
-                            hourly.values.forEach { l -> l.forEach { byHour[it.start] = (byHour[it.start] ?: 0.0) + it.value } }
+                            ids.import.forEach { id -> hourly[id].orEmpty().forEach { byHour[it.start] = (byHour[it.start] ?: 0.0) + it.value } }
+                            // Laadpaal betalen we niet: per uur aftrekken (niet onder nul, bijv. bij laden op zonnestroom)
+                            ids.charger?.let { c -> hourly[c].orEmpty().forEach { p -> byHour[p.start]?.let { byHour[p.start] = (it - p.value).coerceAtLeast(0.0) } } }
                             byHour.forEach { (t, kwh) -> price[t]?.let { p -> c += kwh * (if (p > 10) p / 10_000_000.0 else p) } }
                             cost = c
                         }
@@ -1833,19 +1839,27 @@ class MainActivity : Activity() {
                     val (ids, data, period) = res
                     val (sums, prev, cost) = data
                     fun total(m: Map<String, List<HaStats.Point>>, l: List<String>) = l.sumOf { id -> m[id].orEmpty().sumOf { it.value } }
-                    val imp = total(sums, ids.import); val exp = total(sums, ids.export)
+                    // Afname per tijdvak, min wat de laadpaal in dat tijdvak gebruikte (niet onder nul)
+                    fun netBuckets(m: Map<String, List<HaStats.Point>>): java.util.TreeMap<Long, Double> {
+                        val b = java.util.TreeMap<Long, Double>()
+                        ids.import.forEach { id -> m[id].orEmpty().forEach { b[it.start] = (b[it.start] ?: 0.0) + it.value } }
+                        ids.charger?.let { c -> m[c].orEmpty().forEach { p -> b[p.start]?.let { b[p.start] = (it - p.value).coerceAtLeast(0.0) } } }
+                        return b
+                    }
+                    val buckets = netBuckets(sums)
+                    val imp = buckets.values.sum(); val exp = total(sums, ids.export)
                     val gas = ids.gas?.let { total(sums, listOf(it)) }
-                    val pImp = total(prev, ids.import)
+                    val car = ids.charger?.let { total(sums, listOf(it)) }
+                    val pImp = netBuckets(prev).values.sum()
                     big.text = "${fmt(imp)} kWh"
                     cmp.text = if (pImp > 0) "afgenomen · vorige periode ${fmt(pImp)} kWh (${if (imp >= pImp) "+" else ""}${fmt((imp - pImp) / pImp * 100, 0)}%)" else "afgenomen"
                     details.text = listOfNotNull(
+                        car?.takeIf { it > 0.05 }?.let { "Laadpaal ${fmt(it)} kWh (niet meegeteld)" },
                         if (ids.export.isNotEmpty()) "Teruggeleverd ${fmt(exp)} kWh · netto ${fmt(imp - exp)} kWh" else null,
                         gas?.let { "Gas ${fmt(it, 2)} m³" },
                         cost?.let { "Stroomkosten ca. € ${fmt(it, 2)} (Zonneplan-uurprijzen)" },
                     ).joinToString("\n")
-                    // Staafjes: afname per uur/dag/maand
-                    val buckets = java.util.TreeMap<Long, Double>()
-                    ids.import.forEach { id -> sums[id].orEmpty().forEach { buckets[it.start] = (buckets[it.start] ?: 0.0) + it.value } }
+                    // Staafjes: afname per uur/dag/maand (zonder laadpaal)
                     bars.removeAllViews()
                     val max = (buckets.values.maxOrNull() ?: 0.0).coerceAtLeast(0.001)
                     val lbl = java.text.SimpleDateFormat(when (period) { "hour" -> "EEE HH:mm"; "day" -> "EEE d MMM"; else -> "MMMM yyyy" }, NL)
