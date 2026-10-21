@@ -1847,7 +1847,7 @@ class MainActivity : Activity() {
                         })
                     }
                     val axFmt = java.text.SimpleDateFormat(when (period) { "hour" -> "EEE HH:mm"; "day" -> "d MMM"; else -> "MMM yyyy" }, NL)
-                    axisL.text = buckets.firstKey()?.let { axFmt.format(java.util.Date(it)) } ?: ""
+                    axisL.text = if (buckets.isEmpty()) "" else axFmt.format(java.util.Date(buckets.firstKey()))
                     axisR.text = if (buckets.isEmpty()) "" else "${axFmt.format(java.util.Date(buckets.lastKey()))} · per ${when (period) { "hour" -> "uur"; "day" -> "dag"; else -> "maand" }}"
                 }
             }
