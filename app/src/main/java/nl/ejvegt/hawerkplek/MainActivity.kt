@@ -1875,6 +1875,7 @@ class MainActivity : Activity() {
                         carFirst?.takeIf { it > from + 86_400_000L }?.let {
                             "⚠ Laadpaal pas gemeten vanaf ${java.text.SimpleDateFormat("d MMM yyyy", NL).format(java.util.Date(it))}; daarvoor zit de auto nog in de afname"
                         },
+                        if (ids.charger.isNotEmpty() && carFirst == null) "⚠ Geen laadpaalgegevens in deze periode; laden zit nog in de afname" else null,
                         if (ids.export.isNotEmpty()) "Teruggeleverd ${fmt(exp)} kWh · netto ${fmt(imp - exp)} kWh" else null,
                         gas?.let { "Gas ${fmt(it, 2)} m³" },
                         cost?.let { "Stroomkosten ca. € ${fmt(it, 2)} (Zonneplan-uurprijzen)" },
