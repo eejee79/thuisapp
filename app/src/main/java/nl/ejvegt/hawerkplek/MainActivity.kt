@@ -8632,7 +8632,13 @@ class MainActivity : Activity() {
 
     /** Tegels: 3 naast elkaar, verhouding past precies bij de logo's (480×300). */
     private val TILE_COLS get() = if (isTablet) 5 else 3
-    private val TILE_H get() = if (isTablet) 96 else 72
+    /** Tegelhoogte in dp. Op de tablet in de verhouding van de logo's (480×300 = 1,6), zodat er niets wordt afgekapt. */
+    private val TILE_H: Int get() {
+        if (!isTablet) return 72
+        val wDp = resources.configuration.screenWidthDp - 97 - 32   // navigatiebalk links + marges
+        val tileW = (wDp - TILE_GAP * (TILE_COLS - 1)) / TILE_COLS
+        return (tileW / 1.6f).toInt().coerceIn(80, 160)
+    }
     private val TILE_GAP = 10
 
     private fun View.setupTile(color: Int, second: Boolean, onTap: () -> Unit) {
