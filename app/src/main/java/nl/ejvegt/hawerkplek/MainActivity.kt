@@ -1719,7 +1719,7 @@ class MainActivity : Activity() {
 
     // ================= Verbruik (HomeWizard via HA-statistieken), van–tot =================
 
-    private class UsageIds(val import: List<String>, val export: List<String>, val gas: String?, val price: String?, val charger: String?)
+    private class UsageIds(val import: List<String>, val export: List<String>, val gas: String?, val price: String?, val charger: List<String>)
     @Volatile private var usageIds: UsageIds? = null
 
     private fun haStats(): HaStats = HaStats(haBase(), haToken())
@@ -1747,8 +1747,9 @@ class MainActivity : Activity() {
         val gas = all.filter { (id, u) -> "gas" in id && (u.contains("m³") || u.contains("m3")) }.keys
             .let { g -> g.firstOrNull { "total" in it || "totaal" in it } ?: g.firstOrNull() }
         // Laadpaal (Peblar): de totale meterstand, niet die van één laadsessie
+        // Alle totaalmeters van de laadpaal (oud én nieuw, na opnieuw toevoegen van de integratie)
         val charger = kwh.filter { "peblar" in it && !Regex("sessie|session").containsMatchIn(it) }
-            .let { c -> c.firstOrNull { Regex("levensduur|lifetime|totaal|total").containsMatchIn(it) } ?: c.firstOrNull() }
+            .let { c -> c.filter { Regex("levensduur|lifetime|totaal|total").containsMatchIn(it) }.ifEmpty { c.take(1) } }
         val r = UsageIds(imp, exp, gas, DASH_PRICE.takeIf { it in all.keys }, charger)
         if (imp.isNotEmpty()) usageIds = r
         return r
@@ -1813,20 +1814,22 @@ class MainActivity : Activity() {
                     val span = to - from
                     val period = when { span <= 2 * 86_400_000L -> "hour"; span <= 62 * 86_400_000L -> "day"; else -> "month" }
                     val st = haStats()
-                    val wanted = ids.import + ids.export + listOfNotNull(ids.gas, ids.charger)
+                    val wanted = ids.import + ids.export + listOfNotNull(ids.gas) + ids.charger
                     val sums = st.during(wanted, from, to, period, "change")
                     val prev = st.during(wanted, from - span, from, if (period == "hour") "day" else period, "change")
                     // Kosten: per uur afname × uurprijs (alleen bij een redelijke periode)
                     var cost: Double? = null
                     if (ids.price != null && span <= 400 * 86_400_000L) {
-                        val hourly = st.during(ids.import + listOfNotNull(ids.charger), from, to, "hour", "change")
+                        val hourly = st.during(ids.import + ids.charger, from, to, "hour", "change")
                         val price = st.during(listOf(ids.price), from, to, "hour", "mean")[ids.price].orEmpty().associate { it.start to it.value }
                         if (price.isNotEmpty()) {
                             var c = 0.0
                             val byHour = HashMap<Long, Double>()
                             ids.import.forEach { id -> hourly[id].orEmpty().forEach { byHour[it.start] = (byHour[it.start] ?: 0.0) + it.value } }
                             // Laadpaal betalen we niet: per uur aftrekken (niet onder nul, bijv. bij laden op zonnestroom)
-                            ids.charger?.let { c -> hourly[c].orEmpty().forEach { p -> byHour[p.start]?.let { byHour[p.start] = (it - p.value).coerceAtLeast(0.0) } } }
+                            val ch = HashMap<Long, Double>()
+                            ids.charger.forEach { c -> hourly[c].orEmpty().forEach { ch[it.start] = (ch[it.start] ?: 0.0) + it.value } }
+                            ch.forEach { (t, v) -> byHour[t]?.let { byHour[t] = (it - v).coerceAtLeast(0.0) } }
                             byHour.forEach { (t, kwh) -> price[t]?.let { p -> c += kwh * (if (p > 10) p / 10_000_000.0 else p) } }
                             cost = c
                         }
@@ -1843,18 +1846,25 @@ class MainActivity : Activity() {
                     fun netBuckets(m: Map<String, List<HaStats.Point>>): java.util.TreeMap<Long, Double> {
                         val b = java.util.TreeMap<Long, Double>()
                         ids.import.forEach { id -> m[id].orEmpty().forEach { b[it.start] = (b[it.start] ?: 0.0) + it.value } }
-                        ids.charger?.let { c -> m[c].orEmpty().forEach { p -> b[p.start]?.let { b[p.start] = (it - p.value).coerceAtLeast(0.0) } } }
+                        val ch = HashMap<Long, Double>()
+                        ids.charger.forEach { c -> m[c].orEmpty().forEach { ch[it.start] = (ch[it.start] ?: 0.0) + it.value } }
+                        ch.forEach { (t, v) -> b[t]?.let { b[t] = (it - v).coerceAtLeast(0.0) } }
                         return b
                     }
                     val buckets = netBuckets(sums)
                     val imp = buckets.values.sum(); val exp = total(sums, ids.export)
                     val gas = ids.gas?.let { total(sums, listOf(it)) }
-                    val car = ids.charger?.let { total(sums, listOf(it)) }
+                    val car = if (ids.charger.isEmpty()) null else total(sums, ids.charger)
+                    // Vanaf wanneer meet HA de laadpaal? (eerste tijdvak met gegevens)
+                    val carFirst = ids.charger.mapNotNull { c -> sums[c]?.minOfOrNull { it.start } }.minOrNull()
                     val pImp = netBuckets(prev).values.sum()
                     big.text = "${fmt(imp)} kWh"
                     cmp.text = if (pImp > 0) "afgenomen · vorige periode ${fmt(pImp)} kWh (${if (imp >= pImp) "+" else ""}${fmt((imp - pImp) / pImp * 100, 0)}%)" else "afgenomen"
                     details.text = listOfNotNull(
                         car?.takeIf { it > 0.05 }?.let { "Laadpaal ${fmt(it)} kWh (niet meegeteld)" },
+                        carFirst?.takeIf { it > from + 86_400_000L }?.let {
+                            "⚠ Laadpaal pas gemeten vanaf ${java.text.SimpleDateFormat("d MMM yyyy", NL).format(java.util.Date(it))}; daarvoor zit de auto nog in de afname"
+                        },
                         if (ids.export.isNotEmpty()) "Teruggeleverd ${fmt(exp)} kWh · netto ${fmt(imp - exp)} kWh" else null,
                         gas?.let { "Gas ${fmt(it, 2)} m³" },
                         cost?.let { "Stroomkosten ca. € ${fmt(it, 2)} (Zonneplan-uurprijzen)" },
