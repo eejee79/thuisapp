@@ -933,6 +933,16 @@ class MainActivity : Activity() {
 
     // ================= Tablet (Tab S10+ e.d.): navigatie links, kaarten in kolommen, smallere bladen =================
 
+    /**
+     * Schakelaars altijd in de kleuren van de app (aan = amber), niet in de accentkleur van het toestel.
+     * Anders ziet een schakelaar er op de tablet anders uit dan op de telefoon.
+     */
+    private fun styleSwitch(sw: Switch) {
+        val states = arrayOf(intArrayOf(android.R.attr.state_checked), intArrayOf())
+        sw.thumbTintList = ColorStateList(states, intArrayOf(AMBER, 0xFFE0E0E0.toInt()))
+        sw.trackTintList = ColorStateList(states, intArrayOf((AMBER and 0x00FFFFFF) or 0x80000000.toInt(), 0xFF5A5A5A.toInt()))
+    }
+
     private val isTablet get() = resources.configuration.smallestScreenWidthDp >= 600
 
     /** Onderbladen op een tablet niet over de hele breedte, maar gecentreerd en max. 720 dp breed. */
@@ -1560,6 +1570,7 @@ class MainActivity : Activity() {
                 setTextColor(0xFFB0B0B0.toInt())
             }
             val sw = Switch(this).apply {
+            styleSwitch(this)
                 scaleX = 1.3f
                 scaleY = 1.3f
             }
@@ -2479,6 +2490,7 @@ class MainActivity : Activity() {
         rowReboot = fritzRow("Fritzbox herstarten", "Internet is ±2–3 minuten weg", rebootBtn)
 
         wifiSwitch = Switch(this).apply {
+            styleSwitch(this)
             setOnCheckedChangeListener { _, checked -> if (!updatingSwitch) onWifiSwitch(checked) }
         }
         rowWifi = fritzRow("WiFi", "Laden…", wifiSwitch)
@@ -2648,7 +2660,8 @@ class MainActivity : Activity() {
                 setTypeface(typeface, Typeface.BOLD)
                 layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
             })
-            carEnabled = Switch(this@MainActivity).apply { visibility = View.GONE }
+            carEnabled = Switch(this@MainActivity).apply {
+            styleSwitch(this) visibility = View.GONE }
             addView(carEnabled)
         })
         fun timeBtn(onPick: (Int) -> Unit, get: () -> Int) = Button(this).apply {
@@ -3439,6 +3452,7 @@ class MainActivity : Activity() {
     @Volatile private var lastBtcFetch = 0L
 
     private fun smallSwitch(onChange: (Boolean) -> Unit) = Switch(this).apply {
+            styleSwitch(this)
         setOnCheckedChangeListener { _, checked -> if (!updatingDash) onChange(checked) }
     }
 
