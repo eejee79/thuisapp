@@ -790,6 +790,7 @@ class MainActivity : Activity() {
         tabMedia.setOnClickListener { selectTab(TAB_MEDIA) }
         findViewById<Button>(R.id.settingsButton).setOnClickListener { showSettings(true) }
         findViewById<View>(R.id.powerButton).setOnClickListener { confirmAllOff() }
+        addSoundModeChip()
         listOf(R.id.saveHa, R.id.savePve, R.id.saveFritz).forEach { id ->
             findViewById<Button>(id).setOnClickListener { saveSettings() }
         }
@@ -941,6 +942,113 @@ class MainActivity : Activity() {
         val states = arrayOf(intArrayOf(android.R.attr.state_checked), intArrayOf())
         sw.thumbTintList = ColorStateList(states, intArrayOf(AMBER, 0xFFE0E0E0.toInt()))
         sw.trackTintList = ColorStateList(states, intArrayOf((AMBER and 0x00FFFFFF) or 0x80000000.toInt(), 0xFF5A5A5A.toInt()))
+    }
+
+    // ================= Geluidsmodus van de receiver (klein knopje bovenin) =================
+
+    /** Naam in de app → namen zoals de Denon ze kan noemen (eerste = opdracht als hij niet in de lijst staat). */
+    private val SOUND_MODES = listOf(
+        "Dolby Digital" to listOf("DOLBY DIGITAL", "DOLBY SURROUND", "DOLBY AUDIO"),
+        "Dolby Atmos" to listOf("DOLBY ATMOS"),
+        "Stereo" to listOf("STEREO"),
+        "Multi Ch Stereo" to listOf("MCH STEREO", "MULTI CH STEREO", "MULTI CH IN"),
+        "Pure Direct" to listOf("PURE DIRECT"),
+    )
+    private lateinit var soundChip: TextView
+
+    private fun addSoundModeChip() {
+        val power = findViewById<View>(R.id.powerButton)
+        soundChip = TextView(this).apply {
+            text = "♫"
+            textSize = 11f
+            setTextColor(0xFFCFCFCF.toInt())
+            setTypeface(typeface, Typeface.BOLD)
+            gravity = Gravity.CENTER
+            minWidth = dp(40)
+            setPadding(dp(8), dp(5), dp(8), dp(5))
+            background = GradientDrawable().apply { setStroke(dp(1), 0xFF555555.toInt()); cornerRadius = dp(12).toFloat() }
+            contentDescription = "Geluidsmodus receiver"
+            isClickable = true
+            setOnClickListener { chooseSoundMode() }
+        }
+        val parent = power.parent as ViewGroup
+        parent.addView(soundChip, parent.indexOfChild(power) + 1, android.widget.FrameLayout.LayoutParams(
+            ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT, Gravity.TOP or Gravity.END
+        ).apply { topMargin = dp(19); marginEnd = dp(108) })
+    }
+
+    private fun shortSoundMode(raw: String): String {
+        val u = raw.uppercase(NL)
+        return when {
+            "ATMOS" in u -> "Atmos"
+            "PURE" in u -> "Pure"
+            "MCH" in u || "MULTI" in u -> "MCH"
+            "DOLBY" in u -> "Dolby"
+            "DTS" in u -> "DTS"
+            u == "DIRECT" -> "Direct"
+            "STEREO" in u -> "Stereo"
+            u.isBlank() || u == "NULL" -> "♫"
+            else -> raw.take(7)
+        }
+    }
+
+    private fun showSoundMode(rec: JSONObject?) {
+        if (!::soundChip.isInitialized) return
+        val on = isOn(rec)
+        soundChip.text = if (on) shortSoundMode(attr(rec, "sound_mode_raw", "sound_mode").orEmpty()) else "♫"
+        soundChip.alpha = if (on) 1f else 0.4f
+    }
+
+    private fun chooseSoundMode() {
+        thread {
+            val rec = stateOf(DASH_RECEIVER)
+            runOnUiThread {
+                showSoundMode(rec)
+                if (!isOn(rec)) { Toast.makeText(this, "De receiver staat uit", Toast.LENGTH_SHORT).show(); return@runOnUiThread }
+                val cur = attr(rec, "sound_mode_raw", "sound_mode").orEmpty().uppercase(NL)
+                val idx = SOUND_MODES.indexOfFirst { (_, names) -> names.any { it == cur || (it == "DOLBY ATMOS" && "ATMOS" in cur) } }
+                AlertDialog.Builder(this)
+                    .setTitle("Geluidsmodus" + (attr(rec, "sound_mode_raw", "sound_mode")?.let { " · nu: $it" } ?: ""))
+                    .setSingleChoiceItems(SOUND_MODES.map { it.first }.toTypedArray(), idx) { d, i ->
+                        d.dismiss()
+                        setSoundMode(i, rec)
+                    }
+                    .setNegativeButton("Annuleren", null)
+                    .show()
+            }
+        }
+    }
+
+    private fun setSoundMode(i: Int, rec: JSONObject?) {
+        val (label, names) = SOUND_MODES[i]
+        val list = rec?.optJSONObject("attributes")?.optJSONArray("sound_mode_list")
+            ?.let { a -> (0 until a.length()).map { a.optString(it) } }.orEmpty()
+        val inList = list.firstOrNull { m -> names.any { it.equals(m, true) } }
+        soundChip.text = "…"
+        thread {
+            val r = runCatching {
+                if (inList != null) {
+                    haRequest("POST", "/api/services/media_player/select_sound_mode",
+                        JSONObject().put("entity_id", DASH_RECEIVER).put("sound_mode", inList).toString())
+                } else {
+                    // Niet in de lijst van de integratie: rechtstreeks als Denon-opdracht (MS…)
+                    val cmd = "/goform/formiPhoneAppDirect.xml?MS" + java.net.URLEncoder.encode(names.first(), "UTF-8").replace("+", "%20")
+                    haRequest("POST", "/api/services/denonavr/get_command",
+                        JSONObject().put("entity_id", DASH_RECEIVER).put("command", cmd).toString())
+                }
+            }
+            Thread.sleep(2_500)
+            val now = stateOf(DASH_RECEIVER)
+            runOnUiThread {
+                showSoundMode(now)
+                val got = attr(now, "sound_mode_raw", "sound_mode").orEmpty()
+                val msg = r.exceptionOrNull()?.let { "$label lukt niet: ${it.message}" }
+                    ?: if (got.isNotEmpty() && names.none { got.uppercase(NL).contains(it.substringBefore(' ')) })
+                        "$label gevraagd; de receiver staat op $got (hangt af van het geluid dat binnenkomt)"
+                    else "Geluidsmodus: $label"
+                Toast.makeText(this, msg, Toast.LENGTH_LONG).show()
+            }
+        }
     }
 
     private val isTablet get() = resources.configuration.smallestScreenWidthDp >= 600
@@ -10713,6 +10821,7 @@ class MainActivity : Activity() {
         }
         val rec = stateOf(DASH_RECEIVER)
         recState = rec
+        runOnUiThread { showSoundMode(rec) }
         if (zoneUp) return picoreInfo()
         val recOn = isOn(rec)
         val source = if (recOn) attr(rec, "source") else null
