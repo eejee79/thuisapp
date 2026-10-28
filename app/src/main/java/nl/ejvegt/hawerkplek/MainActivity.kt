@@ -2695,6 +2695,30 @@ class MainActivity : Activity() {
         return sw to wake
     }
 
+    /** Laadstatus volgens de auto zelf (MySkoda), los van welke laadpaal. */
+    private class SkodaCharge(val charging: Boolean, val kw: Double?, val minutesLeft: Int?, val type: String?)
+
+    private fun skodaCharging(): SkodaCharge {
+        val tpl = "{% for e in integration_entities('myskoda') if e.startswith('sensor.') or e.startswith('binary_sensor.') %}" +
+            "{{ e }}|{{ states(e) }}|{{ state_attr(e, 'unit_of_measurement') }}\n{% endfor %}"
+        val rows = runCatching {
+            haRequest("POST", "/api/template", JSONObject().put("template", tpl).toString())
+                .lines().filter { it.contains('|') }.map { it.split('|') }
+        }.getOrDefault(emptyList())
+        fun row(vararg keys: String) = rows.firstOrNull { r -> keys.any { it in r[0] } }
+        val stateRow = row("charging_state", "charging_status", "charge_state")
+        val st = stateRow?.getOrNull(1).orEmpty().lowercase(NL)
+        val charging = st == "charging" || (st.contains("charging") && listOf("ready", "not", "conserv", "connect").none { it in st })
+        val kw = row("charging_power", "charge_power")?.let { r ->
+            r[1].toDoubleOrNull()?.let { if (r.getOrNull(2) == "W") it / 1000 else it }
+        }
+        val left = row("remaining_charging_time", "remaining_charge_time", "charging_time_left", "time_to_full")?.let { r ->
+            r[1].toDoubleOrNull()?.let { v -> when (r.getOrNull(2)) { "h" -> (v * 60).toInt(); "s" -> (v / 60).toInt(); else -> v.toInt() } }
+        }
+        val type = row("charge_type", "charging_type")?.getOrNull(1)?.uppercase(NL)?.takeIf { it == "AC" || it == "DC" }
+        return SkodaCharge(charging, kw, left, type)
+    }
+
     /** Keuzelijst "Slim laden" van de Peblar (eigen laadschema van de paal); null = niet gevonden. */
     @Volatile private var peblarSmart: String? = null
     @Volatile private var carSkoda: Pair<String?, String?> = null to null
@@ -2990,6 +3014,7 @@ class MainActivity : Activity() {
             }
             val bat = stateOf(DASH_CAR_BATTERY)
             val swState = sw?.let { stateOf(it) }
+            val sk = skodaCharging()
             val limit = stateOf(DASH_CHARGE_LIMIT)
             val price = stateOf(DASH_PRICE)
             runOnUiThread { showCharge(limit, bat); showCarPrices(price) }
@@ -3002,7 +3027,22 @@ class MainActivity : Activity() {
                 carBattery.text = if (b != null) "${b.toInt()}%" else "—"
                 // Status van de laadpaal zelf (Peblar): laden / gepauzeerd / geen auto
                 val charging = if (pst != null) pst == "charging" else swState?.optString("state") == "on"
-                carState.text = listOfNotNull(
+                // Eindtijd volgens de auto (MySkoda: resterende laadtijd)
+                val endTxt = sk.minutesLeft?.takeIf { it > 0 && (charging || sk.charging) }?.let {
+                    val end = java.util.Calendar.getInstance().apply { add(java.util.Calendar.MINUTE, it) }
+                    val sameDay = end.get(java.util.Calendar.DAY_OF_YEAR) == java.util.Calendar.getInstance().get(java.util.Calendar.DAY_OF_YEAR)
+                    "klaar ±" + (if (sameDay) "" else java.text.SimpleDateFormat("EEE ", NL).format(end.time)) +
+                        java.text.SimpleDateFormat("HH:mm", NL).format(end.time)
+                }
+                // Laadt de auto, maar niet aan de Peblar? Dan aan een andere laadpaal (onderweg, werk, snellader)
+                if (sk.charging && pst != "charging") {
+                    carState.text = listOfNotNull(
+                        "⚡ Laadt elders",
+                        sk.type,
+                        sk.kw?.takeIf { it > 0.05 }?.let { String.format(NL, "%.1f kW", it) },
+                        endTxt,
+                    ).joinToString("  ·  ")
+                } else carState.text = listOfNotNull(
                     when (pst) {
                         "charging" -> "⚡ Laadt" + (pkw?.takeIf { it > 0.05 }?.let { String.format(NL, " met %.1f kW", it) } ?: "")
                         "suspended" -> "Stekker erin, laadt niet"
@@ -3012,6 +3052,7 @@ class MainActivity : Activity() {
                         else -> pst
                     },
                     "Peblar".takeIf { pst != null },
+                    endTxt.takeIf { charging },
                     swState?.optString("state")?.let { if (it == "on") "laden toegestaan" else "laden uit" },
                 ).joinToString("  ·  ")
                 carSwitchLabel.text = if (sw != null) "Laadschakelaar: $sw  (tik om te wijzigen)" else "Laadschakelaar kiezen…"
