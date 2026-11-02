@@ -2696,7 +2696,8 @@ class MainActivity : Activity() {
     }
 
     /** Laadstatus volgens de auto zelf (MySkoda), los van welke laadpaal. */
-    private class SkodaCharge(val charging: Boolean, val kw: Double?, val minutesLeft: Int?, val type: String?)
+    private class SkodaCharge(val charging: Boolean, val kw: Double?, val minutesLeft: Int?, val type: String?,
+                              val plugged: Boolean?, val state: String)
 
     private fun skodaCharging(): SkodaCharge {
         val tpl = "{% for e in integration_entities('myskoda') if e.startswith('sensor.') or e.startswith('binary_sensor.') %}" +
@@ -2716,7 +2717,17 @@ class MainActivity : Activity() {
             r[1].toDoubleOrNull()?.let { v -> when (r.getOrNull(2)) { "h" -> (v * 60).toInt(); "s" -> (v / 60).toInt(); else -> v.toInt() } }
         }
         val type = row("charge_type", "charging_type")?.getOrNull(1)?.uppercase(NL)?.takeIf { it == "AC" || it == "DC" }
-        return SkodaCharge(charging, kw, left, type)
+        // Stekker in de auto (los van welke laadpaal): binaire sensor, anders afgeleid van de laadstatus
+        val plugRow = rows.firstOrNull { r -> r[0].startsWith("binary_sensor.") &&
+            listOf("charger_connected", "plugged", "cable_connected", "charging_cable", "plug_connected").any { it in r[0] } }
+        val plugged = plugRow?.getOrNull(1)?.let { it == "on" }
+            ?: when {
+                st.isEmpty() || st == "unknown" || st == "unavailable" -> null
+                "connect_cable" in st || "disconnected" in st -> false
+                charging || "conserv" in st || "ready" in st -> true
+                else -> null
+            }
+        return SkodaCharge(charging, kw, left, type, plugged, st)
     }
 
     /** Keuzelijst "Slim laden" van de Peblar (eigen laadschema van de paal); null = niet gevonden. */
@@ -3041,6 +3052,15 @@ class MainActivity : Activity() {
                         sk.type,
                         sk.kw?.takeIf { it > 0.05 }?.let { String.format(NL, "%.1f kW", it) },
                         endTxt,
+                    ).joinToString("  ·  ")
+                } else if (sk.plugged == true && pst != "charging" && pst != "suspended") {
+                    // Stekker in de auto, maar niet in de Peblar: aangesloten aan een andere paal
+                    val b = bat?.optString("state")?.toDoubleOrNull()
+                    val lim = limit?.optString("state")?.toDoubleOrNull()
+                    val full = "conserv" in sk.state || (b != null && lim != null && b >= lim - 0.5)
+                    carState.text = listOf(
+                        "🔌 Aangesloten elders",
+                        if (full) "klaar met laden" else "laadt niet",
                     ).joinToString("  ·  ")
                 } else carState.text = listOfNotNull(
                     when (pst) {
