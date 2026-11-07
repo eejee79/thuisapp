@@ -1992,6 +1992,20 @@ class MainActivity : Activity() {
             layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { bottomMargin = dp(10) }
         }
         card.addView(TextView(this).apply { text = "📈  Verbruik"; textSize = 13f; setTextColor(0xFFB0B0B0.toInt()) })
+        // Live: zon, net en huis (wordt bijgewerkt met "Stroom nu")
+        usageLive = List(3) {
+            TextView(this).apply {
+                textSize = 12f; setTextColor(Color.WHITE); gravity = Gravity.CENTER; maxLines = 2
+                setPadding(dp(6), dp(7), dp(6), dp(7))
+                background = GradientDrawable().apply { setColor(0xFF262626.toInt()); cornerRadius = dp(10).toFloat() }
+                layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f).apply { if (it > 0) marginStart = dp(6) }
+            }
+        }
+        card.addView(LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL; setPadding(0, dp(8), 0, dp(2))
+            usageLive.forEach { addView(it) }
+        })
+        updateUsageLive()
         val cal = java.util.Calendar.getInstance()
         fun dayStart(c: java.util.Calendar) = (c.clone() as java.util.Calendar).apply {
             set(java.util.Calendar.HOUR_OF_DAY, 0); set(java.util.Calendar.MINUTE, 0); set(java.util.Calendar.SECOND, 0); set(java.util.Calendar.MILLISECOND, 0)
@@ -2017,7 +2031,29 @@ class MainActivity : Activity() {
         card.addView(android.widget.HorizontalScrollView(this).apply { isHorizontalScrollBarEnabled = false; addView(chips) })
         val big = TextView(this).apply { textSize = 26f; setTextColor(Color.WHITE); setTypeface(typeface, Typeface.BOLD); text = "…" }
         val cmp = TextView(this).apply { textSize = 12f; setTextColor(0xFF9A9A9A.toInt()) }
-        val details = TextView(this).apply { textSize = 13f; setTextColor(0xFFCFCFCF.toInt()); setPadding(0, dp(6), 0, 0) }
+        val details = TextView(this).apply { textSize = 12f; setTextColor(0xFFFFC94D.toInt()); setPadding(0, dp(6), 0, 0) }
+        // Kerncijfers als tegels, twee per rij
+        val tiles = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(0, dp(8), 0, 0) }
+        fun fillTiles(list: List<Triple<String, String, Int>>) {
+            tiles.removeAllViews()
+            list.chunked(2).forEach { pair ->
+                tiles.addView(LinearLayout(this).apply {
+                    orientation = LinearLayout.HORIZONTAL
+                    layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { bottomMargin = dp(6) }
+                    pair.forEachIndexed { i, (label, value, color) ->
+                        addView(LinearLayout(this@MainActivity).apply {
+                            orientation = LinearLayout.VERTICAL
+                            setPadding(dp(10), dp(8), dp(10), dp(8))
+                            background = GradientDrawable().apply { setColor(0xFF262626.toInt()); cornerRadius = dp(10).toFloat() }
+                            layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.MATCH_PARENT, 1f).apply { if (i > 0) marginStart = dp(6) }
+                            addView(TextView(this@MainActivity).apply { text = label; textSize = 11f; setTextColor(0xFF9A9A9A.toInt()) })
+                            addView(TextView(this@MainActivity).apply { text = value; textSize = 16f; setTextColor(color); setTypeface(typeface, Typeface.BOLD) })
+                        })
+                    }
+                    if (pair.size == 1) addView(View(this@MainActivity), LinearLayout.LayoutParams(0, 1, 1f).apply { marginStart = dp(6) })
+                })
+            }
+        }
         val bars = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL; gravity = Gravity.BOTTOM
             layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(90)).apply { topMargin = dp(10) }
@@ -2026,7 +2062,7 @@ class MainActivity : Activity() {
         val axisL = TextView(this).apply { textSize = 11f; setTextColor(0xFF8A8A8A.toInt()); layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f) }
         val axisR = TextView(this).apply { textSize = 11f; setTextColor(0xFF8A8A8A.toInt()) }
         axis.addView(axisL); axis.addView(axisR)
-        card.addView(big); card.addView(cmp); card.addView(details); card.addView(bars); card.addView(axis)
+        card.addView(big); card.addView(cmp); card.addView(tiles); card.addView(details); card.addView(bars); card.addView(axis)
         var seq = 0
 
         fun fmt(v: Double, dec: Int = 1) = String.format(NL, "%,.${dec}f", v)
@@ -2034,7 +2070,7 @@ class MainActivity : Activity() {
             fromBtn.text = dFmt.format(java.util.Date(from))
             toBtn.text = dFmt.format(java.util.Date(to - 1))
             val my = ++seq
-            big.text = "…"; cmp.text = ""; details.text = "Laden…"
+            big.text = "…"; cmp.text = ""; details.text = "Laden…"; details.visibility = View.VISIBLE; tiles.removeAllViews()
             thread {
                 val r = runCatching {
                     val ids = findUsageIds()
@@ -2067,7 +2103,7 @@ class MainActivity : Activity() {
                 }
                 runOnUiThread {
                     if (my != seq) return@runOnUiThread
-                    val res = r.getOrNull() ?: run { big.text = "—"; details.text = "Niet beschikbaar: ${r.exceptionOrNull()?.message}"; return@runOnUiThread }
+                    val res = r.getOrNull() ?: run { big.text = "—"; details.visibility = View.VISIBLE; details.text = "Niet beschikbaar: ${r.exceptionOrNull()?.message}"; return@runOnUiThread }
                     val (ids, data, period) = res
                     val (sums, prev, cost) = data
                     fun total(m: Map<String, List<HaStats.Point>>, l: List<String>) = l.sumOf { id -> m[id].orEmpty().sumOf { it.value } }
@@ -2098,20 +2134,24 @@ class MainActivity : Activity() {
                     val pImp = netBuckets(prev).values.sum()
                     big.text = "${fmt(imp)} kWh"
                     cmp.text = if (pImp > 0) "afgenomen · vorige periode ${fmt(pImp)} kWh (${if (imp >= pImp) "+" else ""}${fmt((imp - pImp) / pImp * 100, 0)}%)" else "afgenomen"
+                    val pv = ids.solar.sumOf { id -> sums[id].orEmpty().sumOf { it.value.coerceAtLeast(0.0) } }
+                    val white = Color.WHITE
+                    fillTiles(listOfNotNull(
+                        if (ids.export.isNotEmpty()) Triple("Teruggeleverd", "${fmt(exp)} kWh", GREEN) else null,
+                        if (ids.export.isNotEmpty()) Triple("Netto van het net", "${fmt(imp - exp)} kWh", white) else null,
+                        if (pv > 0.05) Triple("☀ Opgewekt", "${fmt(pv)} kWh", 0xFFFFC94D.toInt()) else null,
+                        if (pv > 0.05) Triple("Zelf gebruikt", "${fmt((pv - exp).coerceAtLeast(0.0))} kWh", 0xFFFFC94D.toInt()) else null,
+                        gas?.let { Triple("Gas", "${fmt(it, 2)} m³", 0xFF4FC3F7.toInt()) },
+                        cost?.let { Triple("Stroomkosten (Zonneplan)", "€ ${fmt(it, 2)}", white) },
+                        car?.takeIf { it > 0.05 }?.let { Triple("Laadpaal (niet meegeteld)", "${fmt(it)} kWh", 0xFFB0B0B0.toInt()) },
+                    ))
                     details.text = listOfNotNull(
-                        car?.takeIf { it > 0.05 }?.let { "Laadpaal ${fmt(it)} kWh (niet meegeteld)" },
                         carFirst?.takeIf { it > from + 86_400_000L }?.let {
                             "⚠ Laadpaal pas gemeten vanaf ${java.text.SimpleDateFormat("d MMM yyyy", NL).format(java.util.Date(it))}; daarvoor zit de auto nog in de afname"
                         },
                         if (ids.charger.isNotEmpty() && carFirst == null) "⚠ Geen laadpaalgegevens in deze periode; laden zit nog in de afname" else null,
-                        if (ids.export.isNotEmpty()) "Teruggeleverd ${fmt(exp)} kWh · netto ${fmt(imp - exp)} kWh" else null,
-                        ids.solar.takeIf { it.isNotEmpty() }?.let { sol ->
-                            val pv = sol.sumOf { id -> sums[id].orEmpty().sumOf { it.value.coerceAtLeast(0.0) } }
-                            if (pv > 0.05) "☀ Opgewekt ${fmt(pv)} kWh · zelf gebruikt ${fmt((pv - exp).coerceAtLeast(0.0))} kWh" else null
-                        },
-                        gas?.let { "Gas ${fmt(it, 2)} m³" },
-                        cost?.let { "Stroomkosten ca. € ${fmt(it, 2)} (Zonneplan-uurprijzen)" },
                     ).joinToString("\n")
+                    details.visibility = if (details.text.isEmpty()) View.GONE else View.VISIBLE
                     // Staafjes: afname per uur/dag/maand (zonder laadpaal)
                     bars.removeAllViews()
                     val max = (buckets.values.maxOrNull() ?: 0.0).coerceAtLeast(0.001)
@@ -4229,6 +4269,29 @@ class MainActivity : Activity() {
         powerCard.big.text = String.format(NL, "%.0f W", w).replace("-", "−")
         powerCard.big.setTextColor(if (w < 0) GREEN else AMBER)
         powerCard.sub.text = (if (w < 0) "teruglevering" else "verbruik") + (solarNowText?.let { "\n$it" } ?: "")
+        gridW = w
+        updateUsageLive()
+    }
+
+    // ---------- Live-strook op de kaart Verbruik ----------
+    private var usageLive: List<TextView> = emptyList()
+    @Volatile private var gridW: Double? = null
+    @Volatile private var solarNowKw: Double? = null
+
+    private fun updateUsageLive() {
+        if (usageLive.size < 3) return
+        val g = gridW; val sol = solarNowKw
+        usageLive[0].text = sol?.let { String.format(NL, "☀ Opwek\n%.1f kW", it) } ?: "☀ Opwek\n—"
+        usageLive[0].setTextColor(if ((sol ?: 0.0) > 0.05) 0xFFFFC94D.toInt() else 0xFFB0B0B0.toInt())
+        usageLive[1].text = when {
+            g == null -> "Net\n—"
+            g < 0 -> String.format(NL, "⇡ Terug\n%.1f kW", -g / 1000)
+            else -> String.format(NL, "⇣ Afname\n%.1f kW", g / 1000)
+        }
+        usageLive[1].setTextColor(if (g != null && g < 0) GREEN else AMBER)
+        // Huis = wat binnenkomt van het net + wat de panelen leveren
+        val house = if (g != null) g / 1000 + (sol ?: 0.0) else null
+        usageLive[2].text = house?.let { String.format(NL, "🏠 Huis\n%.1f kW", it.coerceAtLeast(0.0)) } ?: "🏠 Huis\n—"
     }
 
     // ---------- Zonnepanelen (omvormer in HA, op naam gevonden) ----------
@@ -4290,6 +4353,7 @@ class MainActivity : Activity() {
             when (o.optJSONObject("attributes")?.optString("unit_of_measurement")) { "W", "Wh" -> v / 1000; else -> v }
         }
         val nowKw = kw(p); val dayKwh = kw(t)
+        solarNowKw = nowKw?.coerceAtLeast(0.0)
         solarNowText = listOfNotNull(
             nowKw?.let { String.format(NL, "☀ %.1f kW", it.coerceAtLeast(0.0)) },
             dayKwh?.let { String.format(NL, "%.1f kWh vandaag", it) },
