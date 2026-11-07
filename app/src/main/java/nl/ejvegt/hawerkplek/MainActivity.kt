@@ -2979,7 +2979,7 @@ class MainActivity : Activity() {
                 if (k.isNotEmpty()) { prefs().edit().putString(KEY_OCM, k).apply(); onSaved() }
             }
             .setNeutralButton("Site openen") { _, _ ->
-                runCatching { startActivity(Intent(Intent.ACTION_VIEW, Uri.parse("https://openchargemap.org/site/loginprovider/beginlogin"))) }
+                runCatching { startActivity(Intent(Intent.ACTION_VIEW, Uri.parse("https://openchargemap.org"))) }
             }
             .setNegativeButton("Annuleren", null)
             .show()
