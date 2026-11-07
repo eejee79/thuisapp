@@ -2783,13 +2783,23 @@ class MainActivity : Activity() {
         carState = TextView(this).apply { textSize = 14f; setTextColor(0xFFB0B0B0.toInt()) }
         status.addView(carBattery)
         status.addView(carState)
-        fritzList.addView(status)
-        // Laadlimiet van de auto (verhuisd van het Dashboard)
+        // Laadlimiet in dezelfde kaart: waarde + schuif van de (verder verborgen) laadlimiet-kaart overnemen
         (chargeCard.root.parent as? ViewGroup)?.removeView(chargeCard.root)
-        chargeCard.root.layoutParams = LinearLayout.LayoutParams(
-            ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT
-        ).apply { bottomMargin = dp(12) }
-        fritzList.addView(chargeCard.root)
+        (chargeCard.big.parent as? ViewGroup)?.removeView(chargeCard.big)
+        (chargeSlider.seek.parent as? ViewGroup)?.removeView(chargeSlider.seek)
+        status.addView(LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            setPadding(0, dp(14), 0, 0)
+            addView(TextView(this@MainActivity).apply {
+                text = "Laadlimiet"; textSize = 14f; setTextColor(0xFFB0B0B0.toInt())
+                layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
+            })
+            chargeCard.big.textSize = 18f
+            addView(chargeCard.big)
+        })
+        status.addView(chargeSlider.seek)
+        fritzList.addView(status)
 
         // Laadvenster
         val win = card()
