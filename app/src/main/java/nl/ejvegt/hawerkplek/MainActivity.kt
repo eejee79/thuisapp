@@ -558,7 +558,7 @@ class MainActivity : Activity() {
             MediaApp("Prime Video", "com.amazon.amazonvideo.livingroom", 0xFF0F171E.toInt(), "https://app.primevideo.com", logo = R.drawable.logo_prime),
             MediaApp("YouTube", "com.google.android.youtube.tv", 0xFFFFFFFF.toInt(), "https://www.youtube.com", logo = R.drawable.logo_youtube),
             MediaApp("NLziet", "nl.nlziet", 0xFF000000.toInt(), scheme = "nlziet://", logo = R.drawable.logo_nlziet),
-            MediaApp("Videoland", "nl.rtl.videoland.v2", 0xFF2A1A3A.toInt(), "https://v2.videoland.com"),
+            MediaApp("Videoland", "nl.rtl.videoland.v2", 0xFFFF3746.toInt(), "https://v2.videoland.com", logo = R.drawable.logo_videoland),
             MediaApp("Viaplay", "com.viaplay.android", 0xFF1D1D27.toInt(), scheme = "viaplay://", logo = R.drawable.logo_viaplay, alt = listOf("https://viaplay.nl/", "https://viaplay.com/")),
             MediaApp("F1 TV", "com.formulaone.production", 0xFFCE2C1D.toInt(), scheme = "f1tv://", logo = R.drawable.logo_f1tv, alt = listOf("https://f1tv.formula1.com/")),
             MediaApp("Kodi", "org.xbmc.kodi", 0xFF121212.toInt(), logo = R.drawable.logo_kodi),
