@@ -2876,13 +2876,13 @@ class MainActivity : Activity() {
         near.addView(nearList)
         val chipViews = mutableListOf<TextView>()
         fun paintNearChips() {
-            val sel = listOf(nearMode == 0, nearMode == 1, nearFast)
+            val sel = listOf(nearMode == 0, nearMode == 1, nearMode == 2, nearFast)
             chipViews.forEachIndexed { i, c ->
                 c.setTextColor(if (sel[i]) 0xFF0B2430.toInt() else Color.WHITE)
                 (c.background as GradientDrawable).setColor(if (sel[i]) 0xFF18BCF2.toInt() else 0xFF2A2A2A.toInt())
             }
         }
-        listOf("Rond de auto", "Rond huis", "Alleen snelladers").forEachIndexed { i, t ->
+        listOf("Rond mij", "Rond de auto", "Rond huis", "Alleen snelladers").forEachIndexed { i, t ->
             val c = TextView(this).apply {
                 text = t; textSize = 13f; setTypeface(typeface, Typeface.BOLD)
                 setPadding(dp(14), dp(7), dp(14), dp(7))
@@ -2890,7 +2890,7 @@ class MainActivity : Activity() {
                 layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { marginEnd = dp(8) }
                 isClickable = true
                 setOnClickListener {
-                    if (i == 2) nearFast = !nearFast else nearMode = i
+                    if (i == 3) nearFast = !nearFast else nearMode = i
                     paintNearChips(); loadChargers()
                 }
             }
@@ -2914,13 +2914,46 @@ class MainActivity : Activity() {
     // ---------- Openbare laadpalen (NDW) ----------
     private lateinit var nearList: LinearLayout
     private lateinit var nearStatus: TextView
-    private var nearMode = 0          // 0 = rond de auto, 1 = rond huis
+    private var nearMode = 0          // 0 = rond mij (telefoon), 1 = rond de auto, 2 = rond huis
+    private val REQ_LOCATION = 7201
+
+    /** Huidige locatie van de telefoon (snel: netwerk, anders GPS); null = geen toestemming of niet bekend. */
+    @android.annotation.SuppressLint("MissingPermission")
+    private fun phoneLocation(cb: (android.location.Location?) -> Unit) {
+        val fine = checkSelfPermission(android.Manifest.permission.ACCESS_FINE_LOCATION) == android.content.pm.PackageManager.PERMISSION_GRANTED
+        val coarse = checkSelfPermission(android.Manifest.permission.ACCESS_COARSE_LOCATION) == android.content.pm.PackageManager.PERMISSION_GRANTED
+        if (!fine && !coarse) {
+            requestPermissions(arrayOf(android.Manifest.permission.ACCESS_FINE_LOCATION, android.Manifest.permission.ACCESS_COARSE_LOCATION), REQ_LOCATION)
+            cb(null); return
+        }
+        val lm = getSystemService(Context.LOCATION_SERVICE) as android.location.LocationManager
+        val providers = listOf(android.location.LocationManager.NETWORK_PROVIDER, android.location.LocationManager.GPS_PROVIDER)
+            .filter { runCatching { lm.isProviderEnabled(it) }.getOrDefault(false) }
+        val recent = providers.mapNotNull { runCatching { lm.getLastKnownLocation(it) }.getOrNull() }
+            .maxByOrNull { it.time }
+        if (recent != null && System.currentTimeMillis() - recent.time < 3 * 60_000) { cb(recent); return }
+        val p = providers.firstOrNull() ?: run { cb(recent); return }
+        var done = false
+        val finish = { l: android.location.Location? -> if (!done) { done = true; cb(l ?: recent) } }
+        handler.postDelayed({ finish(null) }, 12_000)
+        if (Build.VERSION.SDK_INT >= 30) {
+            lm.getCurrentLocation(p, null, mainExecutor) { finish(it) }
+        } else {
+            @Suppress("DEPRECATION")
+            lm.requestSingleUpdate(p, { l: android.location.Location -> finish(l) }, mainLooper)
+        }
+    }
+
+    override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<out String>, grantResults: IntArray) {
+        super.onRequestPermissionsResult(requestCode, permissions, grantResults)
+        if (requestCode == REQ_LOCATION && grantResults.any { it == android.content.pm.PackageManager.PERMISSION_GRANTED }) loadChargers()
+    }
     private var nearFast = false
     @Volatile private var nearSeq = 0
 
     /** Positie van de auto (MySkoda) of van huis (HA-instellingen): (lat, lon, omschrijving). */
     private fun nearOrigin(): Triple<Double, Double, String>? {
-        if (nearMode == 0) {
+        if (nearMode == 1) {
             val tpl = "{% for e in integration_entities('myskoda') if e.startswith('device_tracker.') %}" +
                 "{{ state_attr(e, 'latitude') }}|{{ state_attr(e, 'longitude') }}\n{% endfor %}"
             runCatching {
@@ -2932,15 +2965,28 @@ class MainActivity : Activity() {
         val cfg = runCatching { JSONObject(haRequest("GET", "/api/config", null)) }.getOrNull() ?: return null
         val la = cfg.optDouble("latitude", Double.NaN); val lo = cfg.optDouble("longitude", Double.NaN)
         if (la.isNaN() || lo.isNaN()) return null
-        return Triple(la, lo, if (nearMode == 0) "huis (auto-locatie niet bekend)" else "huis")
+        return Triple(la, lo, if (nearMode == 1) "huis (auto-locatie niet bekend)" else "huis")
     }
 
     private fun loadChargers() {
         val my = ++nearSeq
+        if (nearMode == 0) {
+            nearStatus.text = "Locatie bepalen…"
+            phoneLocation { loc ->
+                if (my != nearSeq) return@phoneLocation
+                if (loc == null) {
+                    nearList.removeAllViews()
+                    nearStatus.text = "Locatie van de telefoon niet bekend: geef de app toestemming voor locatie en zet locatie aan."
+                } else loadChargersAt(my, Triple(loc.latitude, loc.longitude, "jou"))
+            }
+        } else loadChargersAt(my, null)
+    }
+
+    private fun loadChargersAt(my: Int, fixed: Triple<Double, Double, String>?) {
         nearStatus.text = "Laadpalen zoeken…"
         thread {
             val r = runCatching {
-                val o = nearOrigin() ?: throw IOException("Geen locatie van auto of huis in Home Assistant")
+                val o = fixed ?: nearOrigin() ?: throw IOException("Geen locatie van auto of huis in Home Assistant")
                 var radius = if (nearFast) 15.0 else 2.0
                 var list = ChargeMap.near(o.first, o.second, radius).filter { !nearFast || it.dc }
                 if (list.size < 3 && !nearFast) { radius = 5.0; list = ChargeMap.near(o.first, o.second, radius) }
