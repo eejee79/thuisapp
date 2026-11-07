@@ -106,6 +106,9 @@ class MainActivity : Activity() {
                 "light.tv_lamp1_light",
                 "light.tv_lamp2_light",
             ),
+            // "~woord": alle lampen in HA met dat woord in de naam of het id (nog niet in een andere groep)
+            "Overloop" to listOf("~overloop"),
+            "Keuken" to listOf("~keuken"),
         )
 
         /** Dashboard: entiteiten in Home Assistant. */
@@ -842,6 +845,7 @@ class MainActivity : Activity() {
                     .apply { topMargin = dp(12) }
                 isClickable = true; setOnClickListener { onTap() }
             })
+            row("🗂   Tabbladen tonen") { chooseTabs() }
             row("⇪   Instellingen exporteren") { exportSettings() }
             row("⇩   Instellingen importeren") { importSettings() }
         }
@@ -856,7 +860,8 @@ class MainActivity : Activity() {
         buildDashboard()
         buildMedia()
         buildGroupCards()
-        selectTab(prefs().getInt(KEY_TAB, 0))
+        applyTabVisibility()
+        selectTab(prefs().getInt(KEY_TAB, 0).let { if (it in hiddenTabs()) visibleTabs().first() else it })
 
         // Meldingen voor nieuwe versies (achtergrond) + toestemming voor meldingen (Android 13+)
         UpdateCheckJob.ensureChannel(this)
@@ -1147,6 +1152,52 @@ class MainActivity : Activity() {
     }
 
     // ================= Tabbladen =================
+
+    // ---------- Welke tabbladen zichtbaar zijn ----------
+    /** Volgorde zoals in de balk: (tab-nummer, naam). */
+    private fun tabOrder() = listOf(TAB_DASH to "Klimaat & energie", TAB_MEDIA to "Multimedia", 0 to "Lampen", 1 to "Proxmox", 2 to "Škoda")
+    private fun tabView(t: Int): View = when (t) { 0 -> tabHa; 1 -> tabPve; 2 -> tabFritz; TAB_DASH -> tabDash; else -> tabMedia }
+    private fun hiddenTabs(): Set<Int> = prefs().getString("hidden_tabs", "")!!.split(',').mapNotNull { it.toIntOrNull() }.toSet()
+    private fun visibleTabs(): List<Int> = tabOrder().map { it.first }.filter { it !in hiddenTabs() }.ifEmpty { listOf(TAB_DASH) }
+
+    private fun applyTabVisibility() {
+        val hidden = hiddenTabs()
+        val bar = tabHa.parent as ViewGroup
+        for (i in 0 until bar.childCount) {
+            val c = bar.getChildAt(i)
+            if (c !is LinearLayout) c.visibility = View.GONE   // scheidingslijntjes eerst weg
+        }
+        var first = true
+        for (i in 0 until bar.childCount) {
+            val c = bar.getChildAt(i)
+            if (c !is LinearLayout) continue
+            val t = tabOrder().map { it.first }.firstOrNull { tabView(it) === c } ?: continue
+            c.visibility = if (t in hidden) View.GONE else View.VISIBLE
+            if (t !in hidden) {
+                // lijntje vóór dit tabblad alleen als er links al een zichtbaar tabblad staat
+                if (!first && i > 0 && bar.getChildAt(i - 1) !is LinearLayout) bar.getChildAt(i - 1).visibility = View.VISIBLE
+                first = false
+            }
+        }
+    }
+
+    private fun chooseTabs() {
+        val order = tabOrder()
+        val hidden = hiddenTabs().toMutableSet()
+        val checked = order.map { it.first !in hidden }.toBooleanArray()
+        AlertDialog.Builder(this)
+            .setTitle("Tabbladen tonen")
+            .setMultiChoiceItems(order.map { it.second }.toTypedArray(), checked) { _, i, on -> checked[i] = on }
+            .setPositiveButton("Opslaan") { _, _ ->
+                if (checked.none { it }) { Toast.makeText(this, "Laat minstens één tabblad zien", Toast.LENGTH_SHORT).show(); return@setPositiveButton }
+                val h = order.filterIndexed { i, _ -> !checked[i] }.map { it.first }
+                prefs().edit().putString("hidden_tabs", h.joinToString(",")).apply()
+                applyTabVisibility()
+                if (currentTab in h) selectTab(visibleTabs().first())
+            }
+            .setNegativeButton("Annuleren", null)
+            .show()
+    }
 
     private fun selectTab(tab: Int) {
         currentTab = tab
@@ -1726,8 +1777,15 @@ class MainActivity : Activity() {
                     byId[id] = HaLight(id, name, o.optString("state"))
                 }
                 // Lamp die niet (meer) in Home Assistant bestaat → tonen als "niet gevonden"
+                val fixed = LIGHT_GROUPS.flatMap { it.second }.filter { !it.startsWith("~") }.toSet()
                 val members = LIGHT_GROUPS.map { (_, ids) ->
-                    ids.map { id -> byId[id] ?: HaLight(id, id.removePrefix("light."), "not_found") }
+                    ids.flatMap { id ->
+                        if (id.startsWith("~")) {
+                            val w = id.drop(1)
+                            byId.values.filter { l -> l.id !in fixed &&
+                                (w in l.id.lowercase(NL) || w in l.name.lowercase(NL)) }.sortedBy { it.name }
+                        } else listOf(byId[id] ?: HaLight(id, id.removePrefix("light."), "not_found"))
+                    }
                 }
                 runOnUiThread { showGroups(members) }
             } catch (e: Exception) {
@@ -1884,7 +1942,8 @@ class MainActivity : Activity() {
 
     // ================= Verbruik (HomeWizard via HA-statistieken), van–tot =================
 
-    private class UsageIds(val import: List<String>, val export: List<String>, val gas: List<String>, val price: String?, val charger: List<String>)
+    private class UsageIds(val import: List<String>, val export: List<String>, val gas: List<String>, val price: String?, val charger: List<String>,
+                           val solar: List<String> = emptyList())
     @Volatile private var usageIds: UsageIds? = null
 
     private fun haStats(): HaStats = HaStats(haBase(), haToken())
@@ -1916,7 +1975,11 @@ class MainActivity : Activity() {
         // Alle totaalmeters van de laadpaal (oud én nieuw, na opnieuw toevoegen van de integratie)
         val charger = kwh.filter { "peblar" in it && !Regex("sessie|session").containsMatchIn(it) }
             .let { c -> c.filter { Regex("levensduur|lifetime|totaal|total").containsMatchIn(it) }.ifEmpty { c.take(1) } }
-        val r = UsageIds(imp, exp, gas, DASH_PRICE.takeIf { it in all.keys }, charger)
+        // Opgewekt: totaalmeter van de omvormer (niet "vandaag", geen verwachting)
+        val solar = kwh.filter { id -> SOLAR_RX.containsMatchIn(id) && !SOLAR_NOT.containsMatchIn(id) &&
+            !Regex("today|vandaag|daily|_dag|_day").containsMatchIn(id) && id !in imp && id !in exp }
+            .let { s -> s.filter { Regex("total|totaal|lifetime|energy|energie|production|opgewekt").containsMatchIn(it) }.ifEmpty { s }.take(1) }
+        val r = UsageIds(imp, exp, gas, DASH_PRICE.takeIf { it in all.keys }, charger, solar)
         if (imp.isNotEmpty()) usageIds = r
         return r
     }
@@ -1980,7 +2043,7 @@ class MainActivity : Activity() {
                     val span = to - from
                     val period = when { span <= 2 * 86_400_000L -> "hour"; span <= 62 * 86_400_000L -> "day"; else -> "month" }
                     val st = haStats()
-                    val wanted = ids.import + ids.export + ids.gas + ids.charger
+                    val wanted = ids.import + ids.export + ids.gas + ids.charger + ids.solar
                     val sums = st.during(wanted, from, to, period, "change")
                     val prev = st.during(wanted, from - span, from, if (period == "hour") "day" else period, "change")
                     // Kosten: per uur afname × uurprijs (alleen bij een redelijke periode)
@@ -2042,6 +2105,10 @@ class MainActivity : Activity() {
                         },
                         if (ids.charger.isNotEmpty() && carFirst == null) "⚠ Geen laadpaalgegevens in deze periode; laden zit nog in de afname" else null,
                         if (ids.export.isNotEmpty()) "Teruggeleverd ${fmt(exp)} kWh · netto ${fmt(imp - exp)} kWh" else null,
+                        ids.solar.takeIf { it.isNotEmpty() }?.let { sol ->
+                            val pv = sol.sumOf { id -> sums[id].orEmpty().sumOf { it.value.coerceAtLeast(0.0) } }
+                            if (pv > 0.05) "☀ Opgewekt ${fmt(pv)} kWh · zelf gebruikt ${fmt((pv - exp).coerceAtLeast(0.0))} kWh" else null
+                        },
                         gas?.let { "Gas ${fmt(it, 2)} m³" },
                         cost?.let { "Stroomkosten ca. € ${fmt(it, 2)} (Zonneplan-uurprijzen)" },
                     ).joinToString("\n")
@@ -3964,6 +4031,7 @@ class MainActivity : Activity() {
                 val results = ids.map { id ->
                     id to runCatching { JSONObject(haRequest("GET", "/api/states/$id", null)) }
                 }
+                runCatching { refreshSolar() }
                 if (System.currentTimeMillis() - lastBtcFetch > 60_000) {
                     lastBtcFetch = System.currentTimeMillis()
                     runCatching { fetchBtcEur() }.getOrNull()?.let { btcEur = it }
@@ -4136,7 +4204,46 @@ class MainActivity : Activity() {
         }
         powerCard.big.text = String.format(NL, "%.0f W", w).replace("-", "−")
         powerCard.big.setTextColor(if (w < 0) GREEN else AMBER)
-        powerCard.sub.text = if (w < 0) "teruglevering" else "verbruik"
+        powerCard.sub.text = (if (w < 0) "teruglevering" else "verbruik") + (solarNowText?.let { "\n$it" } ?: "")
+    }
+
+    // ---------- Zonnepanelen (omvormer in HA, op naam gevonden) ----------
+    @Volatile private var solarNowText: String? = null
+    @Volatile private var solarIds: Pair<String?, String?>? = null   // (vermogen nu, opgewekt vandaag)
+    @Volatile private var solarIdsAt = 0L
+    private val SOLAR_RX = Regex("solar|zonne|zonnepan|_zon_|^sensor\\.zon|pv_|_pv|omvormer|inverter|opwek|solaredge|enphase|envoy|growatt|goodwe|fronius|solis|hoymiles|apsystems|sungrow|huawei_solar|sma_")
+    private val SOLAR_NOT = Regex("forecast|verwacht|voorspel|estimat|p1_meter|peblar|zonneplan|tarif|price|prijs|battery|accu")
+
+    /** Huidig zonnevermogen en wat er vandaag is opgewekt, als HA een omvormer kent. */
+    private fun refreshSolar() {
+        val now = System.currentTimeMillis()
+        if (solarIds == null || (solarIds?.first == null && now - solarIdsAt > 30 * 60_000)) {
+            solarIdsAt = now
+            val tpl = "{% for s in states.sensor if s.attributes.unit_of_measurement in ['W','kW','kWh','Wh'] %}" +
+                "{{ s.entity_id }}|{{ s.name }}|{{ s.attributes.unit_of_measurement }}\n{% endfor %}"
+            val rows = runCatching {
+                haRequest("POST", "/api/template", JSONObject().put("template", tpl).toString())
+                    .lines().filter { it.contains('|') }.map { it.split('|') }
+            }.getOrDefault(emptyList())
+                .filter { r -> (r[0] + " " + r.getOrElse(1) { "" }).lowercase(NL).let { SOLAR_RX.containsMatchIn(it) && !SOLAR_NOT.containsMatchIn(it) } }
+            val power = rows.filter { it.getOrNull(2) in listOf("W", "kW") }
+                .sortedBy { r -> if (Regex("power|vermogen|production|productie|output|ac_").containsMatchIn(r[0])) 0 else 1 }
+                .firstOrNull()?.get(0)
+            val today = rows.filter { it.getOrNull(2) in listOf("kWh", "Wh") && Regex("today|vandaag|daily|dag|day").containsMatchIn(it[0].lowercase(NL)) }
+                .firstOrNull()?.get(0)
+            solarIds = power to today
+        }
+        val (p, t) = solarIds ?: return
+        if (p == null && t == null) { solarNowText = null; return }
+        fun kw(id: String?): Double? = id?.let { stateOf(it) }?.let { o ->
+            val v = o.optString("state").toDoubleOrNull() ?: return@let null
+            when (o.optJSONObject("attributes")?.optString("unit_of_measurement")) { "W", "Wh" -> v / 1000; else -> v }
+        }
+        val nowKw = kw(p); val dayKwh = kw(t)
+        solarNowText = listOfNotNull(
+            nowKw?.let { String.format(NL, "☀ %.1f kW", it.coerceAtLeast(0.0)) },
+            dayKwh?.let { String.format(NL, "%.1f kWh vandaag", it) },
+        ).joinToString(" · ").ifEmpty { null }
     }
 
     private fun showCrypto() {
@@ -9172,7 +9279,10 @@ class MainActivity : Activity() {
         }
         status.text = "Alles uitzetten…"
         thread {
-            val lights = JSONArray().apply { LIGHT_GROUPS.forEach { (_, ids) -> ids.forEach { put(it) } } }
+            val lights = JSONArray().apply {
+                (LIGHT_GROUPS.flatMap { it.second }.filter { !it.startsWith("~") } +
+                    groupMembers.flatten().filter { it.state != "not_found" }.map { it.id }).distinct().forEach { put(it) }
+            }
             val calls = listOf(
                 "light/turn_off" to JSONObject().put("entity_id", lights),
                 "media_player/turn_off" to JSONObject().put("entity_id", MEDIA_TV),
