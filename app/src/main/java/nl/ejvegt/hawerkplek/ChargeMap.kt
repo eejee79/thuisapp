@@ -93,10 +93,6 @@ object ChargeMap {
             if (la.isNaN() || lo.isNaN()) continue
             val conns = p.optJSONArray("Connections") ?: JSONArray()
             var maxKw: Double? = null; var dc = false; var total = 0
-            // Live status (alleen bij palen waar Open Charge Map een automatische status van heeft):
-            // 10 = nu beschikbaar, 20 = nu in gebruik, 30 = tijdelijk niet beschikbaar
-            var live = 0; var freeCnt = 0
-            val poiStatus = p.optJSONObject("StatusType")?.optInt("ID") ?: p.optInt("StatusTypeID", 0)
             val types = mutableListOf<String>()
             for (j in 0 until conns.length()) {
                 val cn = conns.optJSONObject(j) ?: continue
@@ -109,42 +105,18 @@ object ChargeMap {
                     "Type 2" in t || "Mennekes" in t -> types.add("Type 2")
                     "Tesla" in t -> types.add("Tesla")
                 }
-                val q = cn.optInt("Quantity", 1).coerceAtLeast(1)
-                total += q
-                val st = cn.optJSONObject("StatusType")?.optInt("ID") ?: cn.optInt("StatusTypeID", 0)
-                if (st in LIVE) { live += q; if (st == 10) freeCnt += q }
+                total += cn.optInt("Quantity", 1).coerceAtLeast(1)
             }
-            // Geen status per stekker, wel voor de hele locatie
-            if (live == 0 && poiStatus in LIVE) { live = total.coerceAtLeast(1); if (poiStatus == 10) freeCnt = live }
             if ((maxKw ?: 0.0) >= 50) dc = true
             val street = listOf(a.optString("AddressLine1"), a.optString("Town")).filter { it.isNotBlank() && it != "null" }.joinToString(", ")
             val cost = p.optString("UsageCost").takeIf { it.isNotBlank() && it != "null" }?.take(40)
             out.add(Station(
                 a.optString("Title").takeIf { it != "null" }.orEmpty(), street,
                 p.optJSONObject("OperatorInfo")?.optString("Title")?.takeIf { it != "null" && !it.startsWith("(") }.orEmpty(),
-                la, lo, distance(lat, lon, la, lo), maxKw, dc, types.distinct(),
-                if (live > 0) live else total.coerceAtLeast(1), if (live > 0) freeCnt else null, cost,
+                la, lo, distance(lat, lon, la, lo), maxKw, dc, types.distinct(), total.coerceAtLeast(1), null, cost,
             ))
         }
         return out.sortedBy { it.distanceM }
-    }
-
-    private val LIVE = setOf(10, 20, 30)
-
-    /**
-     * NDW heeft geen vrij/bezet: neem dat over van Open Charge Map voor dezelfde plek (binnen 60 m),
-     * als OCM daar een live status van heeft.
-     */
-    fun withLiveStatus(ndw: List<Station>, ocm: List<Station>): List<Station> {
-        val live = ocm.filter { it.free != null }
-        if (live.isEmpty()) return ndw
-        return ndw.map { s ->
-            if (s.free != null) return@map s
-            val m = live.minByOrNull { distance(s.lat, s.lon, it.lat, it.lon) }
-                ?.takeIf { distance(s.lat, s.lon, it.lat, it.lon) < 60 } ?: return@map s
-            Station(s.name, s.address, s.operator, s.lat, s.lon, s.distanceM, s.maxKw, s.dc, s.connectors,
-                m.total, m.free, s.price ?: m.price)
-        }
     }
 
     /** Alle waarden in een object plat: "evses.0.status" → "AVAILABLE". */
