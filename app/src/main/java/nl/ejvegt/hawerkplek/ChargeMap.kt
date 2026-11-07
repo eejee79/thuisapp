@@ -73,9 +73,12 @@ object ChargeMap {
      * België (en elders): Open Charge Map, open database van laadpunten. Gratis API-sleutel nodig.
      * Live vrij/bezet zit hier meestal niet in.
      */
-    fun nearOcm(lat: Double, lon: Double, radiusKm: Double, key: String): List<Station> {
+    fun nearOcm(lat: Double, lon: Double, radiusKm: Double, key: String, fastOnly: Boolean = false): List<Station> {
+        // Snelladers direct bij Open Charge Map filteren; anders vullen de dichtstbijzijnde gewone palen
+        // de hele lijst en blijven er na het filteren maar een paar snelladers over
         val url = "https://api.openchargemap.io/v3/poi/?output=json&compact=false&verbose=false" +
-            "&latitude=$lat&longitude=$lon&distance=$radiusKm&distanceunit=KM&maxresults=60"
+            "&latitude=$lat&longitude=$lon&distance=$radiusKm&distanceunit=KM&maxresults=250" +
+            (if (fastOnly) "&minpowerkw=50" else "")
         val conn = URL(url).openConnection() as HttpURLConnection
         conn.connectTimeout = 8_000
         conn.readTimeout = 20_000

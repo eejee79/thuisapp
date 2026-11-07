@@ -3147,7 +3147,7 @@ class MainActivity : Activity() {
                 val o = fixed ?: nearOrigin() ?: throw IOException("Geen locatie van auto of huis in Home Assistant")
                 val be = nearBelgium
                 val key = prefs().getString(KEY_OCM, "").orEmpty()
-                fun fetch(rad: Double) = if (be) ChargeMap.nearOcm(o.first, o.second, rad, key) else ChargeMap.near(o.first, o.second, rad)
+                fun fetch(rad: Double) = if (be) ChargeMap.nearOcm(o.first, o.second, rad, key, nearFast) else ChargeMap.near(o.first, o.second, rad)
                 var radius = if (nearFast) 15.0 else 2.0
                 var list = fetch(radius).filter { !nearFast || it.dc }
                 if (list.size < 3 && !nearFast) { radius = 5.0; list = fetch(radius) }
