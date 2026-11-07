@@ -2788,6 +2788,8 @@ class MainActivity : Activity() {
         (chargeCard.big.parent as? ViewGroup)?.removeView(chargeCard.big)
         (chargeSlider.seek.parent as? ViewGroup)?.removeView(chargeSlider.seek)
         chargeCard.big.textSize = 14f
+        // Had nog de volle breedte van de oude kaart: daardoor werd de naam ernaast 0 breed (en heel hoog)
+        chargeCard.big.layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT)
         chargeCard.big.setTypeface(chargeCard.big.typeface, Typeface.BOLD)
         // Regel 1: naam … limiet 80%
         status.addView(LinearLayout(this).apply {
