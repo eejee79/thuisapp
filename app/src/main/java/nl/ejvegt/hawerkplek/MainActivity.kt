@@ -2774,30 +2774,38 @@ class MainActivity : Activity() {
         }
         fun label(t: String) = TextView(this).apply { text = t; textSize = 13f; setTextColor(0xFFB0B0B0.toInt()) }
 
-        // Status
-        val status = card()
-        status.addView(label("🚗  Škoda Elroq"))
+        // Status + laadlimiet, compact in één kaart
+        val status = card().apply { setPadding(dp(14), dp(10), dp(14), dp(6)) }
         carBattery = TextView(this).apply {
-            textSize = 34f; setTextColor(Color.WHITE); setTypeface(typeface, Typeface.BOLD); text = "—"
+            textSize = 26f; setTextColor(Color.WHITE); setTypeface(typeface, Typeface.BOLD); text = "—"
+            setPadding(0, 0, dp(12), 0)
         }
-        carState = TextView(this).apply { textSize = 14f; setTextColor(0xFFB0B0B0.toInt()) }
-        status.addView(carBattery)
-        status.addView(carState)
-        // Laadlimiet in dezelfde kaart: waarde + schuif van de (verder verborgen) laadlimiet-kaart overnemen
+        carState = TextView(this).apply {
+            textSize = 13f; setTextColor(0xFFB0B0B0.toInt())
+            layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
+        }
         (chargeCard.root.parent as? ViewGroup)?.removeView(chargeCard.root)
         (chargeCard.big.parent as? ViewGroup)?.removeView(chargeCard.big)
         (chargeSlider.seek.parent as? ViewGroup)?.removeView(chargeSlider.seek)
+        chargeCard.big.textSize = 14f
+        chargeCard.big.setTypeface(chargeCard.big.typeface, Typeface.BOLD)
+        // Regel 1: naam … limiet 80%
         status.addView(LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
-            setPadding(0, dp(14), 0, 0)
-            addView(TextView(this@MainActivity).apply {
-                text = "Laadlimiet"; textSize = 14f; setTextColor(0xFFB0B0B0.toInt())
-                layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
-            })
-            chargeCard.big.textSize = 18f
+            addView(label("🚗  Škoda Elroq").apply { layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f) })
+            addView(label("limiet ").apply { textSize = 12f })
             addView(chargeCard.big)
         })
+        // Regel 2: accu-% met de status ernaast
+        status.addView(LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            addView(carBattery)
+            addView(carState)
+        })
+        // Regel 3: schuif voor de laadlimiet
+        chargeSlider.seek.layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
         status.addView(chargeSlider.seek)
         fritzList.addView(status)
 
