@@ -1975,8 +1975,8 @@ class MainActivity : Activity() {
         // Alle totaalmeters van de laadpaal (oud én nieuw, na opnieuw toevoegen van de integratie)
         val charger = kwh.filter { "peblar" in it && !Regex("sessie|session").containsMatchIn(it) }
             .let { c -> c.filter { Regex("levensduur|lifetime|totaal|total").containsMatchIn(it) }.ifEmpty { c.take(1) } }
-        // Opgewekt: totaalmeter van de omvormer (niet "vandaag", geen verwachting)
-        val solar = kwh.filter { id -> SOLAR_RX.containsMatchIn(id) && !SOLAR_NOT.containsMatchIn(id) &&
+        // Opgewekt: totaalmeter van de omvormer (GoodWe eerst; anders op naam, niet "vandaag", geen verwachting)
+        val solar = goodweIds().third?.takeIf { it in kwh }?.let { listOf(it) } ?: kwh.filter { id -> SOLAR_RX.containsMatchIn(id) && !SOLAR_NOT.containsMatchIn(id) &&
             !Regex("today|vandaag|daily|_dag|_day").containsMatchIn(id) && id !in imp && id !in exp }
             .let { s -> s.filter { Regex("total|totaal|lifetime|energy|energie|production|opgewekt").containsMatchIn(it) }.ifEmpty { s }.take(1) }
         val r = UsageIds(imp, exp, gas, DASH_PRICE.takeIf { it in all.keys }, charger, solar)
@@ -4214,11 +4214,37 @@ class MainActivity : Activity() {
     private val SOLAR_RX = Regex("solar|zonne|zonnepan|_zon_|^sensor\\.zon|pv_|_pv|omvormer|inverter|opwek|solaredge|enphase|envoy|growatt|goodwe|fronius|solis|hoymiles|apsystems|sungrow|huawei_solar|sma_")
     private val SOLAR_NOT = Regex("forecast|verwacht|voorspel|estimat|p1_meter|peblar|zonneplan|tarif|price|prijs|battery|accu")
 
+    /**
+     * GoodWe-omvormer (integratie "goodwe"): (PV-vermogen nu, opgewekt vandaag, opgewekt totaal).
+     * Namen in HA: "PV power" (ppv), "Today's PV generation" (e_day), "Total PV generation" (e_total).
+     */
+    @Volatile private var goodweCache: Triple<String?, String?, String?>? = null
+    private fun goodweIds(): Triple<String?, String?, String?> {
+        goodweCache?.let { return it }
+        val tpl = "{% for e in integration_entities('goodwe') if e.startswith('sensor.') %}" +
+            "{{ e }}|{{ state_attr(e, 'unit_of_measurement') }}|{{ state_attr(e, 'friendly_name') }}\n{% endfor %}"
+        val rows = runCatching {
+            haRequest("POST", "/api/template", JSONObject().put("template", tpl).toString())
+                .lines().filter { it.contains('|') }.map { it.split('|') }
+        }.getOrDefault(emptyList())
+        fun key(r: List<String>) = (r[0] + " " + r.getOrElse(2) { "" }).lowercase(NL).replace("'", "")
+        val power = rows.filter { it.getOrNull(1) in listOf("W", "kW") }.let { w ->
+            w.firstOrNull { Regex("ppv|pv_power|pv power").containsMatchIn(key(it)) && !Regex("pv\\d").containsMatchIn(key(it)) }
+                ?: w.firstOrNull { "pv" in key(it) && !Regex("pv\\d").containsMatchIn(key(it)) }
+        }?.get(0)
+        val kwhRows = rows.filter { it.getOrNull(1) in listOf("kWh", "Wh") }
+        val today = kwhRows.firstOrNull { Regex("e_day|todays pv|today_s_pv|today.*pv|pv.*today").containsMatchIn(key(it)) }?.get(0)
+        val total = kwhRows.firstOrNull { Regex("e_total|total pv|total_pv|total.*pv").containsMatchIn(key(it)) }?.get(0)
+        return Triple(power, today, total).also { if (rows.isNotEmpty()) goodweCache = it }
+    }
+
     /** Huidig zonnevermogen en wat er vandaag is opgewekt, als HA een omvormer kent. */
     private fun refreshSolar() {
         val now = System.currentTimeMillis()
         if (solarIds == null || (solarIds?.first == null && now - solarIdsAt > 30 * 60_000)) {
             solarIdsAt = now
+            val gw = goodweIds()
+            if (gw.first != null || gw.second != null) { solarIds = gw.first to gw.second; return refreshSolar() }
             val tpl = "{% for s in states.sensor if s.attributes.unit_of_measurement in ['W','kW','kWh','Wh'] %}" +
                 "{{ s.entity_id }}|{{ s.name }}|{{ s.attributes.unit_of_measurement }}\n{% endfor %}"
             val rows = runCatching {
