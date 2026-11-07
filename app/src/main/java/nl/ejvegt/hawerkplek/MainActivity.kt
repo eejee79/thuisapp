@@ -3044,7 +3044,12 @@ class MainActivity : Activity() {
                 val o = fixed ?: nearOrigin() ?: throw IOException("Geen locatie van auto of huis in Home Assistant")
                 val be = nearBelgium
                 val key = prefs().getString(KEY_OCM, "").orEmpty()
-                fun fetch(rad: Double) = if (be) ChargeMap.nearOcm(o.first, o.second, rad, key) else ChargeMap.near(o.first, o.second, rad)
+                // Nederland: NDW (alle palen) + vrij/bezet van Open Charge Map waar die dat weet
+                fun fetch(rad: Double) = if (be) ChargeMap.nearOcm(o.first, o.second, rad, key) else {
+                    val ndw = ChargeMap.near(o.first, o.second, rad)
+                    if (key.isBlank()) ndw
+                    else ChargeMap.withLiveStatus(ndw, runCatching { ChargeMap.nearOcm(o.first, o.second, rad, key) }.getOrDefault(emptyList()))
+                }
                 var radius = if (nearFast) 15.0 else 2.0
                 var list = fetch(radius).filter { !nearFast || it.dc }
                 if (list.size < 3 && !nearFast) { radius = 5.0; list = fetch(radius) }
@@ -3056,7 +3061,10 @@ class MainActivity : Activity() {
                 val res = r.getOrNull() ?: run { nearStatus.text = "Niet gelukt: ${r.exceptionOrNull()?.message}"; return@runOnUiThread }
                 val (o, radius, list) = res
                 nearStatus.text = if (list.isEmpty()) "Geen laadpalen gevonden binnen ${radius.toInt()} km van ${o.third}"
-                    else "${list.size} locaties binnen ${radius.toInt()} km van ${o.third} · bron: ${if (nearBelgium) "Open Charge Map" else "NDW"} · tik voor route"
+                    else "${list.size} locaties binnen ${radius.toInt()} km van ${o.third} · bron: ${if (nearBelgium) "Open Charge Map" else "NDW"}" +
+                    (if (list.any { it.free != null }) " · live status: ${list.count { it.free != null }}" else
+                        if (prefs().getString(KEY_OCM, "").isNullOrBlank()) " · vrij/bezet: tik België om een Open Charge Map-sleutel in te stellen" else " · geen live status bekend") +
+                    " · tik voor route"
                 list.take(12).forEach { st -> nearList.addView(chargerRow(st)) }
             }
         }
