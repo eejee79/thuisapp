@@ -2997,12 +2997,8 @@ class MainActivity : Activity() {
         fritzList.addView(near)
         loadChargers()
 
-        // Stroomprijs per uur (alles wat Zonneplan al weet), goedkoopste uren groen
-        val prices = card()
-        prices.addView(label("⚡  Stroomprijs per uur (Zonneplan) · tik op een uur om de begintijd te zetten"))
+        // Uurprijzen van Zonneplan staan nu op Klimaat & energie (tik op de prijskaart); de lijst wordt daar getoond
         carPrices = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(0, dp(8), 0, 0) }
-        prices.addView(carPrices)
-        fritzList.addView(prices)
 
         carFrom.text = hhmm(carFromMin)
         carTo.text = hhmm(carToMin)
@@ -3173,6 +3169,32 @@ class MainActivity : Activity() {
             val nav = Intent(Intent.ACTION_VIEW, Uri.parse("google.navigation:q=${st.lat},${st.lon}"))
             runCatching { startActivity(nav) }.onFailure {
                 runCatching { startActivity(Intent(Intent.ACTION_VIEW, Uri.parse("geo:${st.lat},${st.lon}?q=${st.lat},${st.lon}"))) }
+            }
+        }
+    }
+
+    /** Tik op de prijskaart: alle bekende uurprijzen van Zonneplan (vandaag en morgen) in een blad. */
+    private fun showPriceSheet() {
+        thread {
+            val o = stateOf(DASH_PRICE)
+            runOnUiThread {
+                buildCar()   // de uurlijst kan de begintijd van het laadvenster zetten
+                carPricesKey = null
+                showCarPrices(o)
+                (carPrices.parent as? ViewGroup)?.removeView(carPrices)
+                val content = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(dp(16), dp(8), dp(16), dp(16)) }
+                content.addView(TextView(this).apply {
+                    text = "Stroomprijs per uur (Zonneplan)"; textSize = 19f; setTextColor(Color.WHITE); setTypeface(typeface, Typeface.BOLD)
+                })
+                content.addView(TextView(this).apply {
+                    text = "Goedkoopste uren groen · tik op een uur om daar het laden van de auto te laten beginnen"
+                    textSize = 12f; setTextColor(0xFF9A9A9A.toInt()); setPadding(0, dp(4), 0, dp(4))
+                })
+                content.addView(ScrollView(this).apply {
+                    addView(carPrices)
+                    layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, (resources.displayMetrics.heightPixels * 0.7).toInt())
+                })
+                sheetDialog(content).show()
             }
         }
     }
@@ -3983,7 +4005,7 @@ class MainActivity : Activity() {
 
         // Stroomprijs komende uren
         priceCard = DashCard("📊  Stroomprijs komende 3 uur")
-        priceCard.right.text = "€/kWh"
+        priceCard.right.text = "€/kWh · meer ›"
         priceCard.root.removeView(priceCard.big)
         priceCard.root.removeView(priceCard.sub)
         priceBars = LinearLayout(this).apply {
@@ -3994,6 +4016,8 @@ class MainActivity : Activity() {
         }
         priceCard.root.addView(priceBars)
         priceCard.root.addView(priceCard.sub)
+        priceCard.root.isClickable = true
+        priceCard.root.setOnClickListener { showPriceSheet() }
         dashList.addView(priceCard.root)
         // Verbruik over een zelf gekozen periode (HomeWizard-meterstanden uit HA)
         dashList.addView(buildUsageCard())
