@@ -2865,6 +2865,41 @@ class MainActivity : Activity() {
         win.addView(carSwitchLabel)
         fritzList.addView(win)
 
+        // Openbare laadpalen in de buurt (NDW, alle aanbieders)
+        val near = card()
+        near.addView(label("🔌  Laadpalen in de buurt"))
+        val nearChips = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; setPadding(0, dp(10), 0, dp(4)) }
+        near.addView(android.widget.HorizontalScrollView(this).apply { isHorizontalScrollBarEnabled = false; addView(nearChips) })
+        nearStatus = TextView(this).apply { textSize = 12f; setTextColor(0xFF9A9A9A.toInt()); setPadding(0, dp(4), 0, dp(4)) }
+        near.addView(nearStatus)
+        nearList = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        near.addView(nearList)
+        val chipViews = mutableListOf<TextView>()
+        fun paintNearChips() {
+            val sel = listOf(nearMode == 0, nearMode == 1, nearFast)
+            chipViews.forEachIndexed { i, c ->
+                c.setTextColor(if (sel[i]) 0xFF0B2430.toInt() else Color.WHITE)
+                (c.background as GradientDrawable).setColor(if (sel[i]) 0xFF18BCF2.toInt() else 0xFF2A2A2A.toInt())
+            }
+        }
+        listOf("Rond de auto", "Rond huis", "Alleen snelladers").forEachIndexed { i, t ->
+            val c = TextView(this).apply {
+                text = t; textSize = 13f; setTypeface(typeface, Typeface.BOLD)
+                setPadding(dp(14), dp(7), dp(14), dp(7))
+                background = GradientDrawable().apply { cornerRadius = dp(16).toFloat() }
+                layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { marginEnd = dp(8) }
+                isClickable = true
+                setOnClickListener {
+                    if (i == 2) nearFast = !nearFast else nearMode = i
+                    paintNearChips(); loadChargers()
+                }
+            }
+            chipViews.add(c); nearChips.addView(c)
+        }
+        paintNearChips()
+        fritzList.addView(near)
+        loadChargers()
+
         // Stroomprijs per uur (alles wat Zonneplan al weet), goedkoopste uren groen
         val prices = card()
         prices.addView(label("⚡  Stroomprijs per uur (Zonneplan) · tik op een uur om de begintijd te zetten"))
@@ -2874,6 +2909,101 @@ class MainActivity : Activity() {
 
         carFrom.text = hhmm(carFromMin)
         carTo.text = hhmm(carToMin)
+    }
+
+    // ---------- Openbare laadpalen (NDW) ----------
+    private lateinit var nearList: LinearLayout
+    private lateinit var nearStatus: TextView
+    private var nearMode = 0          // 0 = rond de auto, 1 = rond huis
+    private var nearFast = false
+    @Volatile private var nearSeq = 0
+
+    /** Positie van de auto (MySkoda) of van huis (HA-instellingen): (lat, lon, omschrijving). */
+    private fun nearOrigin(): Triple<Double, Double, String>? {
+        if (nearMode == 0) {
+            val tpl = "{% for e in integration_entities('myskoda') if e.startswith('device_tracker.') %}" +
+                "{{ state_attr(e, 'latitude') }}|{{ state_attr(e, 'longitude') }}\n{% endfor %}"
+            runCatching {
+                haRequest("POST", "/api/template", JSONObject().put("template", tpl).toString()).lines()
+                    .mapNotNull { l -> l.split('|').takeIf { it.size == 2 }?.let { p -> p[0].trim().toDoubleOrNull()?.let { a -> p[1].trim().toDoubleOrNull()?.let { b -> a to b } } } }
+                    .firstOrNull()
+            }.getOrNull()?.let { return Triple(it.first, it.second, "de auto") }
+        }
+        val cfg = runCatching { JSONObject(haRequest("GET", "/api/config", null)) }.getOrNull() ?: return null
+        val la = cfg.optDouble("latitude", Double.NaN); val lo = cfg.optDouble("longitude", Double.NaN)
+        if (la.isNaN() || lo.isNaN()) return null
+        return Triple(la, lo, if (nearMode == 0) "huis (auto-locatie niet bekend)" else "huis")
+    }
+
+    private fun loadChargers() {
+        val my = ++nearSeq
+        nearStatus.text = "Laadpalen zoeken…"
+        thread {
+            val r = runCatching {
+                val o = nearOrigin() ?: throw IOException("Geen locatie van auto of huis in Home Assistant")
+                var radius = if (nearFast) 15.0 else 2.0
+                var list = ChargeMap.near(o.first, o.second, radius).filter { !nearFast || it.dc }
+                if (list.size < 3 && !nearFast) { radius = 5.0; list = ChargeMap.near(o.first, o.second, radius) }
+                Triple(o, radius, list)
+            }
+            runOnUiThread {
+                if (my != nearSeq) return@runOnUiThread
+                nearList.removeAllViews()
+                val res = r.getOrNull() ?: run { nearStatus.text = "Niet gelukt: ${r.exceptionOrNull()?.message}"; return@runOnUiThread }
+                val (o, radius, list) = res
+                nearStatus.text = if (list.isEmpty()) "Geen laadpalen gevonden binnen ${radius.toInt()} km van ${o.third}"
+                    else "${list.size} locaties binnen ${radius.toInt()} km van ${o.third} · bron: NDW · tik voor route"
+                list.take(12).forEach { st -> nearList.addView(chargerRow(st)) }
+            }
+        }
+    }
+
+    private fun chargerRow(st: ChargeMap.Station): View = LinearLayout(this).apply {
+        orientation = LinearLayout.HORIZONTAL
+        gravity = Gravity.CENTER_VERTICAL
+        setPadding(dp(10), dp(9), dp(10), dp(9))
+        background = GradientDrawable().apply { setColor(0xFF262626.toInt()); cornerRadius = dp(12).toFloat() }
+        layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { topMargin = dp(6) }
+        // Vrij/bezet als bolletje, anders het vermogen
+        addView(TextView(this@MainActivity).apply {
+            val f = st.free
+            text = when { f == null -> st.maxKw?.let { "${it.toInt()}" } ?: "?"; else -> "$f/${st.total}" }
+            textSize = 12f; setTypeface(typeface, Typeface.BOLD); gravity = Gravity.CENTER
+            setTextColor(if (f != null && f == 0) Color.WHITE else 0xFF0B1F12.toInt())
+            background = GradientDrawable().apply {
+                cornerRadius = dp(10).toFloat()
+                setColor(when { f == null -> 0xFF4FC3F7.toInt(); f > 0 -> 0xFF43A047.toInt(); else -> 0xFFC62828.toInt() })
+            }
+            layoutParams = LinearLayout.LayoutParams(dp(46), dp(36)).apply { marginEnd = dp(10) }
+        })
+        addView(LinearLayout(this@MainActivity).apply {
+            orientation = LinearLayout.VERTICAL
+            layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
+            addView(TextView(this@MainActivity).apply {
+                text = listOf(st.name, st.address, st.operator).firstOrNull { it.isNotBlank() } ?: "Laadpunt"
+                textSize = 14f; setTextColor(Color.WHITE); setTypeface(typeface, Typeface.BOLD)
+                maxLines = 1; ellipsize = android.text.TextUtils.TruncateAt.END
+            })
+            addView(TextView(this@MainActivity).apply {
+                val km = if (st.distanceM < 1000) "${(st.distanceM / 10).toInt() * 10} m" else String.format(NL, "%.1f km", st.distanceM / 1000)
+                text = listOfNotNull(
+                    km,
+                    st.maxKw?.let { String.format(NL, "%.0f kW %s", it, if (st.dc) "DC" else "AC") },
+                    st.connectors.joinToString("/").ifEmpty { null },
+                    st.free?.let { if (it > 0) "$it vrij" else "bezet" },
+                    st.price,
+                    st.operator.takeIf { it.isNotBlank() && it != st.name },
+                ).joinToString(" · ")
+                textSize = 12f; setTextColor(0xFFA8A8A8.toInt()); maxLines = 2
+            })
+        })
+        isClickable = true
+        setOnClickListener {
+            val nav = Intent(Intent.ACTION_VIEW, Uri.parse("google.navigation:q=${st.lat},${st.lon}"))
+            runCatching { startActivity(nav) }.onFailure {
+                runCatching { startActivity(Intent(Intent.ACTION_VIEW, Uri.parse("geo:${st.lat},${st.lon}?q=${st.lat},${st.lon}"))) }
+            }
+        }
     }
 
     /** Alle bekende uurprijzen van Zonneplan vanaf dit uur, per dag, met balkjes. */
