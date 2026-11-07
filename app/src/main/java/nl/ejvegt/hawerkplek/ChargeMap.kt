@@ -69,6 +69,56 @@ object ChargeMap {
             .sortedBy { it.distanceM }
     }
 
+    /**
+     * België (en elders): Open Charge Map, open database van laadpunten. Gratis API-sleutel nodig.
+     * Live vrij/bezet zit hier meestal niet in.
+     */
+    fun nearOcm(lat: Double, lon: Double, radiusKm: Double, key: String): List<Station> {
+        val url = "https://api.openchargemap.io/v3/poi/?output=json&compact=false&verbose=false" +
+            "&latitude=$lat&longitude=$lon&distance=$radiusKm&distanceunit=KM&maxresults=60"
+        val conn = URL(url).openConnection() as HttpURLConnection
+        conn.connectTimeout = 8_000
+        conn.readTimeout = 20_000
+        conn.setRequestProperty("X-API-Key", key.trim())
+        conn.setRequestProperty("User-Agent", "Thuisbasis-app")
+        val code = conn.responseCode
+        if (code == 401 || code == 403) throw IOException("Open Charge Map: API-sleutel klopt niet")
+        if (code !in 200..299) throw IOException("Open Charge Map gaf fout $code")
+        val arr = JSONArray(conn.inputStream.bufferedReader().use { it.readText() })
+        val out = mutableListOf<Station>()
+        for (i in 0 until arr.length()) {
+            val p = arr.optJSONObject(i) ?: continue
+            val a = p.optJSONObject("AddressInfo") ?: continue
+            val la = a.optDouble("Latitude", Double.NaN); val lo = a.optDouble("Longitude", Double.NaN)
+            if (la.isNaN() || lo.isNaN()) continue
+            val conns = p.optJSONArray("Connections") ?: JSONArray()
+            var maxKw: Double? = null; var dc = false; var total = 0
+            val types = mutableListOf<String>()
+            for (j in 0 until conns.length()) {
+                val cn = conns.optJSONObject(j) ?: continue
+                cn.optDouble("PowerKW", Double.NaN).takeIf { !it.isNaN() && it > 0 }?.let { maxKw = maxOf(maxKw ?: 0.0, it) }
+                if (cn.optJSONObject("CurrentType")?.optString("Title").orEmpty().contains("DC", true)) dc = true
+                val t = cn.optJSONObject("ConnectionType")?.optString("Title").orEmpty()
+                when {
+                    "CCS" in t || "Combo" in t -> { types.add("CCS"); dc = true }
+                    "CHAdeMO" in t -> { types.add("CHAdeMO"); dc = true }
+                    "Type 2" in t || "Mennekes" in t -> types.add("Type 2")
+                    "Tesla" in t -> types.add("Tesla")
+                }
+                total += cn.optInt("Quantity", 1).coerceAtLeast(1)
+            }
+            if ((maxKw ?: 0.0) >= 50) dc = true
+            val street = listOf(a.optString("AddressLine1"), a.optString("Town")).filter { it.isNotBlank() && it != "null" }.joinToString(", ")
+            val cost = p.optString("UsageCost").takeIf { it.isNotBlank() && it != "null" }?.take(40)
+            out.add(Station(
+                a.optString("Title").takeIf { it != "null" }.orEmpty(), street,
+                p.optJSONObject("OperatorInfo")?.optString("Title")?.takeIf { it != "null" && !it.startsWith("(") }.orEmpty(),
+                la, lo, distance(lat, lon, la, lo), maxKw, dc, types.distinct(), total.coerceAtLeast(1), null, cost,
+            ))
+        }
+        return out.sortedBy { it.distanceM }
+    }
+
     /** Alle waarden in een object plat: "evses.0.status" → "AVAILABLE". */
     private fun flatten(o: Any?, prefix: String, out: MutableList<Pair<String, Any>>) {
         when (o) {

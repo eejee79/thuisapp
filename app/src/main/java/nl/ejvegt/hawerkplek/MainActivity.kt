@@ -2876,13 +2876,13 @@ class MainActivity : Activity() {
         near.addView(nearList)
         val chipViews = mutableListOf<TextView>()
         fun paintNearChips() {
-            val sel = listOf(nearMode == 0, nearMode == 1, nearMode == 2, nearFast)
+            val sel = listOf(nearMode == 0, nearMode == 1, nearMode == 2, nearFast, nearBelgium)
             chipViews.forEachIndexed { i, c ->
                 c.setTextColor(if (sel[i]) 0xFF0B2430.toInt() else Color.WHITE)
                 (c.background as GradientDrawable).setColor(if (sel[i]) 0xFF18BCF2.toInt() else 0xFF2A2A2A.toInt())
             }
         }
-        listOf("Rond mij", "Rond de auto", "Rond huis", "Alleen snelladers").forEachIndexed { i, t ->
+        listOf("Rond mij", "Rond de auto", "Rond huis", "Alleen snelladers", "België").forEachIndexed { i, t ->
             val c = TextView(this).apply {
                 text = t; textSize = 13f; setTypeface(typeface, Typeface.BOLD)
                 setPadding(dp(14), dp(7), dp(14), dp(7))
@@ -2890,7 +2890,17 @@ class MainActivity : Activity() {
                 layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { marginEnd = dp(8) }
                 isClickable = true
                 setOnClickListener {
-                    if (i == 3) nearFast = !nearFast else nearMode = i
+                    when (i) {
+                        3 -> nearFast = !nearFast
+                        4 -> {
+                            if (!nearBelgium && prefs().getString(KEY_OCM, "").isNullOrBlank()) {
+                                askOcmKey { nearBelgium = true; paintNearChips(); loadChargers() }
+                                return@setOnClickListener
+                            }
+                            nearBelgium = !nearBelgium
+                        }
+                        else -> nearMode = i
+                    }
                     paintNearChips(); loadChargers()
                 }
             }
@@ -2949,6 +2959,31 @@ class MainActivity : Activity() {
         if (requestCode == REQ_LOCATION && grantResults.any { it == android.content.pm.PackageManager.PERMISSION_GRANTED }) loadChargers()
     }
     private var nearFast = false
+    /** België-knop: staat bij elke start weer uit (standaard Nederland via NDW). */
+    private var nearBelgium = false
+    private val KEY_OCM = "ocm_key"
+
+    private fun askOcmKey(onSaved: () -> Unit) {
+        val input = EditText(this).apply {
+            hint = "API-sleutel van Open Charge Map"
+            setSingleLine()
+            setPadding(dp(20), dp(14), dp(20), dp(14))
+        }
+        AlertDialog.Builder(this)
+            .setTitle("Laadpalen in België")
+            .setMessage("Voor België gebruikt de app Open Charge Map. Maak gratis een account op openchargemap.org, " +
+                "ga naar Mijn profiel → API-sleutels, maak een sleutel en plak hem hier. (Eenmalig; blijft op dit toestel.)")
+            .setView(input)
+            .setPositiveButton("Opslaan") { _, _ ->
+                val k = input.text.toString().trim()
+                if (k.isNotEmpty()) { prefs().edit().putString(KEY_OCM, k).apply(); onSaved() }
+            }
+            .setNeutralButton("Site openen") { _, _ ->
+                runCatching { startActivity(Intent(Intent.ACTION_VIEW, Uri.parse("https://openchargemap.org/site/loginprovider/beginlogin"))) }
+            }
+            .setNegativeButton("Annuleren", null)
+            .show()
+    }
     @Volatile private var nearSeq = 0
 
     /** Positie van de auto (MySkoda) of van huis (HA-instellingen): (lat, lon, omschrijving). */
@@ -2987,9 +3022,12 @@ class MainActivity : Activity() {
         thread {
             val r = runCatching {
                 val o = fixed ?: nearOrigin() ?: throw IOException("Geen locatie van auto of huis in Home Assistant")
+                val be = nearBelgium
+                val key = prefs().getString(KEY_OCM, "").orEmpty()
+                fun fetch(rad: Double) = if (be) ChargeMap.nearOcm(o.first, o.second, rad, key) else ChargeMap.near(o.first, o.second, rad)
                 var radius = if (nearFast) 15.0 else 2.0
-                var list = ChargeMap.near(o.first, o.second, radius).filter { !nearFast || it.dc }
-                if (list.size < 3 && !nearFast) { radius = 5.0; list = ChargeMap.near(o.first, o.second, radius) }
+                var list = fetch(radius).filter { !nearFast || it.dc }
+                if (list.size < 3 && !nearFast) { radius = 5.0; list = fetch(radius) }
                 Triple(o, radius, list)
             }
             runOnUiThread {
@@ -2998,7 +3036,7 @@ class MainActivity : Activity() {
                 val res = r.getOrNull() ?: run { nearStatus.text = "Niet gelukt: ${r.exceptionOrNull()?.message}"; return@runOnUiThread }
                 val (o, radius, list) = res
                 nearStatus.text = if (list.isEmpty()) "Geen laadpalen gevonden binnen ${radius.toInt()} km van ${o.third}"
-                    else "${list.size} locaties binnen ${radius.toInt()} km van ${o.third} · bron: NDW · tik voor route"
+                    else "${list.size} locaties binnen ${radius.toInt()} km van ${o.third} · bron: ${if (nearBelgium) "Open Charge Map" else "NDW"} · tik voor route"
                 list.take(12).forEach { st -> nearList.addView(chargerRow(st)) }
             }
         }
