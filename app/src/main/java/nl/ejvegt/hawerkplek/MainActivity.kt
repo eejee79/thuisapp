@@ -11069,11 +11069,15 @@ class MainActivity : Activity() {
                 isClickable = true
                 setOnClickListener { typeOnTv() }
             },
-            // Standby: het Android TV-apparaat (TV+-ontvanger of GoogleTV-box) uit via de integratie
-            btn("⏻", null, size = 20f).apply {
+            // Standby: het Android TV-apparaat (TV+-ontvanger of GoogleTV-box) uit via de integratie.
+            // Echt aan/uit-icoon (het ⏻-teken staat niet in elk lettertype)
+            ImageView(this).apply {
+                setImageResource(R.drawable.ic_power)
+                setColorFilter(0xFFFF8A80.toInt())
+                scaleType = ImageView.ScaleType.CENTER_INSIDE
+                setPadding(dp(12), dp(12), dp(12), dp(12))
                 contentDescription = "Standby"
                 background = GradientDrawable().apply { setColor(0xFF5A1E1E.toInt()); cornerRadius = dp(14).toFloat() }
-                setTextColor(0xFFFF8A80.toInt())
                 isClickable = true
                 setOnClickListener {
                     alpha = 0.5f; postDelayed({ alpha = 1f }, 150)
