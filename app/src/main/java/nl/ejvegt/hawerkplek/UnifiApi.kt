@@ -46,6 +46,54 @@ class UnifiApi(private val host: () -> String, private val user: () -> String, p
      * Verkeer per switchpoort, bytes/s (beide richtingen): (MAC switch, poortnummer) → snelheid.
      * Multicast (tv-zenders) wordt hier wél meegeteld, in tegenstelling tot de cijfers per apparaat.
      */
+    class Live(val down: Double?, val up: Double?, val ports: Map<Pair<String, Int>, Double>, val tvPorts: Set<Pair<String, Int>>)
+
+    private var tvNetId: String? = null
+    private var tvNetIdAt = 0L
+
+    /** Id van het tv-netwerk in UniFi (naam met "tv", of VLAN 7). */
+    private fun tvNetworkId(): String? {
+        if (tvNetId != null || System.currentTimeMillis() - tvNetIdAt < 300_000) return tvNetId
+        tvNetIdAt = System.currentTimeMillis()
+        val arr = runCatching { get("/proxy/network/api/s/default/rest/networkconf").optJSONArray("data") }.getOrNull() ?: return null
+        tvNetId = (0 until arr.length()).mapNotNull { arr.optJSONObject(it) }
+            .firstOrNull { it.optInt("vlan", -1) == 7 || it.optString("name").lowercase().let { n -> n == "tv" || n.startsWith("tv ") } }
+            ?.optString("_id")?.takeIf { it.isNotBlank() }
+        return tvNetId
+    }
+
+    /**
+     * Eén snelle vraag voor de live-cijfers: internet (gateway wan1/uplink) en verkeer per poort,
+     * plus welke poorten in het tv-netwerk staan.
+     */
+    fun live(): Live {
+        fun r(o: JSONObject?, k: String) = o?.optDouble(k, Double.NaN)?.takeIf { !it.isNaN() }
+        val devs = get("/proxy/network/api/s/default/stat/device").optJSONArray("data") ?: JSONArray()
+        val tvId = tvNetworkId()
+        var down: Double? = null; var up: Double? = null
+        val ports = HashMap<Pair<String, Int>, Double>()
+        val tvPorts = HashSet<Pair<String, Int>>()
+        for (i in 0 until devs.length()) {
+            val d = devs.optJSONObject(i) ?: continue
+            if (down == null && up == null && (d.has("wan1") || d.optString("type") in setOf("ugw", "udm", "uxg", "ucg"))) {
+                for (o in listOfNotNull(d.optJSONObject("wan1"), d.optJSONObject("uplink"))) {
+                    val dn = r(o, "rx_bytes-r"); val u2 = r(o, "tx_bytes-r")
+                    if (dn != null || u2 != null) { down = dn; up = u2; break }
+                }
+            }
+            val mac = d.optString("mac").lowercase()
+            val pt = d.optJSONArray("port_table") ?: continue
+            for (j in 0 until pt.length()) {
+                val p = pt.optJSONObject(j) ?: continue
+                val idx = p.optInt("port_idx", -1).takeIf { it >= 0 } ?: continue
+                ports[mac to idx] = listOf("tx_bytes-r", "rx_bytes-r").sumOf { k -> p.optDouble(k, 0.0).takeIf { !it.isNaN() } ?: 0.0 }
+                val native = p.optString("native_networkconf_id").ifBlank { p.optString("networkconf_id") }
+                if (tvId != null && native == tvId && !p.optBoolean("is_uplink", false)) tvPorts.add(mac to idx)
+            }
+        }
+        return Live(down, up, ports, tvPorts)
+    }
+
     fun portRates(): Map<Pair<String, Int>, Double> {
         val arr = get("/proxy/network/api/s/default/stat/device").optJSONArray("data") ?: JSONArray()
         val out = HashMap<Pair<String, Int>, Double>()

@@ -1291,22 +1291,20 @@ class MainActivity : Activity() {
             netStatus.text = "Vul eerst je UniFi-gegevens in via ⚙ → API's → UniFi (netwerk)."
             netList.removeAllViews(); return
         }
-        // Elke ~5 s verversen (live verkeer); de lijst zelf elke 20 s opnieuw opbouwen
-        if (netBusy || (!force && System.currentTimeMillis() - netLoadedAt < 4_500)) return
+        startNetLive()
+        // De lijst met apparaten elke 20 s; de live-cijfers lopen apart, elke seconde
+        if (netBusy || (!force && System.currentTimeMillis() - netLoadedAt < 20_000)) return
         if (force && System.currentTimeMillis() - netLoadedAt < 3_000) return
         netBusy = true
         if (netClients.isEmpty()) netStatus.text = "Apparaten ophalen…"
         thread {
             val r = runCatching { unifi.clients() }
-            val wan = runCatching { unifi.wanRate() }.getOrNull()
-            val ports = runCatching { unifi.portRates() }.getOrDefault(emptyMap())
             runOnUiThread {
                 netBusy = false
                 netLoadedAt = System.currentTimeMillis()
                 r.getOrNull()?.let {
                     netClients = it
-                    showNetLive(wan, it, ports)
-                    if (force || System.currentTimeMillis() - netListAt > 20_000) { netListAt = System.currentTimeMillis(); showNet() }
+                    netListAt = System.currentTimeMillis(); showNet()
                 }
                     ?: run { netStatus.text = "UniFi niet bereikbaar: ${r.exceptionOrNull()?.message}" }
             }
@@ -1315,19 +1313,41 @@ class MainActivity : Activity() {
 
     private fun mbit(bytesPerS: Double) = bytesPerS * 8 / 1_000_000
 
-    private fun showNetLive(wan: Pair<Double?, Double?>?, clients: List<UnifiApi.Client>, ports: Map<Pair<String, Int>, Double> = emptyMap()) {
+    // Live-cijfers: elke seconde zolang het tabblad Netwerk open is
+    @Volatile private var netLiveBusy = false
+    private val netLiveTick = object : Runnable {
+        override fun run() {
+            if (currentTab != TAB_NET || !unifi.configured() || isFinishing) return
+            if (!netLiveBusy) {
+                netLiveBusy = true
+                thread {
+                    val l = runCatching { unifi.live() }.getOrNull()
+                    runOnUiThread {
+                        netLiveBusy = false
+                        if (l != null) showNetLive(l.down to l.up, netClients, l.ports, l.tvPorts)
+                    }
+                }
+            }
+            handler.postDelayed(this, 1_000)
+        }
+    }
+    private fun startNetLive() { handler.removeCallbacks(netLiveTick); handler.post(netLiveTick) }
+
+    private fun showNetLive(wan: Pair<Double?, Double?>?, clients: List<UnifiApi.Client>, ports: Map<Pair<String, Int>, Double> = emptyMap(),
+                            tvPorts: Set<Pair<String, Int>> = emptySet()) {
         if (netLive.size < 2) return
         val (down, up) = wan ?: (null to null)
         netLive[0].text = if (down == null && up == null) "🌐 Internet\n—" else
             String.format(NL, "🌐 Internet\n↓ %.1f Mbit/s\n↑ %.1f Mbit/s", mbit(down ?: 0.0), mbit(up ?: 0.0))
         val tv = clients.filter { c -> c.network?.let { "tv" in it.lowercase(NL) || "vlan 7" in it.lowercase(NL) } == true }
-        netLive[1].text = if (tv.isEmpty()) "📺 TV (VLAN 7)\ngeen ontvangers gezien" else
+        netLive[1].text = if (tv.isEmpty() && tvPorts.isEmpty()) "📺 TV (VLAN 7)\ngeen ontvangers gezien" else
             run {
-                // Per switchpoort meten (daar telt de multicast van de zenders mee); anders per apparaat
-                val viaPorts = tv.mapNotNull { c -> val m = c.swMac; val p = c.port; if (m != null && p != null) m to p else null }
-                    .distinct().mapNotNull { ports[it] }
+                // Per switchpoort meten (daar telt de multicast van de zenders mee): poorten van de ontvangers
+                // plus alle poorten die in UniFi op het tv-netwerk staan; anders per apparaat
+                val keys = (tv.mapNotNull { c -> val m = c.swMac; val p = c.port; if (m != null && p != null) m to p else null } + tvPorts).toSet()
+                val viaPorts = keys.mapNotNull { ports[it] }
                 val bps = if (viaPorts.isNotEmpty()) viaPorts.sum() else tv.sumOf { it.rateBps }
-                String.format(NL, "📺 TV (VLAN 7)\n%.1f Mbit/s\n%d ontvanger%s", mbit(bps), tv.size, if (tv.size == 1) "" else "s")
+                String.format(NL, "📺 TV (VLAN 7)\n%.1f Mbit/s\n%d ontvanger%s", mbit(bps), maxOf(tv.size, tvPorts.size), if (maxOf(tv.size, tvPorts.size) == 1) "" else "s")
             }
     }
 
