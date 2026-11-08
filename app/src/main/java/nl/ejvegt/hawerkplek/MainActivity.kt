@@ -1166,6 +1166,8 @@ class MainActivity : Activity() {
     @Volatile private var netBusy = false
     private var netLoadedAt = 0L
     private var netClients: List<UnifiApi.Client> = emptyList()
+    private var netLive: List<TextView> = emptyList()
+    private var netListAt = 0L
     private val unifi by lazy {
         UnifiApi({ prefs().getString("unifi_host", "")!! }, { prefs().getString("unifi_user", "")!! }, { prefs().getString("unifi_pass", "")!! })
     }
@@ -1215,6 +1217,20 @@ class MainActivity : Activity() {
             chipViews.add(c); chips.addView(c)
         }
         paint()
+        // Live verkeer: internet (WAN) en tv (apparaten in het TV-netwerk, VLAN 7)
+        netLive = List(2) { idx ->
+            TextView(this).apply {
+                textSize = 13f; setTextColor(Color.WHITE); maxLines = 3
+                setPadding(dp(12), dp(10), dp(12), dp(10))
+                background = GradientDrawable().apply { setColor(0xFF1E1E1E.toInt()); cornerRadius = dp(12).toFloat() }
+                layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f).apply { if (idx > 0) marginStart = dp(8) }
+                text = if (idx == 0) "🌐 Internet\n—" else "📺 TV (VLAN 7)\n—"
+            }
+        }
+        inner.addView(LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL; setPadding(0, dp(4), 0, dp(4))
+            netLive.forEach { addView(it) }
+        })
         netStatus = TextView(this).apply { textSize = 13f; setTextColor(0xFFB0B0B0.toInt()); setPadding(0, dp(4), 0, dp(6)) }
         inner.addView(netStatus)
         netList = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
@@ -1264,19 +1280,37 @@ class MainActivity : Activity() {
             netStatus.text = "Vul eerst je UniFi-gegevens in via ⚙ → API's → UniFi (netwerk)."
             netList.removeAllViews(); return
         }
-        if (netBusy || (!force && System.currentTimeMillis() - netLoadedAt < 20_000)) return
-        if (force && System.currentTimeMillis() - netLoadedAt < 5_000) return
+        // Elke ~5 s verversen (live verkeer); de lijst zelf elke 20 s opnieuw opbouwen
+        if (netBusy || (!force && System.currentTimeMillis() - netLoadedAt < 4_500)) return
+        if (force && System.currentTimeMillis() - netLoadedAt < 3_000) return
         netBusy = true
         if (netClients.isEmpty()) netStatus.text = "Apparaten ophalen…"
         thread {
             val r = runCatching { unifi.clients() }
+            val wan = runCatching { unifi.wanRate() }.getOrNull()
             runOnUiThread {
                 netBusy = false
                 netLoadedAt = System.currentTimeMillis()
-                r.getOrNull()?.let { netClients = it; showNet() }
+                r.getOrNull()?.let {
+                    netClients = it
+                    showNetLive(wan, it)
+                    if (force || System.currentTimeMillis() - netListAt > 20_000) { netListAt = System.currentTimeMillis(); showNet() }
+                }
                     ?: run { netStatus.text = "UniFi niet bereikbaar: ${r.exceptionOrNull()?.message}" }
             }
         }
+    }
+
+    private fun mbit(bytesPerS: Double) = bytesPerS * 8 / 1_000_000
+
+    private fun showNetLive(wan: Pair<Double?, Double?>?, clients: List<UnifiApi.Client>) {
+        if (netLive.size < 2) return
+        val (down, up) = wan ?: (null to null)
+        netLive[0].text = if (down == null && up == null) "🌐 Internet\n—" else
+            String.format(NL, "🌐 Internet\n↓ %.1f Mbit/s\n↑ %.1f Mbit/s", mbit(down ?: 0.0), mbit(up ?: 0.0))
+        val tv = clients.filter { c -> c.network?.let { "tv" in it.lowercase(NL) || "vlan 7" in it.lowercase(NL) } == true }
+        netLive[1].text = if (tv.isEmpty()) "📺 TV (VLAN 7)\ngeen ontvangers gezien" else
+            String.format(NL, "📺 TV (VLAN 7)\n%.1f Mbit/s\n%d ontvanger%s", mbit(tv.sumOf { it.rateBps }), tv.size, if (tv.size == 1) "" else "s")
     }
 
     private fun ipKey(ip: String) = ip.split('.').mapNotNull { it.toIntOrNull() }.fold(0L) { a, b -> a * 256 + b }

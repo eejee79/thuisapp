@@ -36,7 +36,18 @@ class UnifiApi(private val host: () -> String, private val user: () -> String, p
         val port: Int?,
         val uptimeS: Long?,
         val satisfaction: Int?,
+        /** Huidig verkeer van/naar dit apparaat, bytes per seconde (beide richtingen samen). */
+        val rateBps: Double = 0.0,
     )
+
+    /** Internetverbinding nu: download en upload in bytes per seconde (WAN van de gateway). */
+    fun wanRate(): Pair<Double?, Double?> {
+        val arr = get("/proxy/network/api/s/default/stat/health").optJSONArray("data") ?: JSONArray()
+        val wan = (0 until arr.length()).mapNotNull { arr.optJSONObject(it) }.firstOrNull { it.optString("subsystem") == "wan" }
+            ?: return null to null
+        fun d(k: String) = if (wan.has(k)) wan.optDouble(k) else null
+        return d("rx_bytes-r") to d("tx_bytes-r")
+    }
 
     fun configured() = host().isNotBlank() && user().isNotBlank() && pass().isNotBlank()
 
@@ -128,6 +139,8 @@ class UnifiApi(private val host: () -> String, private val user: () -> String, p
                 port = if (wired) i("sw_port") else null,
                 uptimeS = if (o.has("uptime")) o.optLong("uptime") else null,
                 satisfaction = i("satisfaction"),
+                rateBps = (if (wired) listOf("wired-rx_bytes-r", "wired-tx_bytes-r") else listOf("rx_bytes-r", "tx_bytes-r"))
+                    .sumOf { k -> o.optDouble(k, 0.0).takeIf { !it.isNaN() } ?: 0.0 },
             )
         }
     }
