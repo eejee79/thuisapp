@@ -1181,7 +1181,8 @@ class MainActivity : Activity() {
             isClickable = true; isFocusable = true
             addView(ImageView(this@MainActivity).apply { setImageResource(R.drawable.ic_tab_net); contentDescription = "Netwerk" },
                 LinearLayout.LayoutParams(dp(34), dp(34)))
-            addView(TextView(this@MainActivity).apply { text = "Netwerk"; textSize = 11f; setTextColor(Color.WHITE); setPadding(0, dp(2), 0, 0) })
+            addView(TextView(this@MainActivity).apply { text = "Netwerk"; textSize = 11f; setTextColor(Color.WHITE); setPadding(0, dp(2), 0, 0); gravity = Gravity.CENTER },
+                LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT))
             setOnClickListener { selectTab(TAB_NET) }
         }
         bar.addView(tabNet, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.MATCH_PARENT, 1f))
