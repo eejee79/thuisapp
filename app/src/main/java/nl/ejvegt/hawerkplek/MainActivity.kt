@@ -1259,47 +1259,17 @@ class MainActivity : Activity() {
             .show()
     }
 
-    @Volatile private var netSource = ""
-
-    /**
-     * Apparaten via de UniFi-integratie van Home Assistant (device_tracker): IP, wifi-band, wifinaam.
-     * Werkt ook buiten de deur; snelheid en signaal geeft HA niet door.
-     */
-    private fun haUnifiClients(): List<UnifiApi.Client> {
-        val tpl = "{% for e in integration_entities('unifi') if e.startswith('device_tracker.') and is_state(e, 'home') %}" +
-            "{{ e }}|{{ state_attr(e, 'friendly_name') }}|{{ state_attr(e, 'ip') }}|{{ state_attr(e, 'mac') }}|" +
-            "{{ state_attr(e, 'is_wired') }}|{{ state_attr(e, 'radio') }}|{{ state_attr(e, 'essid') }}|" +
-            "{{ state_attr(e, 'radio_proto') }}|{{ state_attr(e, 'vlan') }}\n{% endfor %}"
-        fun v(x: String?) = x?.takeIf { it.isNotBlank() && it != "None" && it != "null" }
-        return haRequest("POST", "/api/template", JSONObject().put("template", tpl).toString())
-            .lines().filter { it.count { ch -> ch == '|' } >= 8 }.map { it.split('|') }.map { r ->
-                val wired = r[4].equals("True", true)
-                UnifiApi.Client(
-                    name = v(r[1]) ?: r[0].removePrefix("device_tracker."), ip = v(r[2]) ?: "—", mac = v(r[3]) ?: "", vendor = "",
-                    wired = wired,
-                    band = if (wired) null else when (v(r[5])) { "ng" -> "2,4 GHz"; "na" -> "5 GHz"; "6e" -> "6 GHz"; else -> null },
-                    channel = null, ssid = if (wired) null else v(r[6]), txMbit = null, rxMbit = null, signal = null,
-                    proto = if (wired) null else v(r[7]), network = v(r[8])?.let { "VLAN $it" }, port = null, uptimeS = null, satisfaction = null,
-                )
-            }
-    }
-
     private fun refreshNet(force: Boolean) {
+        if (!unifi.configured()) {
+            netStatus.text = "Vul eerst je UniFi-gegevens in via ⚙ → API's → UniFi (netwerk)."
+            netList.removeAllViews(); return
+        }
         if (netBusy || (!force && System.currentTimeMillis() - netLoadedAt < 20_000)) return
         if (force && System.currentTimeMillis() - netLoadedAt < 5_000) return
         netBusy = true
         if (netClients.isEmpty()) netStatus.text = "Apparaten ophalen…"
         thread {
-            // Eerst rechtstreeks bij UniFi (met snelheid en signaal), anders via Home Assistant
-            val r = runCatching {
-                val direct = if (unifi.configured()) runCatching { unifi.clients() }.getOrNull() else null
-                if (direct != null) { netSource = "UniFi"; direct }
-                else {
-                    val ha = haUnifiClients()
-                    if (ha.isEmpty()) throw IOException("geen apparaten van de UniFi-integratie in Home Assistant")
-                    netSource = "Home Assistant"; ha
-                }
-            }
+            val r = runCatching { unifi.clients() }
             runOnUiThread {
                 netBusy = false
                 netLoadedAt = System.currentTimeMillis()
@@ -1323,8 +1293,7 @@ class MainActivity : Activity() {
             }
         val wifi = all.count { !it.wired }
         val t = java.text.SimpleDateFormat("HH:mm:ss", NL).format(java.util.Date())
-        netStatus.text = "${all.size} apparaten · $wifi wifi · ${all.size - wifi} kabel · via $netSource · $t" +
-            (if (netSource == "Home Assistant") "\nSnelheid en signaal: alleen thuis, met UniFi-gegevens onder ⚙ → API's" else "")
+        netStatus.text = "${all.size} apparaten · $wifi wifi · ${all.size - wifi} kabel · bijgewerkt $t"
         netList.removeAllViews()
         list.forEach { c -> netList.addView(netRow(c)) }
     }
@@ -1359,7 +1328,7 @@ class MainActivity : Activity() {
                 text = if (c.wired) listOfNotNull("Kabel", c.port?.let { "poort $it" }, c.network).joinToString(" · ")
                 else listOfNotNull(
                     c.band, c.channel?.let { "kanaal $it" },
-                    c.txMbit?.let { tx -> "$tx/${c.rxMbit ?: "?"} Mbit/s" } ?: c.proto?.let { "wifi $it" },
+                    c.txMbit?.let { tx -> "$tx/${c.rxMbit ?: "?"} Mbit/s" },
                     c.signal?.let { "$it dBm" },
                     c.ssid,
                 ).joinToString(" · ")
