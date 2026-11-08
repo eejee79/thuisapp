@@ -11069,6 +11069,18 @@ class MainActivity : Activity() {
                 isClickable = true
                 setOnClickListener { typeOnTv() }
             },
+            // Standby: het Android TV-apparaat (TV+-ontvanger of GoogleTV-box) uit via de integratie
+            btn("⏻", null, size = 20f).apply {
+                contentDescription = "Standby"
+                background = GradientDrawable().apply { setColor(0xFF5A1E1E.toInt()); cornerRadius = dp(14).toFloat() }
+                setTextColor(0xFFFF8A80.toInt())
+                isClickable = true
+                setOnClickListener {
+                    alpha = 0.5f; postDelayed({ alpha = 1f }, 150)
+                    thread { quietService("remote/turn_off", JSONObject().put("entity_id", remote)) }
+                    Toast.makeText(this@MainActivity, "Standby", Toast.LENGTH_SHORT).show()
+                }
+            },
         ))
         // Pijltjes met OK in het midden
         val dark = 0xFF333333.toInt()
