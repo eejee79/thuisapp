@@ -148,6 +148,7 @@ class MainActivity : Activity() {
         /** Interne nummers van de tabbladen. */
         const val TAB_DASH = 3
         const val TAB_MEDIA = 4
+        const val TAB_NET = 5
 
         /** Multimedia: Google TV-box (Android TV Remote-integratie). */
         const val MEDIA_REMOTE = "remote.googletv_box"
@@ -709,6 +710,7 @@ class MainActivity : Activity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_main)
+        buildNetTab()
         if (isTablet) applyTabletLayout()
 
         haPanel = findViewById(R.id.haPanel)
@@ -1154,10 +1156,213 @@ class MainActivity : Activity() {
 
     // ================= Tabbladen =================
 
+    // ================= Netwerk (UniFi): alle apparaten met IP, wifi-band en snelheid =================
+    private lateinit var netPanel: View
+    private lateinit var tabNet: View
+    private lateinit var netList: LinearLayout
+    private lateinit var netStatus: TextView
+    private var netFilter = 0            // 0 = alles, 1 = wifi, 2 = kabel
+    private var netSort = 0              // 0 = naam, 1 = IP, 2 = snelheid
+    @Volatile private var netBusy = false
+    private var netLoadedAt = 0L
+    private var netClients: List<UnifiApi.Client> = emptyList()
+    private val unifi by lazy {
+        UnifiApi({ prefs().getString("unifi_host", "")!! }, { prefs().getString("unifi_user", "")!! }, { prefs().getString("unifi_pass", "")!! })
+    }
+
+    /** Tabblad + paneel in code (zelfde opmaak als de andere), en de instelling onder ⚙ → API's. */
+    private fun buildNetTab() {
+        val bar = findViewById<View>(R.id.tabHa).parent as LinearLayout
+        bar.addView(View(this).apply { setBackgroundColor(0xFF333333.toInt()) }, LinearLayout.LayoutParams(dp(1), ViewGroup.LayoutParams.MATCH_PARENT))
+        tabNet = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL; gravity = Gravity.CENTER
+            isClickable = true; isFocusable = true
+            addView(ImageView(this@MainActivity).apply { setImageResource(R.drawable.ic_tab_net); contentDescription = "Netwerk" },
+                LinearLayout.LayoutParams(dp(34), dp(34)))
+            addView(TextView(this@MainActivity).apply { text = "Netwerk"; textSize = 11f; setTextColor(Color.WHITE); setPadding(0, dp(2), 0, 0) })
+            setOnClickListener { selectTab(TAB_NET) }
+        }
+        bar.addView(tabNet, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.MATCH_PARENT, 1f))
+
+        val content = findViewById<View>(R.id.settingsButton).parent as ViewGroup
+        val inner = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(dp(16), dp(16), dp(16), dp(16)) }
+        inner.addView(TextView(this).apply {
+            text = "Netwerk"; textSize = 28f; setTextColor(Color.WHITE); setTypeface(typeface, Typeface.BOLD)
+            setPadding(0, dp(8), 0, dp(12))
+        })
+        val chips = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; setPadding(0, 0, 0, dp(6)) }
+        inner.addView(android.widget.HorizontalScrollView(this).apply { isHorizontalScrollBarEnabled = false; addView(chips) })
+        val chipViews = mutableListOf<TextView>()
+        fun paint() {
+            val sel = listOf(netFilter == 0, netFilter == 1, netFilter == 2, netSort == 1, netSort == 2)
+            chipViews.forEachIndexed { i, c ->
+                c.setTextColor(if (sel[i]) 0xFF0B2430.toInt() else Color.WHITE)
+                (c.background as GradientDrawable).setColor(if (sel[i]) 0xFF18BCF2.toInt() else 0xFF2A2A2A.toInt())
+            }
+        }
+        listOf("Alles", "Wifi", "Kabel", "Op IP", "Op snelheid").forEachIndexed { i, t ->
+            val c = TextView(this).apply {
+                text = t; textSize = 13f; setTypeface(typeface, Typeface.BOLD)
+                setPadding(dp(14), dp(7), dp(14), dp(7))
+                background = GradientDrawable().apply { cornerRadius = dp(16).toFloat() }
+                layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { marginEnd = dp(8) }
+                isClickable = true
+                setOnClickListener {
+                    when (i) { 0, 1, 2 -> netFilter = i; 3 -> netSort = if (netSort == 1) 0 else 1; else -> netSort = if (netSort == 2) 0 else 2 }
+                    paint(); showNet()
+                }
+            }
+            chipViews.add(c); chips.addView(c)
+        }
+        paint()
+        netStatus = TextView(this).apply { textSize = 13f; setTextColor(0xFFB0B0B0.toInt()); setPadding(0, dp(4), 0, dp(6)) }
+        inner.addView(netStatus)
+        netList = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        inner.addView(netList)
+        netPanel = ScrollView(this).apply { visibility = View.GONE; addView(inner) }
+        content.addView(netPanel, content.indexOfChild(findViewById(R.id.settingsButton)),
+            android.widget.FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
+
+        // ⚙ → API's → UniFi
+        findViewById<LinearLayout>(R.id.apiMenu).addView(TextView(this).apply {
+            text = "UniFi (netwerk)"; textSize = 17f; setTextColor(Color.WHITE)
+            setBackgroundColor(0xFF1E1E1E.toInt()); setPadding(dp(18), dp(18), dp(18), dp(18))
+            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { topMargin = dp(12) }
+            isClickable = true; setOnClickListener { showUnifiSettings() }
+        })
+    }
+
+    private fun showUnifiSettings() {
+        val box = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(dp(20), dp(8), dp(20), 0) }
+        fun field(hint: String, key: String, secret: Boolean) = EditText(this).apply {
+            this.hint = hint; setText(prefs().getString(key, "")); setSingleLine()
+            if (secret) inputType = android.text.InputType.TYPE_CLASS_TEXT or android.text.InputType.TYPE_TEXT_VARIATION_PASSWORD
+            box.addView(this)
+        }
+        box.addView(TextView(this).apply {
+            text = "Gebruik het lokale UniFi-account zonder MFA (zoals voor Home Assistant). Blijft alleen op dit toestel."
+            textSize = 13f; setTextColor(0xFF9A9A9A.toInt())
+        })
+        val h = field("Adres gateway, bijv. 192.168.50.1", "unifi_host", false)
+        val u = field("Gebruikersnaam", "unifi_user", false)
+        val p = field("Wachtwoord", "unifi_pass", true)
+        AlertDialog.Builder(this)
+            .setTitle("UniFi")
+            .setView(box)
+            .setPositiveButton("Opslaan") { _, _ ->
+                prefs().edit().putString("unifi_host", h.text.toString().trim()).putString("unifi_user", u.text.toString().trim())
+                    .putString("unifi_pass", p.text.toString()).apply()
+                netLoadedAt = 0L
+                Toast.makeText(this, "Opgeslagen", Toast.LENGTH_SHORT).show()
+            }
+            .setNegativeButton("Annuleren", null)
+            .show()
+    }
+
+    private fun refreshNet(force: Boolean) {
+        if (!unifi.configured()) {
+            netStatus.text = "Vul eerst je UniFi-gegevens in via ⚙ → API's → UniFi (netwerk)."
+            netList.removeAllViews(); return
+        }
+        if (netBusy || (!force && System.currentTimeMillis() - netLoadedAt < 20_000)) return
+        if (force && System.currentTimeMillis() - netLoadedAt < 5_000) return
+        netBusy = true
+        if (netClients.isEmpty()) netStatus.text = "Apparaten ophalen…"
+        thread {
+            val r = runCatching { unifi.clients() }
+            runOnUiThread {
+                netBusy = false
+                netLoadedAt = System.currentTimeMillis()
+                r.getOrNull()?.let { netClients = it; showNet() }
+                    ?: run { netStatus.text = "UniFi niet bereikbaar: ${r.exceptionOrNull()?.message}" }
+            }
+        }
+    }
+
+    private fun ipKey(ip: String) = ip.split('.').mapNotNull { it.toIntOrNull() }.fold(0L) { a, b -> a * 256 + b }
+
+    private fun showNet() {
+        val all = netClients
+        val list = all.filter { netFilter == 0 || (netFilter == 1 && !it.wired) || (netFilter == 2 && it.wired) }
+            .let { l ->
+                when (netSort) {
+                    1 -> l.sortedBy { ipKey(it.ip) }
+                    2 -> l.sortedByDescending { it.txMbit ?: -1 }
+                    else -> l.sortedBy { it.name.lowercase(NL) }
+                }
+            }
+        val wifi = all.count { !it.wired }
+        val t = java.text.SimpleDateFormat("HH:mm:ss", NL).format(java.util.Date())
+        netStatus.text = "${all.size} apparaten · $wifi wifi · ${all.size - wifi} kabel · bijgewerkt $t"
+        netList.removeAllViews()
+        list.forEach { c -> netList.addView(netRow(c)) }
+    }
+
+    private fun netRow(c: UnifiApi.Client): View = LinearLayout(this).apply {
+        orientation = LinearLayout.HORIZONTAL
+        gravity = Gravity.CENTER_VERTICAL
+        setPadding(dp(10), dp(9), dp(12), dp(9))
+        background = GradientDrawable().apply { setColor(0xFF1E1E1E.toInt()); cornerRadius = dp(12).toFloat() }
+        layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { bottomMargin = dp(6) }
+        // Band als gekleurd blokje
+        val (lbl, col) = when {
+            c.wired -> "LAN" to 0xFF616161.toInt()
+            c.band == "2,4 GHz" -> "2,4" to 0xFFE57000.toInt()
+            c.band == "5 GHz" -> "5" to 0xFF1565C0.toInt()
+            c.band == "6 GHz" -> "6" to 0xFF7B1FA2.toInt()
+            else -> "?" to 0xFF424242.toInt()
+        }
+        addView(TextView(this@MainActivity).apply {
+            text = lbl; textSize = 12f; setTextColor(Color.WHITE); setTypeface(typeface, Typeface.BOLD); gravity = Gravity.CENTER
+            background = GradientDrawable().apply { setColor(col); cornerRadius = dp(8).toFloat() }
+            layoutParams = LinearLayout.LayoutParams(dp(40), dp(34)).apply { marginEnd = dp(10) }
+        })
+        addView(LinearLayout(this@MainActivity).apply {
+            orientation = LinearLayout.VERTICAL
+            layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
+            addView(TextView(this@MainActivity).apply {
+                text = c.name; textSize = 14f; setTextColor(Color.WHITE); setTypeface(typeface, Typeface.BOLD)
+                maxLines = 1; ellipsize = android.text.TextUtils.TruncateAt.END
+            })
+            addView(TextView(this@MainActivity).apply {
+                text = if (c.wired) listOfNotNull("Kabel", c.port?.let { "poort $it" }, c.network).joinToString(" · ")
+                else listOfNotNull(
+                    c.band, c.channel?.let { "kanaal $it" },
+                    c.txMbit?.let { tx -> "$tx/${c.rxMbit ?: "?"} Mbit/s" },
+                    c.signal?.let { "$it dBm" },
+                    c.ssid,
+                ).joinToString(" · ")
+                textSize = 12f; setTextColor(0xFFA8A8A8.toInt()); maxLines = 2
+            })
+        })
+        addView(TextView(this@MainActivity).apply {
+            text = c.ip; textSize = 13f; setTextColor(0xFFCFCFCF.toInt()); gravity = Gravity.END
+            setPadding(dp(8), 0, 0, 0)
+        })
+        isClickable = true
+        setOnClickListener {
+            val up = c.uptimeS?.let { s -> if (s > 86_400) "${s / 86_400} d ${(s % 86_400) / 3600} u" else "${s / 3600} u ${(s % 3600) / 60} min" }
+            AlertDialog.Builder(this@MainActivity)
+                .setTitle(c.name)
+                .setMessage(listOfNotNull(
+                    "IP: ${c.ip}", "MAC: ${c.mac}", c.vendor.takeIf { it.isNotBlank() }?.let { "Fabrikant: $it" },
+                    c.network?.let { "Netwerk: $it" },
+                    if (c.wired) "Kabel" + (c.port?.let { ", poort $it" } ?: "") else listOfNotNull(c.ssid, c.band, c.proto?.let { "wifi-$it".uppercase(NL).replace("WIFI-", "802.11") }).joinToString(" · "),
+                    c.channel?.let { "Kanaal: $it" },
+                    c.txMbit?.let { "Snelheid: $it Mbit/s naar apparaat, ${c.rxMbit ?: "?"} Mbit/s terug" },
+                    c.signal?.let { "Signaal: $it dBm" + when { it >= -60 -> " (goed)"; it >= -70 -> " (redelijk)"; else -> " (zwak)" } },
+                    c.satisfaction?.let { "Tevredenheid (UniFi): $it%" },
+                    up?.let { "Verbonden: $it" },
+                ).joinToString("\n"))
+                .setPositiveButton("OK", null)
+                .show()
+        }
+    }
+
     // ---------- Welke tabbladen zichtbaar zijn ----------
     /** Volgorde zoals in de balk: (tab-nummer, naam). */
-    private fun tabOrder() = listOf(TAB_DASH to "Klimaat & energie", TAB_MEDIA to "Multimedia", 0 to "Lampen", 1 to "Proxmox", 2 to "Škoda")
-    private fun tabView(t: Int): View = when (t) { 0 -> tabHa; 1 -> tabPve; 2 -> tabFritz; TAB_DASH -> tabDash; else -> tabMedia }
+    private fun tabOrder() = listOf(TAB_DASH to "Klimaat & energie", TAB_MEDIA to "Multimedia", 0 to "Lampen", 1 to "Proxmox", 2 to "Škoda", TAB_NET to "Netwerk")
+    private fun tabView(t: Int): View = when (t) { 0 -> tabHa; 1 -> tabPve; 2 -> tabFritz; TAB_DASH -> tabDash; TAB_NET -> tabNet; else -> tabMedia }
     private fun hiddenTabs(): Set<Int> = prefs().getString("hidden_tabs", "")!!.split(',').mapNotNull { it.toIntOrNull() }.toSet()
     private fun visibleTabs(): List<Int> = tabOrder().map { it.first }.filter { it !in hiddenTabs() }.ifEmpty { listOf(TAB_DASH) }
 
@@ -1203,8 +1408,8 @@ class MainActivity : Activity() {
     private fun selectTab(tab: Int) {
         currentTab = tab
         settingsPanel.visibility = View.GONE
-        val panels = listOf(haPanel, pvePanel, fritzPanel, dashPanel, mediaPanel)
-        val tabs = listOf(tabHa, tabPve, tabFritz, tabDash, tabMedia)
+        val panels = listOf(haPanel, pvePanel, fritzPanel, dashPanel, mediaPanel, netPanel)
+        val tabs = listOf(tabHa, tabPve, tabFritz, tabDash, tabMedia, tabNet)
         panels.forEachIndexed { i, p -> p.visibility = if (i == tab) View.VISIBLE else View.GONE }
         tabs.forEachIndexed { i, t ->
             t.alpha = if (i == tab) 1f else 0.35f
@@ -1220,6 +1425,7 @@ class MainActivity : Activity() {
             1 -> refreshPve()
             TAB_DASH -> refreshDashboard()
             TAB_MEDIA -> refreshMedia()
+            TAB_NET -> refreshNet(force)
             else -> refreshCar()
         }
     }
