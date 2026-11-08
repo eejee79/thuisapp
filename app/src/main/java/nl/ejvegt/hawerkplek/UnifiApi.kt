@@ -38,7 +38,30 @@ class UnifiApi(private val host: () -> String, private val user: () -> String, p
         val satisfaction: Int?,
         /** Huidig verkeer van/naar dit apparaat, bytes per seconde (beide richtingen samen). */
         val rateBps: Double = 0.0,
+        /** Switch/gateway waar dit bekabelde apparaat aan hangt (MAC). */
+        val swMac: String? = null,
     )
+
+    /**
+     * Verkeer per switchpoort, bytes/s (beide richtingen): (MAC switch, poortnummer) → snelheid.
+     * Multicast (tv-zenders) wordt hier wél meegeteld, in tegenstelling tot de cijfers per apparaat.
+     */
+    fun portRates(): Map<Pair<String, Int>, Double> {
+        val arr = get("/proxy/network/api/s/default/stat/device").optJSONArray("data") ?: JSONArray()
+        val out = HashMap<Pair<String, Int>, Double>()
+        for (i in 0 until arr.length()) {
+            val d = arr.optJSONObject(i) ?: continue
+            val mac = d.optString("mac").lowercase()
+            val ports = d.optJSONArray("port_table") ?: continue
+            for (j in 0 until ports.length()) {
+                val p = ports.optJSONObject(j) ?: continue
+                val idx = p.optInt("port_idx", -1).takeIf { it >= 0 } ?: continue
+                val r = listOf("tx_bytes-r", "rx_bytes-r").sumOf { k -> p.optDouble(k, 0.0).takeIf { !it.isNaN() } ?: 0.0 }
+                out[mac to idx] = r
+            }
+        }
+        return out
+    }
 
     /** Internetverbinding nu: download en upload in bytes per seconde (WAN van de gateway). */
     fun wanRate(): Pair<Double?, Double?> {
@@ -137,6 +160,7 @@ class UnifiApi(private val host: () -> String, private val user: () -> String, p
                 proto = if (wired) null else s("radio_proto"),
                 network = s("network"),
                 port = if (wired) i("sw_port") else null,
+                swMac = if (wired) s("sw_mac")?.lowercase() else null,
                 uptimeS = if (o.has("uptime")) o.optLong("uptime") else null,
                 satisfaction = i("satisfaction"),
                 rateBps = (if (wired) listOf("wired-rx_bytes-r", "wired-tx_bytes-r") else listOf("rx_bytes-r", "tx_bytes-r"))

@@ -1288,12 +1288,13 @@ class MainActivity : Activity() {
         thread {
             val r = runCatching { unifi.clients() }
             val wan = runCatching { unifi.wanRate() }.getOrNull()
+            val ports = runCatching { unifi.portRates() }.getOrDefault(emptyMap())
             runOnUiThread {
                 netBusy = false
                 netLoadedAt = System.currentTimeMillis()
                 r.getOrNull()?.let {
                     netClients = it
-                    showNetLive(wan, it)
+                    showNetLive(wan, it, ports)
                     if (force || System.currentTimeMillis() - netListAt > 20_000) { netListAt = System.currentTimeMillis(); showNet() }
                 }
                     ?: run { netStatus.text = "UniFi niet bereikbaar: ${r.exceptionOrNull()?.message}" }
@@ -1303,14 +1304,20 @@ class MainActivity : Activity() {
 
     private fun mbit(bytesPerS: Double) = bytesPerS * 8 / 1_000_000
 
-    private fun showNetLive(wan: Pair<Double?, Double?>?, clients: List<UnifiApi.Client>) {
+    private fun showNetLive(wan: Pair<Double?, Double?>?, clients: List<UnifiApi.Client>, ports: Map<Pair<String, Int>, Double> = emptyMap()) {
         if (netLive.size < 2) return
         val (down, up) = wan ?: (null to null)
         netLive[0].text = if (down == null && up == null) "🌐 Internet\n—" else
             String.format(NL, "🌐 Internet\n↓ %.1f Mbit/s\n↑ %.1f Mbit/s", mbit(down ?: 0.0), mbit(up ?: 0.0))
         val tv = clients.filter { c -> c.network?.let { "tv" in it.lowercase(NL) || "vlan 7" in it.lowercase(NL) } == true }
         netLive[1].text = if (tv.isEmpty()) "📺 TV (VLAN 7)\ngeen ontvangers gezien" else
-            String.format(NL, "📺 TV (VLAN 7)\n%.1f Mbit/s\n%d ontvanger%s", mbit(tv.sumOf { it.rateBps }), tv.size, if (tv.size == 1) "" else "s")
+            run {
+                // Per switchpoort meten (daar telt de multicast van de zenders mee); anders per apparaat
+                val viaPorts = tv.mapNotNull { c -> val m = c.swMac; val p = c.port; if (m != null && p != null) m to p else null }
+                    .distinct().mapNotNull { ports[it] }
+                val bps = if (viaPorts.isNotEmpty()) viaPorts.sum() else tv.sumOf { it.rateBps }
+                String.format(NL, "📺 TV (VLAN 7)\n%.1f Mbit/s\n%d ontvanger%s", mbit(bps), tv.size, if (tv.size == 1) "" else "s")
+            }
     }
 
     private fun ipKey(ip: String) = ip.split('.').mapNotNull { it.toIntOrNull() }.fold(0L) { a, b -> a * 256 + b }
