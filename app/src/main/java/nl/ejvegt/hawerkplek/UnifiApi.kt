@@ -63,13 +63,42 @@ class UnifiApi(private val host: () -> String, private val user: () -> String, p
         return out
     }
 
-    /** Internetverbinding nu: download en upload in bytes per seconde (WAN van de gateway). */
+    /**
+     * Internetverbinding nu: (download, upload) in bytes/s. Bij UniFi OS-gateways (UCG/UDM) staan die
+     * bij het apparaat zelf (wan1 / uplink); bij oudere systemen in stat/health.
+     */
     fun wanRate(): Pair<Double?, Double?> {
+        fun r(o: JSONObject?, k: String) = o?.optDouble(k, Double.NaN)?.takeIf { !it.isNaN() }
+        val devs = get("/proxy/network/api/s/default/stat/device").optJSONArray("data") ?: JSONArray()
+        val gw = (0 until devs.length()).mapNotNull { devs.optJSONObject(it) }
+            .firstOrNull { it.has("wan1") || it.optString("type") in setOf("ugw", "udm", "uxg", "ucg") }
+        for (o in listOfNotNull(gw?.optJSONObject("wan1"), gw?.optJSONObject("uplink"))) {
+            val down = r(o, "rx_bytes-r"); val up = r(o, "tx_bytes-r")
+            if (down != null || up != null) return down to up
+        }
         val arr = get("/proxy/network/api/s/default/stat/health").optJSONArray("data") ?: JSONArray()
         val wan = (0 until arr.length()).mapNotNull { arr.optJSONObject(it) }.firstOrNull { it.optString("subsystem") == "wan" }
-            ?: return null to null
-        fun d(k: String) = if (wan.has(k)) wan.optDouble(k) else null
-        return d("rx_bytes-r") to d("tx_bytes-r")
+        return r(wan, "rx_bytes-r") to r(wan, "tx_bytes-r")
+    }
+
+    /** Voor foutzoeken: alle "…-r"-snelheden die de gateway nu meldt. */
+    fun rateDiagnose(): String {
+        val sb = StringBuilder()
+        val devs = get("/proxy/network/api/s/default/stat/device").optJSONArray("data") ?: JSONArray()
+        for (i in 0 until devs.length()) {
+            val d = devs.optJSONObject(i) ?: continue
+            sb.append("• ").append(d.optString("name", d.optString("model"))).append(" (").append(d.optString("type")).append(")\n")
+            for (k in listOf("wan1", "wan2", "uplink")) d.optJSONObject(k)?.let { o ->
+                val rx = o.optDouble("rx_bytes-r", Double.NaN); val tx = o.optDouble("tx_bytes-r", Double.NaN)
+                sb.append("   $k: rx ").append(if (rx.isNaN()) "—" else "%.0f".format(rx)).append(" tx ").append(if (tx.isNaN()) "—" else "%.0f".format(tx)).append(" B/s\n")
+            }
+            val pt = d.optJSONArray("port_table")
+            if (pt != null) for (j in 0 until pt.length()) pt.optJSONObject(j)?.let { p ->
+                val rt = p.optDouble("rx_bytes-r", 0.0) + p.optDouble("tx_bytes-r", 0.0)
+                if (rt > 1000) sb.append("   poort ").append(p.optInt("port_idx")).append(" ").append(p.optString("name")).append(": ").append("%.0f".format(rt)).append(" B/s\n")
+            }
+        }
+        return sb.toString().ifEmpty { "Geen apparaten van UniFi ontvangen" }
     }
 
     fun configured() = host().isNotBlank() && user().isNotBlank() && pass().isNotBlank()

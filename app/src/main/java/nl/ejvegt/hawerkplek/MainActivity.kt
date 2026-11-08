@@ -1225,6 +1225,17 @@ class MainActivity : Activity() {
                 background = GradientDrawable().apply { setColor(0xFF1E1E1E.toInt()); cornerRadius = dp(12).toFloat() }
                 layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f).apply { if (idx > 0) marginStart = dp(8) }
                 text = if (idx == 0) "🌐 Internet\n—" else "📺 TV (VLAN 7)\n—"
+                // Lang drukken: wat UniFi precies meldt (om te zien waar de snelheden staan)
+                setOnLongClickListener {
+                    thread {
+                        val r = runCatching { unifi.rateDiagnose() }
+                        runOnUiThread {
+                            AlertDialog.Builder(this@MainActivity).setTitle("UniFi-snelheden (B/s)")
+                                .setMessage(r.getOrElse { "Mislukt: ${it.message}" }).setPositiveButton("OK", null).show()
+                        }
+                    }
+                    true
+                }
             }
         }
         inner.addView(LinearLayout(this).apply {
