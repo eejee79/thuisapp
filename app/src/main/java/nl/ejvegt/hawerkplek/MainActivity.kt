@@ -3082,6 +3082,41 @@ class MainActivity : Activity() {
         return sw to wake
     }
 
+    private lateinit var carLocation: TextView
+    @Volatile private var carLatLon: Pair<Double, Double>? = null
+    @Volatile private var carAddrCache: Triple<Double, Double, String>? = null
+
+    /** Positie van de auto via de device_tracker van MySkoda: "Thuis", een zone, of het adres (omgezet op de telefoon). */
+    private fun carWhere(): String? {
+        val tpl = "{% for e in integration_entities('myskoda') if e.startswith('device_tracker.') %}" +
+            "{{ states(e) }}|{{ state_attr(e, 'latitude') }}|{{ state_attr(e, 'longitude') }}|{{ as_timestamp(states[e].last_changed) | int(0) }}\n{% endfor %}"
+        val row = haRequest("POST", "/api/template", JSONObject().put("template", tpl).toString())
+            .lines().firstOrNull { it.count { c -> c == '|' } >= 3 }?.split('|') ?: return null
+        val state = row[0].trim()
+        val la = row[1].trim().toDoubleOrNull(); val lo = row[2].trim().toDoubleOrNull()
+        carLatLon = if (la != null && lo != null) la to lo else null
+        val since = row[3].trim().toLongOrNull()?.takeIf { it > 0 }?.let {
+            val d = java.util.Date(it * 1000)
+            val today = android.text.format.DateUtils.isToday(it * 1000)
+            " · sinds " + java.text.SimpleDateFormat(if (today) "HH:mm" else "d MMM HH:mm", NL).format(d)
+        }.orEmpty()
+        if (state == "home") return "📍 Thuis$since"
+        // Adres alleen opnieuw opzoeken als de auto echt verplaatst is (> 50 m)
+        val addr = if (la != null && lo != null) {
+            carAddrCache?.takeIf { ChargeMap.distance(it.first, it.second, la, lo) < 50 }?.third ?: runCatching {
+                @Suppress("DEPRECATION")
+                val a = android.location.Geocoder(this, NL).getFromLocation(la, lo, 1)?.firstOrNull()
+                listOfNotNull(
+                    listOfNotNull(a?.thoroughfare, a?.subThoroughfare).joinToString(" ").ifBlank { null },
+                    a?.locality,
+                ).joinToString(", ").ifBlank { null }
+            }.getOrNull()?.also { carAddrCache = Triple(la, lo, it) }
+        } else null
+        val zone = state.takeIf { it.isNotBlank() && it != "not_home" && it != "unknown" && it != "unavailable" }
+        return "📍 " + (zone?.replaceFirstChar { it.uppercase() } ?: addr ?: carLatLon?.let { String.format(java.util.Locale.ROOT, "%.4f, %.4f", it.first, it.second) } ?: "onbekend") +
+            (if (zone != null && addr != null) " · $addr" else "") + since + (if (carLatLon != null) "  ›" else "")
+    }
+
     /** Laadstatus volgens de auto zelf (MySkoda), los van welke laadpaal. */
     private class SkodaCharge(val charging: Boolean, val kw: Double?, val minutesLeft: Int?, val type: String?,
                               val plugged: Boolean?, val state: String)
@@ -3162,14 +3197,27 @@ class MainActivity : Activity() {
         fun label(t: String) = TextView(this).apply { text = t; textSize = 13f; setTextColor(0xFFB0B0B0.toInt()) }
 
         // Status + laadlimiet, compact in één kaart
-        val status = card().apply { setPadding(dp(14), dp(10), dp(14), dp(6)) }
+        val status = card().apply { setPadding(dp(16), dp(14), dp(16), dp(8)) }
         carBattery = TextView(this).apply {
-            textSize = 26f; setTextColor(Color.WHITE); setTypeface(typeface, Typeface.BOLD); text = "—"
+            textSize = 32f; setTextColor(Color.WHITE); setTypeface(typeface, Typeface.BOLD); text = "—"
             setPadding(0, 0, dp(12), 0)
         }
         carState = TextView(this).apply {
-            textSize = 13f; setTextColor(0xFFB0B0B0.toInt())
+            textSize = 14f; setTextColor(0xFFB0B0B0.toInt())
             layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
+        }
+        // Waar staat de auto (MySkoda): thuis, of het adres; tik = Google Maps
+        carLocation = TextView(this).apply {
+            textSize = 14f; setTextColor(0xFFE0E0E0.toInt()); text = "📍 Locatie ophalen…"
+            setPadding(dp(10), dp(8), dp(10), dp(8))
+            background = GradientDrawable().apply { setColor(0xFF262626.toInt()); cornerRadius = dp(10).toFloat() }
+            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { topMargin = dp(8); bottomMargin = dp(4) }
+            isClickable = true
+            setOnClickListener {
+                carLatLon?.let { (la, lo) ->
+                    runCatching { startActivity(Intent(Intent.ACTION_VIEW, Uri.parse("geo:$la,$lo?q=$la,$lo(Škoda Elroq)"))) }
+                }
+            }
         }
         (chargeCard.root.parent as? ViewGroup)?.removeView(chargeCard.root)
         (chargeCard.big.parent as? ViewGroup)?.removeView(chargeCard.big)
@@ -3193,6 +3241,7 @@ class MainActivity : Activity() {
             addView(carBattery)
             addView(carState)
         })
+        status.addView(carLocation)
         // Regel 3: schuif voor de laadlimiet
         chargeSlider.seek.layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
         status.addView(chargeSlider.seek)
@@ -3669,6 +3718,7 @@ class MainActivity : Activity() {
             val bat = stateOf(DASH_CAR_BATTERY)
             val swState = sw?.let { stateOf(it) }
             val sk = skodaCharging()
+            val loc = runCatching { carWhere() }.getOrNull()
             val limit = stateOf(DASH_CHARGE_LIMIT)
             val price = stateOf(DASH_PRICE)
             runOnUiThread { showCharge(limit, bat); showCarPrices(price) }
@@ -3679,6 +3729,7 @@ class MainActivity : Activity() {
             runOnUiThread {
                 val b = bat?.optString("state")?.toDoubleOrNull()
                 carBattery.text = if (b != null) "${b.toInt()}%" else "—"
+                carLocation.text = loc ?: "📍 Locatie onbekend (MySkoda geeft geen positie)"
                 // Status van de laadpaal zelf (Peblar): laden / gepauzeerd / geen auto
                 val charging = if (pst != null) pst == "charging" else swState?.optString("state") == "on"
                 // Eindtijd volgens de auto (MySkoda: resterende laadtijd)
