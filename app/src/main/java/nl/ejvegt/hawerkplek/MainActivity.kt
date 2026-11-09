@@ -4474,13 +4474,22 @@ class MainActivity : Activity() {
         runOnUiThread { status.text = "$label starten…" }
         thread {
             Thread.sleep(4_000)  // receiver laten omschakelen en HEOS laten hervatten
-            val list = stateOf(DASH_HEOS)?.optJSONObject("attributes")?.optJSONArray("source_list")
-            val names = list?.let { arr -> (0 until arr.length()).map { arr.optString(it) } } ?: emptyList()
-            val fav = names.firstOrNull { it.contains(match, ignoreCase = true) }
+            fun favs(): List<String> = stateOf(DASH_HEOS)?.optJSONObject("attributes")?.optJSONArray("source_list")
+                ?.let { arr -> (0 until arr.length()).map { arr.optString(it) } } ?: emptyList()
+            var names = favs()
+            var fav = names.firstOrNull { it.contains(match, ignoreCase = true) }
+            if (fav == null) {
+                // HA kent de favorieten van het moment dat de HEOS-integratie laadde: even herladen en opnieuw kijken
+                runOnUiThread { status.text = "$label niet gevonden, HEOS-favorieten verversen…" }
+                quietService("homeassistant/reload_config_entry", JSONObject().put("entity_id", DASH_HEOS))
+                Thread.sleep(8_000)
+                names = favs()
+                fav = names.firstOrNull { it.contains(match, ignoreCase = true) }
+            }
             if (fav == null) {
                 runOnUiThread {
                     status.text = if (names.isEmpty()) "Geen HEOS-favorieten gevonden op $DASH_HEOS."
-                    else "$label niet in je HEOS-favorieten (herlaad de HEOS-integratie). Wel: " + names.take(6).joinToString(", ")
+                    else "$label staat niet tussen de HEOS-favorieten die Home Assistant ziet: " + names.take(12).joinToString(", ")
                 }
                 return@thread
             }
