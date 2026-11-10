@@ -4619,9 +4619,20 @@ class MainActivity : Activity() {
             powerCard.sub.text = "Niet bereikbaar"
             return
         }
-        powerCard.big.text = String.format(NL, "%.0f W", w).replace("-", "−")
-        powerCard.big.setTextColor(if (w < 0) GREEN else AMBER)
-        powerCard.sub.text = (if (w < 0) "teruglevering" else "verbruik") + (solarNowText?.let { "\n$it" } ?: "")
+        val sol = solarNowKw
+        if (sol != null) {
+            // Echt verbruik van het huis = wat van het net komt + wat de panelen nu leveren
+            val house = (w + sol * 1000).coerceAtLeast(0.0)
+            powerCard.big.text = String.format(NL, "%.0f W", house)
+            powerCard.big.setTextColor(AMBER)
+            powerCard.sub.text = "verbruik huis\n" +
+                (if (w < 0) String.format(NL, "net −%.0f W terug", -w) else String.format(NL, "net %.0f W afname", w)) +
+                (solarNowText?.let { "\n$it" } ?: "")
+        } else {
+            powerCard.big.text = String.format(NL, "%.0f W", w).replace("-", "−")
+            powerCard.big.setTextColor(if (w < 0) GREEN else AMBER)
+            powerCard.sub.text = if (w < 0) "teruglevering" else "verbruik"
+        }
         gridW = w
         updateUsageLive()
     }
