@@ -1403,6 +1403,7 @@ class MainActivity : Activity() {
                     c.band, c.channel?.let { "kanaal $it" },
                     c.txMbit?.let { tx -> "$tx/${c.rxMbit ?: "?"} Mbit/s" },
                     c.signal?.let { "$it dBm" },
+                    c.apName?.let { "📡 $it" },
                     c.ssid,
                 ).joinToString(" · ")
                 textSize = 12f; setTextColor(0xFFA8A8A8.toInt()); maxLines = 2
@@ -1421,6 +1422,7 @@ class MainActivity : Activity() {
                     "IP: ${c.ip}", "MAC: ${c.mac}", c.vendor.takeIf { it.isNotBlank() }?.let { "Fabrikant: $it" },
                     c.network?.let { "Netwerk: $it" },
                     if (c.wired) "Kabel" + (c.port?.let { ", poort $it" } ?: "") else listOfNotNull(c.ssid, c.band, c.proto?.let { "wifi-$it".uppercase(NL).replace("WIFI-", "802.11") }).joinToString(" · "),
+                    c.apName?.let { "Access point: $it" },
                     c.channel?.let { "Kanaal: $it" },
                     c.txMbit?.let { "Snelheid: $it Mbit/s naar apparaat, ${c.rxMbit ?: "?"} Mbit/s terug" },
                     c.signal?.let { "Signaal: $it dBm" + when { it >= -60 -> " (goed)"; it >= -70 -> " (redelijk)"; else -> " (zwak)" } },

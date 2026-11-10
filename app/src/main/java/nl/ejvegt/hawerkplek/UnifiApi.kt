@@ -40,6 +40,8 @@ class UnifiApi(private val host: () -> String, private val user: () -> String, p
         val rateBps: Double = 0.0,
         /** Switch/gateway waar dit bekabelde apparaat aan hangt (MAC). */
         val swMac: String? = null,
+        /** Naam van het access point waar dit wifi-apparaat mee verbonden is. */
+        val apName: String? = null,
     )
 
     /**
@@ -215,7 +217,23 @@ class UnifiApi(private val host: () -> String, private val user: () -> String, p
     }
 
     /** Alle nu verbonden apparaten. */
+    private var devNames: Map<String, String> = emptyMap()
+    private var devNamesAt = 0L
+
+    /** MAC → naam van de UniFi-apparaten (access points, switches, gateway); 5 minuten onthouden. */
+    private fun deviceNames(): Map<String, String> {
+        if (devNames.isNotEmpty() && System.currentTimeMillis() - devNamesAt < 300_000) return devNames
+        val arr = runCatching { get("/proxy/network/api/s/default/stat/device-basic").optJSONArray("data") }.getOrNull()
+            ?: runCatching { get("/proxy/network/api/s/default/stat/device").optJSONArray("data") }.getOrNull() ?: return devNames
+        devNames = (0 until arr.length()).mapNotNull { arr.optJSONObject(it) }.associate { d ->
+            d.optString("mac").lowercase() to (d.optString("name").takeIf { it.isNotBlank() && it != "null" } ?: d.optString("model"))
+        }
+        devNamesAt = System.currentTimeMillis()
+        return devNames
+    }
+
     fun clients(): List<Client> {
+        val names = deviceNames()
         val arr = get("/proxy/network/api/s/default/stat/sta").optJSONArray("data") ?: JSONArray()
         return (0 until arr.length()).mapNotNull { arr.optJSONObject(it) }.map { o ->
             fun s(k: String) = o.optString(k).takeIf { it.isNotBlank() && it != "null" }
@@ -238,6 +256,7 @@ class UnifiApi(private val host: () -> String, private val user: () -> String, p
                 network = s("network"),
                 port = if (wired) i("sw_port") else null,
                 swMac = if (wired) s("sw_mac")?.lowercase() else null,
+                apName = if (wired) null else s("ap_mac")?.lowercase()?.let { names[it] ?: it },
                 uptimeS = if (o.has("uptime")) o.optLong("uptime") else null,
                 satisfaction = i("satisfaction"),
                 rateBps = (if (wired) listOf("wired-rx_bytes-r", "wired-tx_bytes-r") else listOf("rx_bytes-r", "tx_bytes-r"))
