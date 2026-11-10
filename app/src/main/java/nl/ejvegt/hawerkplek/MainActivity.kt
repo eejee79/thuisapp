@@ -1403,15 +1403,26 @@ class MainActivity : Activity() {
                     c.band, c.channel?.let { "kanaal $it" },
                     c.txMbit?.let { tx -> "$tx/${c.rxMbit ?: "?"} Mbit/s" },
                     c.signal?.let { "$it dBm" },
-                    c.apName?.let { "📡 $it" },
                     c.ssid,
                 ).joinToString(" · ")
                 textSize = 12f; setTextColor(0xFFA8A8A8.toInt()); maxLines = 2
             })
         })
-        addView(TextView(this@MainActivity).apply {
-            text = c.ip; textSize = 13f; setTextColor(0xFFCFCFCF.toInt()); gravity = Gravity.END
+        // Rechts: IP-adres, met daaronder het access point (bij wifi)
+        addView(LinearLayout(this@MainActivity).apply {
+            orientation = LinearLayout.VERTICAL
+            gravity = Gravity.END
             setPadding(dp(8), 0, 0, 0)
+            addView(TextView(this@MainActivity).apply {
+                text = c.ip; textSize = 13f; setTextColor(0xFFCFCFCF.toInt()); gravity = Gravity.END
+            }, LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { gravity = Gravity.END })
+            c.apName?.let { ap ->
+                addView(TextView(this@MainActivity).apply {
+                    text = "📡 $ap"; textSize = 11f; setTextColor(0xFF8FB8C6.toInt()); gravity = Gravity.END
+                    maxLines = 1; ellipsize = android.text.TextUtils.TruncateAt.END
+                    maxWidth = dp(130)
+                }, LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { gravity = Gravity.END; topMargin = dp(2) })
+            }
         })
         isClickable = true
         setOnClickListener {
