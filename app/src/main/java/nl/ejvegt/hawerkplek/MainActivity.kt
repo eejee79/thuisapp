@@ -1988,8 +1988,8 @@ class MainActivity : Activity() {
     // ================= Home Assistant: schakelaars per ruimte =================
     // Elke schakelaar bedient een vaste lijst lampen (LIGHT_GROUPS bovenaan).
 
-    private class HaLight(val id: String, val name: String, val state: String)
-    private class GroupCard(val root: LinearLayout, val sub: TextView, val sw: Switch)
+    private class HaLight(val id: String, val name: String, val state: String, val brightness: Int? = null, val dimmable: Boolean = false)
+    private class GroupCard(val root: LinearLayout, val sub: TextView, val sw: Switch, val seek: SeekBar) { var dragging = false }
 
     private val groupCards = mutableListOf<GroupCard>()
     private val groupMembers = MutableList(LIGHT_GROUPS.size) { emptyList<HaLight>() }
@@ -1997,14 +1997,18 @@ class MainActivity : Activity() {
 
     private fun buildGroupCards() {
         LIGHT_GROUPS.forEachIndexed { index, (title, _) ->
+            // Kaart: bovenaan naam + schakelaar, daaronder een schuif voor de helderheid
             val root = LinearLayout(this).apply {
-                orientation = LinearLayout.HORIZONTAL
-                gravity = Gravity.CENTER_VERTICAL
+                orientation = LinearLayout.VERTICAL
                 minimumHeight = dp(88)
-                setPadding(dp(20), dp(14), dp(20), dp(14))
+                setPadding(dp(20), dp(14), dp(20), dp(10))
                 layoutParams = LinearLayout.LayoutParams(
                     ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT
                 ).apply { bottomMargin = dp(12) }
+            }
+            val top = LinearLayout(this).apply {
+                orientation = LinearLayout.HORIZONTAL
+                gravity = Gravity.CENTER_VERTICAL
             }
             val texts = LinearLayout(this).apply {
                 orientation = LinearLayout.VERTICAL
@@ -2028,8 +2032,17 @@ class MainActivity : Activity() {
             }
             texts.addView(name)
             texts.addView(sub)
-            root.addView(texts)
-            root.addView(sw)
+            top.addView(texts)
+            top.addView(sw)
+            root.addView(top)
+            val seek = SeekBar(this).apply {
+                max = 100
+                visibility = View.GONE
+                progressTintList = ColorStateList.valueOf(AMBER)
+                thumbTintList = ColorStateList.valueOf(AMBER)
+                layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { topMargin = dp(8) }
+            }
+            root.addView(seek)
 
             sw.setOnCheckedChangeListener { _, checked -> if (!updatingGroupSwitches) setGroup(index, checked) }
             root.setOnClickListener { if (sw.isEnabled) sw.toggle() }
@@ -2038,7 +2051,18 @@ class MainActivity : Activity() {
                 true
             }
             groupList.addView(root)
-            groupCards.add(GroupCard(root, sub, sw))
+            val gc = GroupCard(root, sub, sw, seek)
+            seek.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
+                override fun onProgressChanged(sb: SeekBar, p: Int, fromUser: Boolean) {
+                    if (fromUser) sub.text = "Helderheid ${p.coerceAtLeast(1)}%"
+                }
+                override fun onStartTrackingTouch(sb: SeekBar) { gc.dragging = true }
+                override fun onStopTrackingTouch(sb: SeekBar) {
+                    gc.dragging = false
+                    setGroupBrightness(index, sb.progress.coerceAtLeast(1))
+                }
+            })
+            groupCards.add(gc)
             styleGroupCard(index, null)
         }
     }
@@ -2067,7 +2091,12 @@ class MainActivity : Activity() {
                     if (!id.startsWith("light.")) continue
                     val name = o.optJSONObject("attributes")?.optString("friendly_name")
                         ?.takeIf { it.isNotBlank() } ?: id.removePrefix("light.")
-                    byId[id] = HaLight(id, name, o.optString("state"))
+                    val at = o.optJSONObject("attributes")
+                    val modes = at?.optJSONArray("supported_color_modes")
+                        ?.let { m -> (0 until m.length()).map { m.optString(it) } }.orEmpty()
+                    val dim = modes.any { it != "onoff" } || at?.has("brightness") == true
+                    val br = at?.optInt("brightness", -1)?.takeIf { it >= 0 }
+                    byId[id] = HaLight(id, name, o.optString("state"), br, dim)
                 }
                 // Lamp die niet (meer) in Home Assistant bestaat → tonen als "niet gevonden"
                 val fixed = LIGHT_GROUPS.flatMap { it.second }.filter { !it.startsWith("~") }.toSet()
@@ -2102,18 +2131,42 @@ class MainActivity : Activity() {
             val onCount = usable.count { it.state == "on" }
             card.sw.isEnabled = usable.isNotEmpty()
             card.sw.isChecked = onCount > 0
-            card.sub.text = when {
+            // Helderheid: gemiddelde van de dimbare lampen die aan staan
+            val dims = usable.filter { it.dimmable }
+            val onDims = dims.filter { it.state == "on" && it.brightness != null }
+            val pct = if (onDims.isEmpty()) null else Math.round(onDims.sumOf { it.brightness!! } / onDims.size / 2.55).toInt().coerceIn(1, 100)
+            card.seek.visibility = if (dims.isEmpty()) View.GONE else View.VISIBLE
+            if (!card.dragging) card.seek.progress = pct ?: 0
+            if (!card.dragging) card.sub.text = when {
                 list.isEmpty() -> "Geen lampen gevonden"
                 usable.isEmpty() -> "Niet bereikbaar"
                 onCount == 0 -> "Uit  ·  ${usable.size} lampen"
                 onCount == usable.size -> "Aan  ·  ${usable.size} lampen"
                 else -> "$onCount van ${usable.size} aan"
-            }
+            } + (pct?.let { "  ·  $it%" } ?: "")
             card.sub.setTextColor(if (onCount > 0) AMBER else 0xFFB0B0B0.toInt())
             styleGroupCard(i, if (usable.isEmpty()) null else onCount > 0)
         }
         updatingGroupSwitches = false
         statusText.text = "Lang indrukken toont welke lampen onder een schakelaar vallen.\n" + haRouteLabel()
+    }
+
+    /** Schuif: alle dimbare lampen van de groep op deze helderheid (zet ze ook aan). */
+    private fun setGroupBrightness(index: Int, pct: Int) {
+        val ids = groupMembers[index].filter { it.dimmable && it.state != "not_found" }.map { it.id }
+        if (ids.isEmpty()) return
+        haBusy = true
+        thread {
+            try {
+                haRequest("POST", "/api/services/light/turn_on",
+                    JSONObject().put("entity_id", JSONArray(ids)).put("brightness_pct", pct).toString())
+            } catch (e: Exception) {
+                runOnUiThread { statusText.text = "Dimmen mislukt:\n${e.message}" }
+            } finally {
+                haBusy = false
+                handler.postDelayed({ refreshLights() }, 700)
+            }
+        }
     }
 
     /** Aan = alle lampen van de groep aan; uit = allemaal uit. */
