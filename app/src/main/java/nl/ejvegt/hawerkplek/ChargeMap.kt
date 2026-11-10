@@ -34,10 +34,11 @@ object ChargeMap {
     private const val BASE = "https://dotnl.ndw.nu/api/rest/geojson/dynamic-road-status/charge-point-data/v1/features"
 
     /** Laadpunten rond (lat, lon) binnen ongeveer [radiusKm]; dichtstbijzijnde eerst. */
-    fun near(lat: Double, lon: Double, radiusKm: Double): List<Station> {
-        val dLat = radiusKm / 111.0
-        val dLon = radiusKm / (111.0 * cos(Math.toRadians(lat)))
-        val bbox = "%.6f,%.6f,%.6f,%.6f".format(java.util.Locale.ROOT, lon - dLon, lat - dLat, lon + dLon, lat + dLat)
+    /** Hoeveel losse laadpunten NDW bij de laatste zoekactie teruggaf (voor de statusregel). */
+    @Volatile var lastRawCount = 0
+
+    private fun fetchBox(minLon: Double, minLat: Double, maxLon: Double, maxLat: Double): JSONArray {
+        val bbox = "%.6f,%.6f,%.6f,%.6f".format(java.util.Locale.ROOT, minLon, minLat, maxLon, maxLat)
         val conn = URL("$BASE?bbox=$bbox").openConnection() as HttpURLConnection
         conn.connectTimeout = 8_000
         conn.readTimeout = 20_000
@@ -47,11 +48,35 @@ object ChargeMap {
         if (code == 429) throw IOException("NDW: even te veel vragen, probeer het zo opnieuw")
         if (code !in 200..299) throw IOException("NDW gaf fout $code")
         val raw = conn.inputStream.let { if (conn.contentEncoding == "gzip") GZIPInputStream(it) else it }
-        val text = raw.bufferedReader().use { it.readText() }
-        val feats = JSONObject(text).optJSONArray("features") ?: JSONArray()
+        return JSONObject(raw.bufferedReader().use { it.readText() }).optJSONArray("features") ?: JSONArray()
+    }
+
+    /**
+     * Alle laadpunten in een gebied. NDW geeft hoogstens 1000 punten per vraag (willekeurig, niet de
+     * dichtstbijzijnde): bij 1000 het gebied in vieren delen en opnieuw vragen, zodat er niets wegvalt.
+     */
+    private fun fetchAll(minLon: Double, minLat: Double, maxLon: Double, maxLat: Double, depth: Int, out: MutableList<JSONObject>) {
+        val feats = fetchBox(minLon, minLat, maxLon, maxLat)
+        if (feats.length() >= 1000 && depth < 4) {
+            val midLon = (minLon + maxLon) / 2; val midLat = (minLat + maxLat) / 2
+            for ((a, b) in listOf(minLon to minLat, midLon to minLat, minLon to midLat, midLon to midLat)) {
+                Thread.sleep(120)   // ruim binnen 10 vragen per seconde
+                fetchAll(a, b, a + (maxLon - minLon) / 2, b + (maxLat - minLat) / 2, depth + 1, out)
+            }
+            return
+        }
+        for (i in 0 until feats.length()) feats.optJSONObject(i)?.let { out.add(it) }
+    }
+
+    /** Laadpunten rond (lat, lon) binnen ongeveer [radiusKm]; dichtstbijzijnde eerst. */
+    fun near(lat: Double, lon: Double, radiusKm: Double): List<Station> {
+        val dLat = radiusKm / 111.0
+        val dLon = radiusKm / (111.0 * cos(Math.toRadians(lat)))
+        val feats = mutableListOf<JSONObject>()
+        fetchAll(lon - dLon, lat - dLat, lon + dLon, lat + dLat, 0, feats)
+        lastRawCount = feats.size
         val out = mutableListOf<Station>()
-        for (i in 0 until feats.length()) {
-            val f = feats.optJSONObject(i) ?: continue
+        for (f in feats.distinctBy { it.optJSONObject("properties")?.toString() + it.optJSONObject("geometry")?.toString() }) {
             parse(f, lat, lon)?.let { out.add(it) }
         }
         // Zelfde plek (meerdere laadpunten van één locatie) samenvoegen

@@ -3555,7 +3555,18 @@ class MainActivity : Activity() {
                 val (o, radius, list) = res
                 nearStatus.text = if (list.isEmpty()) "Geen laadpalen gevonden binnen ${radius.toInt()} km van ${o.third}"
                     else "${list.size} locaties binnen ${radius.toInt()} km van ${o.third} · bron: ${if (nearBelgium) "Open Charge Map" else "NDW"} · tik voor route"
-                list.take(12).forEach { st -> nearList.addView(chargerRow(st)) }
+                // Eerst 15, met "meer tonen" voor de rest
+                fun addFrom(start: Int) {
+                    list.drop(start).take(15).forEach { st -> nearList.addView(chargerRow(st)) }
+                    if (list.size > start + 15) nearList.addView(TextView(this).apply {
+                        text = "Meer tonen (${list.size - start - 15})"
+                        textSize = 14f; setTextColor(0xFF4FC3F7.toInt()); setTypeface(typeface, Typeface.BOLD); gravity = Gravity.CENTER
+                        setPadding(0, dp(12), 0, dp(12))
+                        isClickable = true
+                        setOnClickListener { nearList.removeView(this); addFrom(start + 15) }
+                    })
+                }
+                addFrom(0)
             }
         }
     }
