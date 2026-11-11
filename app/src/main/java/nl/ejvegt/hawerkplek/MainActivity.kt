@@ -7663,13 +7663,16 @@ class MainActivity : Activity() {
 
     /** Kodi draait en luistert? Zo niet: box aan en Kodi starten, dan wachten tot hij antwoordt. */
     private fun kodiEnsureRunning(): Boolean {
-        if (kodi.ping()) return true
         if (kodiOnTv) {
-            // TV+-ontvanger: Kodi openen via de Android TV-afstandsbediening in HA
+            // TV+-ontvanger: Kodi ALTIJD naar voren halen. Kodi kan op de achtergrond nog antwoorden,
+            // maar dan speelt hij af zonder beeld. Openen via de Android TV-afstandsbediening in HA.
+            quietService("remote/turn_on", JSONObject().put("entity_id", TVPLUS_REMOTE))
             quietService("remote/turn_on", JSONObject().put("entity_id", TVPLUS_REMOTE).put("activity", KODI_PKG))
-            repeat(25) { Thread.sleep(1_000); if (kodi.ping()) return true }
+            Thread.sleep(2_000)
+            repeat(25) { if (kodi.ping()) return true; Thread.sleep(1_000) }
             return false
         }
+        if (kodi.ping()) return true
         // Box altijd aanzetten (doet niets als hij al aan staat), ook als HA denkt dat hij aan is
         val wasOn = currentMediaState() == "on"
         quietService("remote/turn_on", JSONObject().put("entity_id", MEDIA_REMOTE))
