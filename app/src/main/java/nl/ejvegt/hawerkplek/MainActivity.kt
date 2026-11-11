@@ -7074,7 +7074,8 @@ class MainActivity : Activity() {
             thread {
                 var p: Triple<Int, Pair<Double, Double>, Boolean>? = null
                 var tvNow = activeTv
-                for (tv in listOf(kodiOnTv, !kodiOnTv).filter { usable(it) }) {
+                // Alleen de ontvanger die bovenaan gekozen is (GoogleTV-box of TV+ woonkamer)
+                for (tv in listOf(kodiOnTv).filter { usable(it) }) {
                     p = runCatching { api(tv).progress() }.getOrNull()
                     if (p != null) { tvNow = tv; break }
                 }
