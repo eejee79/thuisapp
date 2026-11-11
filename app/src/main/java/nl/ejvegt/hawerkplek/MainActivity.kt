@@ -2435,10 +2435,6 @@ class MainActivity : Activity() {
 
             sw.setOnCheckedChangeListener { _, checked -> if (!updatingGroupSwitches) setGroup(index, checked) }
             root.setOnClickListener { if (sw.isEnabled) sw.toggle() }
-            root.setOnLongClickListener {
-                showGroupMembers(index)
-                true
-            }
             groupList.addView(root)
             val gc = GroupCard(root, sub, sw, seek)
             seek.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
