@@ -860,6 +860,7 @@ class MainActivity : Activity() {
             row("🗂   Tabbladen tonen") { chooseTabs() }
             row("⇪   Instellingen exporteren") { exportSettings() }
             row("⇩   Instellingen importeren") { importSettings() }
+            row("▦   Overzetten via QR-code") { qrTransfer() }
         }
         findViewById<Button>(R.id.updateSaveButton).setOnClickListener { saveUpdateSettings() }
         findViewById<Button>(R.id.checkUpdateButton).setOnClickListener {
@@ -1773,6 +1774,105 @@ class MainActivity : Activity() {
                         type = "application/octet-stream"
                         putExtra(Intent.EXTRA_TITLE, "thuisbasis-instellingen-$day.tbk")
                     }, REQ_EXPORT)
+                }
+            }
+        }
+    }
+
+    // ---- Overzetten via QR-code (zelfde versleuteling met pincode als het bestand) ----
+    private fun qrTransfer() {
+        AlertDialog.Builder(this).setTitle("Overzetten via QR-code")
+            .setItems(arrayOf("QR-code tonen  (dit toestel heeft de instellingen)", "QR-code scannen  (dit is het nieuwe toestel)", "Code plakken  (als tekst ontvangen)")) { _, w ->
+                when (w) { 0 -> showSettingsQr(); 1 -> scanSettingsQr(); else -> pasteSettingsCode() }
+            }.setNegativeButton("Annuleren", null).show()
+    }
+
+    private fun qrBitmap(text: String): android.graphics.Bitmap {
+        val hints = mapOf(
+            com.google.zxing.EncodeHintType.ERROR_CORRECTION to com.google.zxing.qrcode.decoder.ErrorCorrectionLevel.L,
+            com.google.zxing.EncodeHintType.MARGIN to 2,
+        )
+        val m = com.google.zxing.qrcode.QRCodeWriter().encode(text, com.google.zxing.BarcodeFormat.QR_CODE, 0, 0, hints)
+        val scale = 8
+        val w = m.width * scale; val h = m.height * scale
+        val px = IntArray(w * h)
+        for (y in 0 until h) for (x in 0 until w) px[y * w + x] = if (m.get(x / scale, y / scale)) Color.BLACK else Color.WHITE
+        return android.graphics.Bitmap.createBitmap(px, w, h, android.graphics.Bitmap.Config.ARGB_8888)
+    }
+
+    private fun showSettingsQr() {
+        pinDialog("Pincode voor de QR-code", twice = true) { pin ->
+            thread {
+                val r = runCatching { val code = SettingsBackup.exportQr(prefs(), pin); code to qrBitmap(code) }
+                runOnUiThread {
+                    val (code, bmp) = r.getOrNull() ?: run {
+                        AlertDialog.Builder(this).setTitle("QR-code maken mislukt")
+                            .setMessage("Te veel gegevens voor één QR-code (${r.exceptionOrNull()?.message ?: ""}). Gebruik ‘Instellingen exporteren’ als bestand.")
+                            .setPositiveButton("OK", null).show()
+                        return@runOnUiThread
+                    }
+                    val box = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(dp(16), dp(8), dp(16), 0) }
+                    box.addView(android.widget.ImageView(this).apply {
+                        setImageBitmap(bmp); adjustViewBounds = true; setBackgroundColor(Color.WHITE)
+                        setPadding(dp(8), dp(8), dp(8), dp(8))
+                    }, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
+                    box.addView(TextView(this).apply {
+                        text = "Op het andere toestel: ⚙ → Overzetten via QR-code → QR-code scannen, en dezelfde pincode invullen. Zonder pincode is de code onleesbaar."
+                        textSize = 13f; setTextColor(0xFF9A9A9A.toInt()); setPadding(0, dp(10), 0, 0)
+                    })
+                    val lp = window.attributes; val oldBright = lp.screenBrightness
+                    window.attributes = lp.apply { screenBrightness = 1f }   // helderder scherm scant makkelijker
+                    AlertDialog.Builder(this).setTitle("Scan met het andere toestel").setView(ScrollView(this).apply { addView(box) })
+                        .setPositiveButton("Klaar", null)
+                        .setNeutralButton("Als tekst delen") { _, _ ->
+                            startActivity(Intent.createChooser(Intent(Intent.ACTION_SEND).apply { type = "text/plain"; putExtra(Intent.EXTRA_TEXT, code) }, "Instellingencode delen"))
+                        }
+                        .setOnDismissListener { window.attributes = window.attributes.apply { screenBrightness = oldBright } }
+                        .show()
+                }
+            }
+        }
+    }
+
+    private fun scanSettingsQr() {
+        val opts = com.google.mlkit.vision.codescanner.GmsBarcodeScannerOptions.Builder()
+            .setBarcodeFormats(com.google.mlkit.vision.barcode.common.Barcode.FORMAT_QR_CODE).build()
+        com.google.mlkit.vision.codescanner.GmsBarcodeScanning.getClient(this, opts).startScan()
+            .addOnSuccessListener { b -> importSettingsCode(b.rawValue ?: "") }
+            .addOnFailureListener { e ->
+                AlertDialog.Builder(this).setTitle("Scannen lukt niet")
+                    .setMessage("${e.message ?: "Onbekende fout"}\n\nProbeer het zo nog eens (de scanner wordt de eerste keer door Google Play gedownload), of kies ‘Code plakken’.")
+                    .setPositiveButton("OK", null).show()
+            }
+    }
+
+    private fun pasteSettingsCode() {
+        val clip = (getSystemService(Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager).primaryClip
+            ?.takeIf { it.itemCount > 0 }?.getItemAt(0)?.coerceToText(this)?.toString().orEmpty()
+        val input = EditText(this).apply {
+            hint = "Plak hier de code (begint met ${SettingsBackup.QR_PREFIX})"
+            if (clip.trim().startsWith(SettingsBackup.QR_PREFIX)) setText(clip.trim())
+            maxLines = 4
+        }
+        val box = LinearLayout(this).apply { setPadding(dp(20), dp(8), dp(20), 0); addView(input, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)) }
+        AlertDialog.Builder(this).setTitle("Code plakken").setView(box)
+            .setPositiveButton("Verder") { _, _ -> importSettingsCode(input.text.toString()) }
+            .setNegativeButton("Annuleren", null).show()
+    }
+
+    private fun importSettingsCode(code: String) {
+        if (!code.trim().startsWith(SettingsBackup.QR_PREFIX)) {
+            Toast.makeText(this, "Dit is geen instellingencode van Thuisbasis", Toast.LENGTH_LONG).show(); return
+        }
+        pinDialog("Pincode van de QR-code", twice = false) { pin ->
+            thread {
+                val r = runCatching { SettingsBackup.import(prefs(), code, pin) }
+                runOnUiThread {
+                    if (r.isSuccess) {
+                        Toast.makeText(this, "${r.getOrNull()} instellingen overgenomen", Toast.LENGTH_LONG).show()
+                        recreate()
+                    } else AlertDialog.Builder(this).setTitle("Overzetten mislukt")
+                        .setMessage(r.exceptionOrNull()?.message ?: "Onbekende fout").setPositiveButton("OK", null).show()
                 }
             }
         }

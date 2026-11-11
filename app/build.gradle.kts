@@ -20,8 +20,8 @@ android {
         applicationId = "nl.ejvegt.hawerkplek"
         minSdk = 26
         targetSdk = 35
-        versionCode = 226
-        versionName = "3.25"
+        versionCode = 227
+        versionName = "3.26"
 
         buildConfigField("String", "HA_URL", "\"${localProp("HA_URL")}\"")
         buildConfigField("String", "HA_URL_LOCAL", "\"${localProp("HA_URL_LOCAL")}\"")
@@ -88,4 +88,6 @@ android {
 dependencies {
     implementation("com.hierynomus:smbj:0.13.0")
     implementation("com.squareup.okhttp3:okhttp:4.12.0")   // websocket naar HA (statistieken)
+    implementation("com.google.zxing:core:3.5.3")                                // QR-code maken (instellingen overzetten)
+    implementation("com.google.android.gms:play-services-code-scanner:16.1.0")   // QR-code scannen via Google Play (geen cameratoestemming nodig)
 }

@@ -10,6 +10,10 @@ import javax.crypto.SecretKeyFactory
 import javax.crypto.spec.GCMParameterSpec
 import javax.crypto.spec.PBEKeySpec
 import javax.crypto.spec.SecretKeySpec
+import java.io.ByteArrayInputStream
+import java.io.ByteArrayOutputStream
+import java.util.zip.GZIPInputStream
+import java.util.zip.GZIPOutputStream
 
 /**
  * Alle instellingen van de app als één versleuteld bestand (AES-256-GCM, sleutel uit de pincode via PBKDF2).
@@ -51,8 +55,65 @@ object SettingsBackup {
             .put("salt", b64(salt)).put("iv", b64(iv)).put("data", b64(enc)).toString()
     }
 
+    // ---- Compacte variant voor een QR-code: gecomprimeerd, zonder tijdelijke gegevens, zelfde versleuteling ----
+    const val QR_PREFIX = "TB1:"
+    /** Tijdelijke/toestelgebonden gegevens die niet mee hoeven naar een ander toestel. */
+    private fun skipForQr(k: String) = k == "tab" || k == "ma_started" || k.startsWith("arr_season_")
+
+    fun exportQr(prefs: SharedPreferences, pin: String): String {
+        val data = JSONObject()
+        for ((k, v) in prefs.all) {
+            if (skipForQr(k)) continue
+            val e = when (v) {
+                is String -> JSONArray().put("s").put(v)
+                is Int -> JSONArray().put("i").put(v)
+                is Long -> JSONArray().put("l").put(v)
+                is Boolean -> JSONArray().put("b").put(v)
+                is Float -> JSONArray().put("f").put(v.toDouble())
+                is Set<*> -> JSONArray().put("ss").put(JSONArray(v.map { it.toString() }))
+                else -> null
+            } ?: continue
+            data.put(k, e)
+        }
+        val zipped = ByteArrayOutputStream().also { bo -> GZIPOutputStream(bo).use { it.write(data.toString().toByteArray(Charsets.UTF_8)) } }.toByteArray()
+        val rnd = SecureRandom()
+        val salt = ByteArray(16).also { rnd.nextBytes(it) }
+        val iv = ByteArray(12).also { rnd.nextBytes(it) }
+        val c = Cipher.getInstance("AES/GCM/NoPadding")
+        c.init(Cipher.ENCRYPT_MODE, key(pin, salt), GCMParameterSpec(128, iv))
+        return QR_PREFIX + b64(salt + iv + c.doFinal(zipped))
+    }
+
+    private fun importQr(prefs: SharedPreferences, text: String, pin: String): Int {
+        val raw = unb64(text.trim().removePrefix(QR_PREFIX))
+        if (raw.size < 29) throw IllegalArgumentException("Dit is geen QR-code van Thuisbasis")
+        val c = Cipher.getInstance("AES/GCM/NoPadding")
+        c.init(Cipher.DECRYPT_MODE, key(pin, raw.copyOfRange(0, 16)), GCMParameterSpec(128, raw.copyOfRange(16, 28)))
+        val zipped = runCatching { c.doFinal(raw.copyOfRange(28, raw.size)) }
+            .getOrElse { throw IllegalArgumentException("Pincode klopt niet") }
+        val data = JSONObject(GZIPInputStream(ByteArrayInputStream(zipped)).use { String(it.readBytes(), Charsets.UTF_8) })
+        val ed = prefs.edit()
+        var n = 0
+        for (k in data.keys()) {
+            val e = data.getJSONArray(k)
+            when (e.getString(0)) {
+                "s" -> ed.putString(k, e.getString(1))
+                "i" -> ed.putInt(k, e.getInt(1))
+                "l" -> ed.putLong(k, e.getLong(1))
+                "b" -> ed.putBoolean(k, e.getBoolean(1))
+                "f" -> ed.putFloat(k, e.getDouble(1).toFloat())
+                "ss" -> ed.putStringSet(k, e.getJSONArray(1).let { a -> (0 until a.length()).map { a.getString(it) }.toSet() })
+                else -> continue
+            }
+            n++
+        }
+        ed.commit()
+        return n
+    }
+
     /** Geeft het aantal teruggezette instellingen; gooit een fout bij een verkeerde pincode of een ander bestand. */
     fun import(prefs: SharedPreferences, file: String, pin: String): Int {
+        if (file.trim().startsWith(QR_PREFIX)) return importQr(prefs, file, pin)
         val o = JSONObject(file)
         if (o.optString("app") != "thuisbasis") throw IllegalArgumentException("Dit is geen instellingenbestand van Thuisbasis")
         val c = Cipher.getInstance("AES/GCM/NoPadding")
