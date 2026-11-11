@@ -669,12 +669,21 @@ class MainActivity : Activity() {
         )
     }
     private fun osLangs() = prefs().getString(KEY_OS_LANG, "")!!.trim().ifEmpty { "nl,en" }
+    /** Kodi draait op twee apparaten: de GoogleTV-box en (sinds 3.22) de TV+-ontvanger in de woonkamer. */
+    private var kodiOnTv: Boolean
+        get() = prefs().getBoolean("kodi_target_tv", false)
+        set(v) { prefs().edit().putBoolean("kodi_target_tv", v).apply() }
+    private fun kodiTvConfigured() = (prefs().getString("kodi_tv_pass", "") ?: "").isNotEmpty()
+    /** De afstandsbediening die bij de Kodi hoort die nu gekozen is. */
+    private fun kodiRemote() = if (kodiOnTv) TVPLUS_REMOTE else MEDIA_REMOTE
+
     private val kodi by lazy {
         KodiApi(
-            { prefs().getString(KEY_KODI_HOST, "")!!.trim().ifEmpty { KODI_DEFAULT_HOST } },
-            { prefs().getString(KEY_KODI_PORT, "")!!.trim().ifEmpty { "8080" } },
-            { prefs().getString(KEY_KODI_USER, "")!!.trim().ifEmpty { "kodi" } },
-            { prefs().getString(KEY_KODI_PASS, "") ?: "" },
+            { if (kodiOnTv) prefs().getString("kodi_tv_host", "")!!.trim().ifEmpty { "192.168.7.15" }
+              else prefs().getString(KEY_KODI_HOST, "")!!.trim().ifEmpty { KODI_DEFAULT_HOST } },
+            { (if (kodiOnTv) prefs().getString("kodi_tv_port", "") else prefs().getString(KEY_KODI_PORT, ""))!!.trim().ifEmpty { "8080" } },
+            { (if (kodiOnTv) prefs().getString("kodi_tv_user", "") else prefs().getString(KEY_KODI_USER, ""))!!.trim().ifEmpty { "kodi" } },
+            { (if (kodiOnTv) prefs().getString("kodi_tv_pass", "") else prefs().getString(KEY_KODI_PASS, "")) ?: "" },
         )
     }
     private lateinit var updateSection: View
@@ -1251,6 +1260,13 @@ class MainActivity : Activity() {
         content.addView(netPanel, content.indexOfChild(findViewById(R.id.settingsButton)),
             android.widget.FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
 
+        // ⚙ → API's → Kodi op de TV+-ontvanger
+        findViewById<LinearLayout>(R.id.apiMenu).addView(TextView(this).apply {
+            text = "Kodi op TV+ woonkamer"; textSize = 17f; setTextColor(Color.WHITE)
+            setBackgroundColor(0xFF1E1E1E.toInt()); setPadding(dp(18), dp(18), dp(18), dp(18))
+            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { topMargin = dp(12) }
+            isClickable = true; setOnClickListener { showKodiTvSettings() }
+        })
         // ⚙ → API's → UniFi
         findViewById<LinearLayout>(R.id.apiMenu).addView(TextView(this).apply {
             text = "UniFi (netwerk)"; textSize = 17f; setTextColor(Color.WHITE)
@@ -1258,6 +1274,44 @@ class MainActivity : Activity() {
             layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { topMargin = dp(12) }
             isClickable = true; setOnClickListener { showUnifiSettings() }
         })
+    }
+
+    private fun showKodiTvSettings() {
+        val box = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(dp(20), dp(8), dp(20), 0) }
+        fun field(hint: String, key: String, def: String, secret: Boolean) = EditText(this).apply {
+            this.hint = hint; setText(prefs().getString(key, "")!!.ifEmpty { def }); setSingleLine()
+            if (secret) inputType = android.text.InputType.TYPE_CLASS_TEXT or android.text.InputType.TYPE_TEXT_VARIATION_PASSWORD
+            box.addView(this)
+        }
+        box.addView(TextView(this).apply {
+            text = "Kodi op de TV+-ontvanger (Instellingen → Diensten → Bediening → HTTP aan). Blijft alleen op dit toestel."
+            textSize = 13f; setTextColor(0xFF9A9A9A.toInt())
+        })
+        val h = field("IP-adres", "kodi_tv_host", "192.168.7.15", false)
+        val p = field("Poort", "kodi_tv_port", "8080", false)
+        val u = field("Gebruikersnaam", "kodi_tv_user", "kodi", false)
+        val pw = field("Wachtwoord", "kodi_tv_pass", "", true)
+        val status = TextView(this).apply { textSize = 13f; setTextColor(0xFFB0B0B0.toInt()); setPadding(0, dp(8), 0, 0) }
+        box.addView(status)
+        val d = AlertDialog.Builder(this)
+            .setTitle("Kodi op TV+ woonkamer")
+            .setView(box)
+            .setPositiveButton("Opslaan en testen", null)
+            .setNegativeButton("Sluiten", null)
+            .show()
+        d.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener {
+            prefs().edit().putString("kodi_tv_host", h.text.toString().trim()).putString("kodi_tv_port", p.text.toString().trim())
+                .putString("kodi_tv_user", u.text.toString().trim()).putString("kodi_tv_pass", pw.text.toString())
+                .remove("arr_map_tv").apply()
+            status.text = "Testen…"
+            thread {
+                val was = kodiOnTv
+                kodiOnTv = true
+                val ok = kodi.ping()
+                kodiOnTv = was
+                runOnUiThread { status.text = if (ok) "Werkt ✓" else "Geen antwoord. Staat Kodi open op de ontvanger, met HTTP-bediening aan?" }
+            }
+        }
     }
 
     private fun showUnifiSettings() {
@@ -6145,7 +6199,7 @@ class MainActivity : Activity() {
             prefs().edit()
                 .putString("arr_sonarr_url", su.text.toString().trim()).putString("arr_sonarr_key", sk.text.toString().trim())
                 .putString("arr_radarr_url", ru.text.toString().trim()).putString("arr_radarr_key", rk.text.toString().trim())
-                .remove("arr_map").apply()
+                .remove("arr_map").remove("arr_map_tv").apply()
             status.text = "Testen…"
             thread {
                 fun t(a: ArrApi) = if (!a.configured()) "niet ingevuld" else runCatching { "werkt ✓ (v${a.ping()})" }.getOrElse { "lukt niet: ${it.message}" }
@@ -6173,7 +6227,8 @@ class MainActivity : Activity() {
         val p = arrPath.replace('\\', '/')
         val root = arrRootFolders().firstOrNull { p.startsWith(it) } ?: (p.substringBeforeLast('/').substringBeforeLast('/') + "/")
         val rel = p.removePrefix(root)
-        val map = runCatching { JSONObject(prefs().getString("arr_map", "{}") ?: "{}") }.getOrDefault(JSONObject())
+        val mapKey = if (kodiOnTv) "arr_map_tv" else "arr_map"
+        val map = runCatching { JSONObject(prefs().getString(mapKey, "{}") ?: "{}") }.getOrDefault(JSONObject())
         map.optString(root).takeIf { it.isNotEmpty() }?.let { return it + rel }
         if (!kodiConfigured()) return null
         val first = rel.substringBefore('/')
@@ -6184,7 +6239,7 @@ class MainActivity : Activity() {
             if (items.any { it.isDir && it.file.trimEnd('/').substringAfterLast('/').equals(first, true) }) {
                 val base = c.file.trimEnd('/') + "/"
                 map.put(root, base)
-                prefs().edit().putString("arr_map", map.toString()).apply()
+                prefs().edit().putString(mapKey, map.toString()).apply()
                 return base + rel
             }
         }
@@ -6193,7 +6248,21 @@ class MainActivity : Activity() {
 
     /** Bestand via Kodi afspelen (met kijkstatus/verder kijken). */
     private fun playArrFile(arrPath: String, label: String, onStarted: () -> Unit) {
-        mediaStatus.text = "$label zoeken in Kodi…"
+        if (!kodiTvConfigured()) { kodiOnTv = false; playArrFileOn(arrPath, label, onStarted); return }
+        val opts = arrayOf("GoogleTV-box", "TV+ woonkamer")
+        AlertDialog.Builder(this)
+            .setTitle("$label afspelen op")
+            .setSingleChoiceItems(opts, if (kodiOnTv) 1 else 0) { d, i ->
+                d.dismiss()
+                kodiOnTv = i == 1
+                playArrFileOn(arrPath, label, onStarted)
+            }
+            .setNegativeButton("Annuleren", null)
+            .show()
+    }
+
+    private fun playArrFileOn(arrPath: String, label: String, onStarted: () -> Unit) {
+        mediaStatus.text = "$label zoeken in Kodi (${if (kodiOnTv) "TV+ woonkamer" else "GoogleTV-box"})…"
         thread {
             val kp = runCatching { kodiPathFor(arrPath) }.getOrNull()
             val e = kp?.let { f -> runCatching { kodi.details(KodiApi.Entry(label, f, false, false, 0.0, 0.0)) }.getOrElse { KodiApi.Entry(label, f, false, false, 0.0, 0.0) } }
@@ -6583,12 +6652,12 @@ class MainActivity : Activity() {
                     addView(title); addView(sub)
                 })
                 addView(btn("CC", "Ondertitels en audio", false) { showKodiSubsSheet() })
-                addView(btn("⌖", "Afstandsbediening", false) { showRemoteSheet(MEDIA_REMOTE, false) })
+                addView(btn("⌖", "Afstandsbediening", false) { showRemoteSheet(kodiRemote(), false) })
                 addView(playBtn)
             })
             addView(track)
             isClickable = true
-            setOnClickListener { showRemoteSheet(MEDIA_REMOTE, false) }
+            setOnClickListener { showRemoteSheet(kodiRemote(), false) }
         }
         lateinit var tick: Runnable
         tick = Runnable {
@@ -7212,7 +7281,7 @@ class MainActivity : Activity() {
 
     // ================= Kodi: bibliotheek bladeren, afspelen, ondertitels =================
 
-    private fun kodiConfigured() = (prefs().getString(KEY_KODI_PASS, "") ?: "").isNotEmpty()
+    private fun kodiConfigured() = if (kodiOnTv) kodiTvConfigured() else (prefs().getString(KEY_KODI_PASS, "") ?: "").isNotEmpty()
 
     private fun saveKodiSettings() {
         prefs().edit()
@@ -7561,6 +7630,12 @@ class MainActivity : Activity() {
     /** Kodi draait en luistert? Zo niet: box aan en Kodi starten, dan wachten tot hij antwoordt. */
     private fun kodiEnsureRunning(): Boolean {
         if (kodi.ping()) return true
+        if (kodiOnTv) {
+            // TV+-ontvanger: Kodi openen via de Android TV-afstandsbediening in HA
+            quietService("remote/turn_on", JSONObject().put("entity_id", TVPLUS_REMOTE).put("activity", KODI_PKG))
+            repeat(25) { Thread.sleep(1_000); if (kodi.ping()) return true }
+            return false
+        }
         // Box altijd aanzetten (doet niets als hij al aan staat), ook als HA denkt dat hij aan is
         val wasOn = currentMediaState() == "on"
         quietService("remote/turn_on", JSONObject().put("entity_id", MEDIA_REMOTE))
@@ -7582,7 +7657,7 @@ class MainActivity : Activity() {
             onStarted()
             val name = e.label.substringBeforeLast('.').ifEmpty { e.label }
             mediaStatus.text = "$name starten in Kodi…"
-            thread { prepareWatching(SOURCE_APPS) }   // tv + receiver klaarzetten
+            thread { prepareWatching(if (kodiOnTv) "KPN Hangplek" else SOURCE_APPS) }   // tv + receiver klaarzetten
             thread {
                 val r = runCatching {
                     if (!kodiEnsureRunning()) throw IOException("Kodi reageert niet (staat http-bediening aan?)")
@@ -7621,7 +7696,7 @@ class MainActivity : Activity() {
             runOnUiThread {
                 if (res.isFailure) { mediaStatus.text = "Mislukt: ${res.exceptionOrNull()?.message}"; return@runOnUiThread }
                 Toast.makeText(this, "Kies de ondertitel op de tv", Toast.LENGTH_LONG).show()
-                showRemoteSheet(MEDIA_REMOTE, false)
+                showRemoteSheet(kodiRemote(), false)
             }
         }
     }
@@ -11150,7 +11225,7 @@ class MainActivity : Activity() {
                 }
             })
         } else content.addView(TextView(this).apply {
-            text = "GoogleTV Box"
+            text = if (remote == TVPLUS_REMOTE) "TV+ woonkamer · Kodi" else "GoogleTV Box"
             textSize = 19f
             setTextColor(Color.WHITE)
             setTypeface(typeface, Typeface.BOLD)
