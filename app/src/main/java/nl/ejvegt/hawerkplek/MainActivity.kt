@@ -165,6 +165,8 @@ class MainActivity : Activity() {
         /** De TV+-box achter die Denon-ingang ("KPN Hangplek" in HA). */
         const val TVPLUS_REMOTE = "remote.kpn_diw7022"
         const val TVPLUS_PLAYER = "media_player.kpn_diw7022"
+        /** Dezelfde TV+-box via de Android Debug Bridge-integratie (Kodi geforceerd stoppen/starten). */
+        const val TVPLUS_ADB = "media_player.tv_woonkamer"
         /** Tweede TV+-ontvanger (werkplek; geluid via optisch, dus geen volumeregeling). */
         const val TVPLUS2_REMOTE = "remote.tv_werkplek"
         const val TVPLUS2_PLAYER = "media_player.tv_werkplek"
@@ -5698,18 +5700,32 @@ class MainActivity : Activity() {
 
     /** Kodi vastgelopen? Geforceerd stoppen (en desgewenst opnieuw starten) via ADB. */
     private fun kodiTileMenu() {
+        val onTv = kodiOnTv
+        val adbEntity = if (onTv) TVPLUS_ADB else MEDIA_ADB
+        val launch = "monkey -p $KODI_PKG -c android.intent.category.LEANBACK_LAUNCHER -c android.intent.category.LAUNCHER 1"
         AlertDialog.Builder(this)
-            .setTitle("Kodi")
+            .setTitle(if (onTv) "Kodi · TV+ woonkamer" else "Kodi · GoogleTV-box")
             .setItems(arrayOf("⏹  Kodi geforceerd stoppen", "↻  Kodi herstarten", "▶  Kodi openen op de tv", "📁  Mappen bladeren")) { _, i ->
-                if (i == 2) { MEDIA_APPS.firstOrNull { it.pkg == KODI_PKG }?.let { launchApp(it) }; return@setItems }
+                if (i == 2 && !onTv) { MEDIA_APPS.firstOrNull { it.pkg == KODI_PKG }?.let { launchApp(it) }; return@setItems }
+                if (i == 2) {
+                    mediaStatus.text = "Kodi openen op TV+…"
+                    thread {
+                        prepareWatching(SOURCE_TV)
+                        quietService("remote/turn_on", JSONObject().put("entity_id", TVPLUS_REMOTE))
+                        Thread.sleep(1_500)
+                        quietService("androidtv/adb_command", JSONObject().put("entity_id", TVPLUS_ADB).put("command", launch))
+                        runOnUiThread { mediaStatus.text = "Kodi is geopend op TV+" }
+                    }
+                    return@setItems
+                }
                 if (i == 3) { showKodiSheet(); return@setItems }
                 mediaStatus.text = if (i == 0) "Kodi stoppen…" else "Kodi herstarten…"
                 thread {
-                    quietService("androidtv/adb_command", JSONObject().put("entity_id", MEDIA_ADB)
+                    quietService("androidtv/adb_command", JSONObject().put("entity_id", adbEntity)
                         .put("command", "am force-stop $KODI_PKG"))
                     if (i == 1) {
                         Thread.sleep(1_500)
-                        quietService("androidtv/adb_command", JSONObject().put("entity_id", MEDIA_ADB).put(
+                        quietService("androidtv/adb_command", JSONObject().put("entity_id", adbEntity).put(
                             "command", "monkey -p $KODI_PKG -c android.intent.category.LEANBACK_LAUNCHER -c android.intent.category.LAUNCHER 1"
                         ))
                     }
