@@ -7059,6 +7059,15 @@ class MainActivity : Activity() {
             isClickable = true
             setOnClickListener { showRemoteSheet(kodiRemote(), false) }
         }
+        // De lijst erboven inkorten zolang de balk zichtbaar is, anders valt hij onder het scherm weg
+        fun fit(show: Boolean) {
+            val parent = bar.parent as? ViewGroup ?: return
+            val sv = parent.getChildAt(parent.indexOfChild(bar) - 1) as? ScrollView ?: return
+            val base = (sv.getTag(R.id.settingsMenu) as? Int) ?: sv.layoutParams.height.also { sv.setTag(R.id.settingsMenu, it) }
+            if (base <= 0) return
+            val want = if (show) base - dp(90) else base
+            if (sv.layoutParams.height != want) { sv.layoutParams.height = want; sv.requestLayout() }
+        }
         lateinit var tick: Runnable
         tick = Runnable {
             if (!dialog.isShowing) return@Runnable
@@ -7073,7 +7082,7 @@ class MainActivity : Activity() {
                 val st = if (p != null && (switched || title.text.isNullOrEmpty() || System.currentTimeMillis() % 10_000 < 2_100))
                     runCatching { api(tvNow).state() }.getOrNull() else null
                 runOnUiThread {
-                    if (p == null) { bar.visibility = View.GONE; title.text = "" }
+                    if (p == null) { bar.visibility = View.GONE; title.text = ""; fit(false) }
                     else {
                         activeTv = tvNow
                         pid = p.first; playing = p.third
@@ -7085,6 +7094,7 @@ class MainActivity : Activity() {
                         if (w > 0 && dur > 0) prog.layoutParams = (prog.layoutParams as android.widget.FrameLayout.LayoutParams).apply { width = (w * (pos / dur)).toInt() }
                         prog.requestLayout()
                         bar.visibility = View.VISIBLE
+                        fit(true)
                     }
                     handler.postDelayed(tick, 2_000)
                 }
