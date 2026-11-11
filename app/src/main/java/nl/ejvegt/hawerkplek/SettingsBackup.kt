@@ -56,11 +56,14 @@ object SettingsBackup {
     }
 
     // ---- Compacte variant voor een QR-code: gecomprimeerd, zonder tijdelijke gegevens, zelfde versleuteling ----
-    const val QR_PREFIX = "TB1:"
+    const val QR_PREFIX = "TB1:"        // versleuteld met pincode (oude QR-codes)
+    const val QR_PREFIX_OPEN = "TB2:"   // zonder pincode
+    fun isCode(t: String) = t.trim().let { it.startsWith(QR_PREFIX) || it.startsWith(QR_PREFIX_OPEN) }
+    fun needsPin(t: String) = t.trim().startsWith(QR_PREFIX)
     /** Tijdelijke/toestelgebonden gegevens die niet mee hoeven naar een ander toestel. */
     private fun skipForQr(k: String) = k == "tab" || k == "ma_started" || k.startsWith("arr_season_")
 
-    fun exportQr(prefs: SharedPreferences, pin: String): String {
+    fun exportQr(prefs: SharedPreferences, pin: String? = null): String {
         val data = JSONObject()
         for ((k, v) in prefs.all) {
             if (skipForQr(k)) continue
@@ -76,6 +79,7 @@ object SettingsBackup {
             data.put(k, e)
         }
         val zipped = ByteArrayOutputStream().also { bo -> GZIPOutputStream(bo).use { it.write(data.toString().toByteArray(Charsets.UTF_8)) } }.toByteArray()
+        if (pin == null) return QR_PREFIX_OPEN + b64(zipped)
         val rnd = SecureRandom()
         val salt = ByteArray(16).also { rnd.nextBytes(it) }
         val iv = ByteArray(12).also { rnd.nextBytes(it) }
@@ -84,13 +88,15 @@ object SettingsBackup {
         return QR_PREFIX + b64(salt + iv + c.doFinal(zipped))
     }
 
-    private fun importQr(prefs: SharedPreferences, text: String, pin: String): Int {
-        val raw = unb64(text.trim().removePrefix(QR_PREFIX))
-        if (raw.size < 29) throw IllegalArgumentException("Dit is geen QR-code van Thuisbasis")
-        val c = Cipher.getInstance("AES/GCM/NoPadding")
-        c.init(Cipher.DECRYPT_MODE, key(pin, raw.copyOfRange(0, 16)), GCMParameterSpec(128, raw.copyOfRange(16, 28)))
-        val zipped = runCatching { c.doFinal(raw.copyOfRange(28, raw.size)) }
-            .getOrElse { throw IllegalArgumentException("Pincode klopt niet") }
+    private fun importQr(prefs: SharedPreferences, text: String, pin: String?): Int {
+        val t = text.trim()
+        val zipped = if (t.startsWith(QR_PREFIX_OPEN)) unb64(t.removePrefix(QR_PREFIX_OPEN)) else {
+            val raw = unb64(t.removePrefix(QR_PREFIX))
+            if (raw.size < 29) throw IllegalArgumentException("Dit is geen QR-code van Thuisbasis")
+            val c = Cipher.getInstance("AES/GCM/NoPadding")
+            c.init(Cipher.DECRYPT_MODE, key(pin ?: "", raw.copyOfRange(0, 16)), GCMParameterSpec(128, raw.copyOfRange(16, 28)))
+            runCatching { c.doFinal(raw.copyOfRange(28, raw.size)) }.getOrElse { throw IllegalArgumentException("Pincode klopt niet") }
+        }
         val data = JSONObject(GZIPInputStream(ByteArrayInputStream(zipped)).use { String(it.readBytes(), Charsets.UTF_8) })
         val ed = prefs.edit()
         var n = 0
@@ -112,12 +118,12 @@ object SettingsBackup {
     }
 
     /** Geeft het aantal teruggezette instellingen; gooit een fout bij een verkeerde pincode of een ander bestand. */
-    fun import(prefs: SharedPreferences, file: String, pin: String): Int {
-        if (file.trim().startsWith(QR_PREFIX)) return importQr(prefs, file, pin)
+    fun import(prefs: SharedPreferences, file: String, pin: String?): Int {
+        if (isCode(file)) return importQr(prefs, file, pin)
         val o = JSONObject(file)
         if (o.optString("app") != "thuisbasis") throw IllegalArgumentException("Dit is geen instellingenbestand van Thuisbasis")
         val c = Cipher.getInstance("AES/GCM/NoPadding")
-        c.init(Cipher.DECRYPT_MODE, key(pin, unb64(o.getString("salt"))), GCMParameterSpec(128, unb64(o.getString("iv"))))
+        c.init(Cipher.DECRYPT_MODE, key(pin ?: "", unb64(o.getString("salt"))), GCMParameterSpec(128, unb64(o.getString("iv"))))
         val plain = runCatching { c.doFinal(unb64(o.getString("data"))) }
             .getOrElse { throw IllegalArgumentException("Pincode klopt niet") }
         val data = JSONObject(String(plain, Charsets.UTF_8))

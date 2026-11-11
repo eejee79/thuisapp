@@ -1801,9 +1801,9 @@ class MainActivity : Activity() {
     }
 
     private fun showSettingsQr() {
-        pinDialog("Pincode voor de QR-code", twice = true) { pin ->
+        run {
             thread {
-                val r = runCatching { val code = SettingsBackup.exportQr(prefs(), pin); code to qrBitmap(code) }
+                val r = runCatching { val code = SettingsBackup.exportQr(prefs()); code to qrBitmap(code) }
                 runOnUiThread {
                     val (code, bmp) = r.getOrNull() ?: run {
                         AlertDialog.Builder(this).setTitle("QR-code maken mislukt")
@@ -1817,7 +1817,7 @@ class MainActivity : Activity() {
                         setPadding(dp(8), dp(8), dp(8), dp(8))
                     }, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
                     box.addView(TextView(this).apply {
-                        text = "Op het andere toestel: ⚙ → Overzetten via QR-code → QR-code scannen, en dezelfde pincode invullen. Zonder pincode is de code onleesbaar."
+                        text = "Op het andere toestel: ⚙ → Overzetten via QR-code → QR-code scannen. Let op: de code bevat je wachtwoorden en sleutels, laat hem niet door anderen fotograferen."
                         textSize = 13f; setTextColor(0xFF9A9A9A.toInt()); setPadding(0, dp(10), 0, 0)
                     })
                     val lp = window.attributes; val oldBright = lp.screenBrightness
@@ -1850,8 +1850,8 @@ class MainActivity : Activity() {
         val clip = (getSystemService(Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager).primaryClip
             ?.takeIf { it.itemCount > 0 }?.getItemAt(0)?.coerceToText(this)?.toString().orEmpty()
         val input = EditText(this).apply {
-            hint = "Plak hier de code (begint met ${SettingsBackup.QR_PREFIX})"
-            if (clip.trim().startsWith(SettingsBackup.QR_PREFIX)) setText(clip.trim())
+            hint = "Plak hier de code (begint met ${SettingsBackup.QR_PREFIX_OPEN})"
+            if (SettingsBackup.isCode(clip)) setText(clip.trim())
             maxLines = 4
         }
         val box = LinearLayout(this).apply { setPadding(dp(20), dp(8), dp(20), 0); addView(input, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)) }
@@ -1861,10 +1861,10 @@ class MainActivity : Activity() {
     }
 
     private fun importSettingsCode(code: String) {
-        if (!code.trim().startsWith(SettingsBackup.QR_PREFIX)) {
+        if (!SettingsBackup.isCode(code)) {
             Toast.makeText(this, "Dit is geen instellingencode van Thuisbasis", Toast.LENGTH_LONG).show(); return
         }
-        pinDialog("Pincode van de QR-code", twice = false) { pin ->
+        fun go(pin: String?) {
             thread {
                 val r = runCatching { SettingsBackup.import(prefs(), code, pin) }
                 runOnUiThread {
@@ -1876,6 +1876,10 @@ class MainActivity : Activity() {
                 }
             }
         }
+        if (SettingsBackup.needsPin(code)) pinDialog("Pincode van de QR-code", twice = false) { go(it) }
+        else AlertDialog.Builder(this).setTitle("Instellingen overnemen?")
+            .setMessage("De instellingen van het andere toestel komen in plaats van die op dit toestel.")
+            .setPositiveButton("Overnemen") { _, _ -> go(null) }.setNegativeButton("Annuleren", null).show()
     }
 
     private fun importSettings() {
