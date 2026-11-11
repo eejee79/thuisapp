@@ -7083,7 +7083,7 @@ class MainActivity : Activity() {
                 val st = if (p != null && (switched || title.text.isNullOrEmpty() || System.currentTimeMillis() % 10_000 < 2_100))
                     runCatching { api(tvNow).state() }.getOrNull() else null
                 runOnUiThread {
-                    if (p == null) { bar.visibility = View.GONE; title.text = ""; fit(false) }
+                    if (p == null || tvNow != kodiOnTv) { bar.visibility = View.GONE; title.text = ""; fit(false) }
                     else {
                         activeTv = tvNow
                         pid = p.first; playing = p.third
@@ -7102,6 +7102,14 @@ class MainActivity : Activity() {
             }
         }
         handler.post(tick)
+        // Gewisseld van ontvanger? Meteen weghalen, niet wachten op het antwoord van de andere Kodi.
+        lateinit var guard: Runnable
+        guard = Runnable {
+            if (!dialog.isShowing) return@Runnable
+            if (bar.visibility == View.VISIBLE && activeTv != kodiOnTv) { bar.visibility = View.GONE; title.text = ""; fit(false) }
+            handler.postDelayed(guard, 400)
+        }
+        handler.post(guard)
         return bar
     }
 

@@ -96,7 +96,7 @@ class KodiApi(
     }
 
     private fun activeVideoPlayer(): Int? {
-        val arr = rpc("Player.GetActivePlayers") as? JSONArray ?: return null
+        val arr = rpc("Player.GetActivePlayers", timeoutMs = 3_000) as? JSONArray ?: return null
         return (0 until arr.length()).map { arr.getJSONObject(it) }
             .firstOrNull { it.optString("type") == "video" }?.optInt("playerid")
     }
