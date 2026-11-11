@@ -679,6 +679,19 @@ class MainActivity : Activity() {
     /** De afstandsbediening die bij de Kodi hoort die nu gekozen is. */
     private fun kodiRemote() = if (kodiOnTv) TVPLUS_REMOTE else MEDIA_REMOTE
 
+    /** Vaste Kodi-verbindingen per ontvanger (voor de voortgangsbalk, los van de keuze bovenaan). */
+    private val kodiBox by lazy {
+        KodiApi({ prefs().getString(KEY_KODI_HOST, "")!!.trim().ifEmpty { KODI_DEFAULT_HOST } },
+            { prefs().getString(KEY_KODI_PORT, "")!!.trim().ifEmpty { "8080" } },
+            { prefs().getString(KEY_KODI_USER, "")!!.trim().ifEmpty { "kodi" } },
+            { prefs().getString(KEY_KODI_PASS, "") ?: "" })
+    }
+    private val kodiTvPlus by lazy {
+        KodiApi({ prefs().getString("kodi_tv_host", "")!!.trim().ifEmpty { "192.168.7.15" } },
+            { prefs().getString("kodi_tv_port", "")!!.trim().ifEmpty { "8080" } },
+            { prefs().getString("kodi_tv_user", "")!!.trim().ifEmpty { "kodi" } },
+            { prefs().getString("kodi_tv_pass", "") ?: "" })
+    }
     private val kodi by lazy {
         KodiApi(
             { if (kodiOnTv) prefs().getString("kodi_tv_host", "")!!.trim().ifEmpty { "192.168.7.15" }
@@ -11868,7 +11881,8 @@ class MainActivity : Activity() {
                 p.pos = p.dur * frac
                 thread {
                     runCatching {
-                        if (p.src.startsWith("kodi:")) kodi.seekPercent(p.src.removePrefix("kodi:").toInt(), frac * 100)
+                        if (p.src.startsWith("kodi:")) kodiBox.seekPercent(p.src.removePrefix("kodi:").toInt(), frac * 100)
+                        else if (p.src.startsWith("koditv:")) kodiTvPlus.seekPercent(p.src.removePrefix("koditv:").toInt(), frac * 100)
                         else haRequest("POST", "/api/services/media_player/media_seek",
                             JSONObject().put("entity_id", p.src).put("seek_position", p.dur * frac).toString())
                     }
@@ -11878,10 +11892,17 @@ class MainActivity : Activity() {
             }
         })
         fun fetch(): Prog? {
-            if (remote == MEDIA_REMOTE && boxApp == KODI_PKG && kodiConfigured()) {
-                runCatching { kodi.progress() }.getOrNull()?.let { (pid, pd, playing) ->
-                    val title = runCatching { kodi.state()?.title }.getOrNull() ?: "Kodi"
+            if (remote == MEDIA_REMOTE && boxApp == KODI_PKG && (prefs().getString(KEY_KODI_PASS, "") ?: "").isNotEmpty()) {
+                runCatching { kodiBox.progress() }.getOrNull()?.let { (pid, pd, playing) ->
+                    val title = runCatching { kodiBox.state()?.title }.getOrNull() ?: "Kodi"
                     return Prog("kodi:$pid", pd.first, pd.second, playing, title)
+                }
+            }
+            // TV+ woonkamer: speelt Kodi daar iets af, dan de voortgang uit Kodi zelf
+            if (remote == TVPLUS_REMOTE && kodiTvConfigured()) {
+                runCatching { kodiTvPlus.progress() }.getOrNull()?.let { (pid, pd, playing) ->
+                    val title = runCatching { kodiTvPlus.state()?.title }.getOrNull() ?: "Kodi"
+                    return Prog("koditv:$pid", pd.first, pd.second, playing, title)
                 }
             }
             val entity = maPlayerOnBox(remote) ?: if (remote == MEDIA_REMOTE) MEDIA_PLAYER else if (remote == TVPLUS2_REMOTE) TVPLUS2_PLAYER else TVPLUS_PLAYER
