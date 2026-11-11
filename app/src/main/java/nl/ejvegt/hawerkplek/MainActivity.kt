@@ -971,7 +971,7 @@ class MainActivity : Activity() {
         "Dolby Digital" to listOf("DOLBY DIGITAL", "DOLBY SURROUND", "DOLBY AUDIO"),
         "Dolby Atmos" to listOf("DOLBY ATMOS"),
         "Stereo" to listOf("STEREO"),
-        "Multi Ch Stereo" to listOf("MCH STEREO", "MULTI CH STEREO", "MULTI CH IN"),
+        "Multi Ch Stereo" to listOf("MCH STEREO", "MULTI CH STEREO"),
         "Pure Direct" to listOf("PURE DIRECT"),
     )
     private lateinit var soundChip: TextView
@@ -1002,6 +1002,7 @@ class MainActivity : Activity() {
         return when {
             "ATMOS" in u -> "Atmos"
             "PURE" in u -> "Pure"
+            "CH IN" in u -> "Multi In"   // MULTI CH IN: meerkanaals-PCM zoals het binnenkomt (bijv. uit Kodi), géén MCH Stereo
             "MCH" in u || "MULTI" in u -> "MCH"
             "DOLBY" in u -> "Dolby"
             "DTS" in u -> "DTS"
