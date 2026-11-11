@@ -6714,7 +6714,7 @@ class MainActivity : Activity() {
             addView(body)
             layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, (resources.displayMetrics.heightPixels * 0.64).toInt())
         })
-        if (kodiConfigured()) content.addView(kodiMiniBar(dialog))
+        if (kodiConfigured() || kodiTvConfigured() || (prefs().getString(KEY_KODI_PASS, "") ?: "").isNotEmpty()) content.addView(kodiMiniBar(dialog))
         var seq = 0
         fun header(t: String) = body.addView(TextView(this).apply {
             text = t.uppercase(NL); textSize = 12f; letterSpacing = 0.06f; setTypeface(typeface, Typeface.BOLD)
@@ -7019,6 +7019,10 @@ class MainActivity : Activity() {
         }
         var pid = -1
         var playing = false
+        // Welke ontvanger speelt er nu af? Eerst de gekozen, anders de andere (GoogleTV-box of TV+ woonkamer).
+        var activeTv = kodiOnTv
+        fun api(tv: Boolean) = if (tv) kodiTvPlus else kodiBox
+        fun usable(tv: Boolean) = if (tv) kodiTvConfigured() else (prefs().getString(KEY_KODI_PASS, "") ?: "").isNotEmpty()
         fun btn(label: String, desc: String, white: Boolean, onTap: () -> Unit) = TextView(this).apply {
             text = label; textSize = if (white) 15f else 13f; gravity = Gravity.CENTER; contentDescription = desc
             setTextColor(if (white) Color.BLACK else Color.WHITE); setTypeface(typeface, Typeface.BOLD)
@@ -7031,7 +7035,8 @@ class MainActivity : Activity() {
         val playBtn = btn("❚❚", "Afspelen of pauzeren", true) {
             if (pid < 0) return@btn
             playing = !playing
-            thread { runCatching { kodi.rpc("Player.PlayPause", JSONObject().put("playerid", pid)) } }
+            val a = api(activeTv)
+            thread { runCatching { a.rpc("Player.PlayPause", JSONObject().put("playerid", pid)) } }
         }
         val bar = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
@@ -7046,8 +7051,8 @@ class MainActivity : Activity() {
                     layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
                     addView(title); addView(sub)
                 })
-                addView(btn("CC", "Ondertitels en audio", false) { showKodiSubsSheet() })
-                addView(btn("⌖", "Afstandsbediening", false) { showRemoteSheet(kodiRemote(), false) })
+                addView(btn("CC", "Ondertitels en audio", false) { kodiOnTv = activeTv; showKodiSubsSheet() })
+                addView(btn("⌖", "Afstandsbediening", false) { showRemoteSheet(if (activeTv) TVPLUS_REMOTE else MEDIA_REMOTE, false) })
                 addView(playBtn)
             })
             addView(track)
@@ -7058,16 +7063,23 @@ class MainActivity : Activity() {
         tick = Runnable {
             if (!dialog.isShowing) return@Runnable
             thread {
-                val p = runCatching { kodi.progress() }.getOrNull()
-                val st = if (p != null && title.text.isNullOrEmpty() || p != null && System.currentTimeMillis() % 10_000 < 2_100)
-                    runCatching { kodi.state() }.getOrNull() else null
+                var p: Triple<Int, Pair<Double, Double>, Boolean>? = null
+                var tvNow = activeTv
+                for (tv in listOf(kodiOnTv, !kodiOnTv).filter { usable(it) }) {
+                    p = runCatching { api(tv).progress() }.getOrNull()
+                    if (p != null) { tvNow = tv; break }
+                }
+                val switched = tvNow != activeTv
+                val st = if (p != null && (switched || title.text.isNullOrEmpty() || System.currentTimeMillis() % 10_000 < 2_100))
+                    runCatching { api(tvNow).state() }.getOrNull() else null
                 runOnUiThread {
                     if (p == null) { bar.visibility = View.GONE; title.text = "" }
                     else {
+                        activeTv = tvNow
                         pid = p.first; playing = p.third
                         st?.let { title.text = it.title }
                         val (pos, dur) = p.second
-                        sub.text = "${fmtSec(pos)} / ${fmtSec(dur)} · Kodi"
+                        sub.text = "${fmtSec(pos)} / ${fmtSec(dur)} · Kodi" + if (tvNow) " op TV+" else " op GoogleTV-box"
                         playBtn.text = if (playing) "❚❚" else "▶"
                         val w = track.width
                         if (w > 0 && dur > 0) prog.layoutParams = (prog.layoutParams as android.widget.FrameLayout.LayoutParams).apply { width = (w * (pos / dur)).toInt() }
