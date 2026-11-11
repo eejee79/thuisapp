@@ -6248,17 +6248,49 @@ class MainActivity : Activity() {
 
     /** Bestand via Kodi afspelen (met kijkstatus/verder kijken). */
     private fun playArrFile(arrPath: String, label: String, onStarted: () -> Unit) {
-        if (!kodiTvConfigured()) { kodiOnTv = false; playArrFileOn(arrPath, label, onStarted); return }
-        val opts = arrayOf("GoogleTV-box", "TV+ woonkamer")
-        AlertDialog.Builder(this)
-            .setTitle("$label afspelen op")
-            .setSingleChoiceItems(opts, if (kodiOnTv) 1 else 0) { d, i ->
-                d.dismiss()
-                kodiOnTv = i == 1
-                playArrFileOn(arrPath, label, onStarted)
+        // Waar: de keuze bovenin de Bibliotheek / Kodi ("Kodi op GoogleTV-box | Kodi op TV+ woonkamer")
+        if (!kodiTvConfigured()) kodiOnTv = false
+        playArrFileOn(arrPath, label, onStarted)
+    }
+
+    /** Keuzebalk: Kodi op de GoogleTV-box of op de TV+-ontvanger in de woonkamer. */
+    private fun kodiTargetBar(onChange: () -> Unit): View {
+        if (!kodiTvConfigured()) return TextView(this).apply {
+            text = "Kodi op de TV+ woonkamer gebruiken? Vul het wachtwoord in via ⚙ → API's → Kodi op TV+ woonkamer ›"
+            textSize = 12f; setTextColor(0xFF8FB8C6.toInt()); setPadding(dp(2), dp(8), dp(2), dp(4))
+            isClickable = true; setOnClickListener { showKodiTvSettings() }
+        }
+        val bar = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            setPadding(dp(4), dp(4), dp(4), dp(4))
+            background = GradientDrawable().apply { setColor(0xFF121212.toInt()); cornerRadius = dp(14).toFloat() }
+            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { topMargin = dp(10); bottomMargin = dp(4) }
+        }
+        val opts = listOf(false to "GoogleTV-box", true to "TV+ woonkamer")
+        fun paint() {
+            for (i in 0 until bar.childCount) {
+                val v = bar.getChildAt(i) as TextView
+                val on = opts[i].first == kodiOnTv
+                v.setTextColor(if (on) 0xFF0B2430.toInt() else Color.WHITE)
+                (v.background as GradientDrawable).setColor(if (on) 0xFF18BCF2.toInt() else Color.TRANSPARENT)
             }
-            .setNegativeButton("Annuleren", null)
-            .show()
+        }
+        opts.forEach { (tv, name) ->
+            bar.addView(TextView(this).apply {
+                text = name; textSize = 13f; setTypeface(typeface, Typeface.BOLD); gravity = Gravity.CENTER
+                setPadding(dp(6), dp(9), dp(6), dp(9))
+                background = GradientDrawable().apply { cornerRadius = dp(11).toFloat() }
+                layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
+                isClickable = true
+                setOnClickListener { if (kodiOnTv != tv) { kodiOnTv = tv; paint(); onChange() } }
+            })
+        }
+        paint()
+        return LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            addView(TextView(this@MainActivity).apply { text = "Afspelen met Kodi op"; textSize = 12f; setTextColor(0xFF9A9A9A.toInt()); setPadding(dp(2), dp(8), 0, 0) })
+            addView(bar)
+        }
     }
 
     private fun playArrFileOn(arrPath: String, label: String, onStarted: () -> Unit) {
@@ -6294,6 +6326,7 @@ class MainActivity : Activity() {
                 setOnClickListener { dialog.dismiss(); showArrSettings { } }
             })
         })
+        content.addView(kodiTargetBar { })
         val diskBar = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             background = GradientDrawable().apply { setColor(0xFF333333.toInt()); cornerRadius = dp(3).toFloat() }
@@ -7474,6 +7507,7 @@ class MainActivity : Activity() {
             }
         }
         content.addView(title)
+        content.addView(kodiTargetBar { dialog.dismiss(); showKodiSheet() })
         content.addView(status)
         content.addView(android.widget.FrameLayout(this).apply {
             layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(460))
