@@ -860,7 +860,7 @@ class MainActivity : Activity() {
             row("🗂   Tabbladen tonen") { chooseTabs() }
             row("⇪   Instellingen exporteren") { exportSettings() }
             row("⇩   Instellingen importeren") { importSettings() }
-            row("▦   Overzetten via QR-code") { qrTransfer() }
+            row("⇄   Overzetten naar ander toestel") { qrTransfer() }
         }
         findViewById<Button>(R.id.updateSaveButton).setOnClickListener { saveUpdateSettings() }
         findViewById<Button>(R.id.checkUpdateButton).setOnClickListener {
@@ -1781,10 +1781,174 @@ class MainActivity : Activity() {
 
     // ---- Overzetten via QR-code (zelfde versleuteling met pincode als het bestand) ----
     private fun qrTransfer() {
-        AlertDialog.Builder(this).setTitle("Overzetten via QR-code")
-            .setItems(arrayOf("QR-code tonen  (dit toestel heeft de instellingen)", "QR-code scannen  (dit is het nieuwe toestel)", "Code plakken  (als tekst ontvangen)")) { _, w ->
-                when (w) { 0 -> showSettingsQr(); 1 -> scanSettingsQr(); else -> pasteSettingsCode() }
+        AlertDialog.Builder(this).setTitle("Overzetten naar ander toestel")
+            .setItems(arrayOf(
+                "Versturen via wifi  (dit toestel heeft de instellingen)",
+                "Ontvangen via wifi  (dit is het nieuwe toestel)",
+                "QR-code tonen", "QR-code scannen", "Code plakken  (als tekst ontvangen)")) { _, w ->
+                when (w) { 0 -> sendSettingsLan(); 1 -> receiveSettingsLan(); 2 -> showSettingsQr(); 3 -> scanSettingsQr(); else -> pasteSettingsCode() }
             }.setNegativeButton("Annuleren", null).show()
+    }
+
+    // ---- Overzetten via wifi: het oude toestel wacht, het nieuwe vindt het vanzelf (mDNS) en vraagt met een code ----
+    private val LAN_TYPE = "_thuisbasis._tcp"
+
+    private fun localIp(): String? = runCatching {
+        java.net.NetworkInterface.getNetworkInterfaces().toList().filter { it.isUp && !it.isLoopback }
+            .flatMap { it.inetAddresses.toList() }.filterIsInstance<java.net.Inet4Address>()
+            .firstOrNull { it.isSiteLocalAddress }?.hostAddress
+    }.getOrNull()
+
+    private fun sendSettingsLan() {
+        val payload = runCatching { SettingsBackup.exportQr(prefs()) }.getOrElse {
+            Toast.makeText(this, "Mislukt: ${it.message}", Toast.LENGTH_LONG).show(); return
+        }
+        val code = (1000..9999).random().toString()
+        val server = runCatching { java.net.ServerSocket(0) }.getOrElse {
+            Toast.makeText(this, "Mislukt: ${it.message}", Toast.LENGTH_LONG).show(); return
+        }
+        val nsd = getSystemService(Context.NSD_SERVICE) as android.net.nsd.NsdManager
+        val reg = object : android.net.nsd.NsdManager.RegistrationListener {
+            override fun onServiceRegistered(i: android.net.nsd.NsdServiceInfo) {}
+            override fun onRegistrationFailed(i: android.net.nsd.NsdServiceInfo, e: Int) {}
+            override fun onServiceUnregistered(i: android.net.nsd.NsdServiceInfo) {}
+            override fun onUnregistrationFailed(i: android.net.nsd.NsdServiceInfo, e: Int) {}
+        }
+        runCatching {
+            nsd.registerService(android.net.nsd.NsdServiceInfo().apply {
+                serviceName = "Thuisbasis ${Build.MODEL}"; serviceType = LAN_TYPE; port = server.localPort
+            }, android.net.nsd.NsdManager.PROTOCOL_DNS_SD, reg)
+        }
+        val box = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(dp(20), dp(8), dp(20), 0) }
+        box.addView(TextView(this).apply {
+            text = "Op het andere toestel: ⚙ → Overzetten naar ander toestel → Ontvangen via wifi. Kies daar dit toestel en vul deze code in:"
+            textSize = 14f; setTextColor(0xFFB0B0B0.toInt())
+        })
+        box.addView(TextView(this).apply {
+            text = code.toCharArray().joinToString(" "); textSize = 40f; setTextColor(Color.WHITE)
+            gravity = android.view.Gravity.CENTER; setPadding(0, dp(12), 0, dp(12)); typeface = android.graphics.Typeface.DEFAULT_BOLD
+        })
+        val status = TextView(this).apply { text = "Wachten op het andere toestel…"; textSize = 14f; setTextColor(0xFF9A9A9A.toInt()) }
+        box.addView(status)
+        box.addView(TextView(this).apply {
+            text = "Niet gevonden? Kies daar ‘Handmatig’ en vul in: ${localIp() ?: "?"}:${server.localPort}"
+            textSize = 12f; setTextColor(0xFF777777.toInt()); setPadding(0, dp(10), 0, 0)
+        })
+        AlertDialog.Builder(this).setTitle("Instellingen versturen").setView(box)
+            .setPositiveButton("Sluiten", null)
+            .setOnDismissListener { runCatching { nsd.unregisterService(reg) }; runCatching { server.close() } }
+            .show()
+        thread {
+            var wrong = 0
+            while (!server.isClosed) {
+                val sock = runCatching { server.accept() }.getOrNull() ?: break
+                runCatching {
+                    sock.use { so ->
+                        so.soTimeout = 20_000
+                        val r = so.getInputStream().bufferedReader(); val w = so.getOutputStream().bufferedWriter()
+                        if (r.readLine()?.trim() == code) {
+                            w.write(payload); w.write("\n"); w.flush()
+                            runOnUiThread { status.text = "Verstuurd ✓  Je kunt dit venster sluiten."; status.setTextColor(0xFF81C784.toInt()) }
+                        } else {
+                            w.write("ERR\n"); w.flush(); wrong++
+                            runOnUiThread { status.text = "Verkeerde code ingevuld op het andere toestel" }
+                            if (wrong >= 5) { runCatching { server.close() }; runOnUiThread { status.text = "Te vaak een verkeerde code; opnieuw beginnen." } }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    private fun receiveSettingsLan() {
+        val nsd = getSystemService(Context.NSD_SERVICE) as android.net.nsd.NsdManager
+        val found = mutableListOf<android.net.nsd.NsdServiceInfo>()
+        val adapter = android.widget.ArrayAdapter<String>(this, android.R.layout.simple_list_item_1, mutableListOf())
+        val hintTv = TextView(this).apply { text = "Zoeken naar toestellen op de wifi…"; textSize = 14f; setTextColor(0xFF9A9A9A.toInt()); setPadding(dp(20), dp(8), dp(20), dp(8)) }
+        val disc = object : android.net.nsd.NsdManager.DiscoveryListener {
+            override fun onDiscoveryStarted(t: String) {}
+            override fun onDiscoveryStopped(t: String) {}
+            override fun onStartDiscoveryFailed(t: String, e: Int) { runOnUiThread { hintTv.text = "Zoeken lukt niet (fout $e). Kies ‘Handmatig’." } }
+            override fun onStopDiscoveryFailed(t: String, e: Int) {}
+            override fun onServiceFound(si: android.net.nsd.NsdServiceInfo) {
+                if (!si.serviceType.contains("_thuisbasis")) return
+                runOnUiThread {
+                    if (found.none { it.serviceName == si.serviceName }) { found.add(si); adapter.add(si.serviceName.removePrefix("Thuisbasis ")) }
+                    hintTv.text = "Tik op het toestel dat de instellingen verstuurt:"
+                }
+            }
+            override fun onServiceLost(si: android.net.nsd.NsdServiceInfo) {
+                runOnUiThread {
+                    val i = found.indexOfFirst { it.serviceName == si.serviceName }
+                    if (i >= 0) { found.removeAt(i); adapter.remove(adapter.getItem(i)) }
+                }
+            }
+        }
+        runCatching { nsd.discoverServices(LAN_TYPE, android.net.nsd.NsdManager.PROTOCOL_DNS_SD, disc) }
+        val list = android.widget.ListView(this).apply { this.adapter = adapter }
+        val box = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; addView(hintTv); addView(list) }
+        val d = AlertDialog.Builder(this).setTitle("Instellingen ontvangen").setView(box)
+            .setNegativeButton("Annuleren", null)
+            .setNeutralButton("Handmatig") { _, _ ->
+                val input = EditText(this).apply { hint = "IP-adres:poort (staat op het andere toestel)"; setSingleLine() }
+                AlertDialog.Builder(this).setTitle("Handmatig verbinden")
+                    .setView(LinearLayout(this).apply { setPadding(dp(20), dp(8), dp(20), 0); addView(input, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)) })
+                    .setPositiveButton("Verder") { _, _ ->
+                        val t = input.text.toString().trim()
+                        val port = t.substringAfterLast(':', "").toIntOrNull()
+                        if (port == null) Toast.makeText(this, "Vul in als 192.168.50.12:40123", Toast.LENGTH_LONG).show()
+                        else askLanCode(t.substringBeforeLast(':'), port)
+                    }.setNegativeButton("Annuleren", null).show()
+            }
+            .setOnDismissListener { runCatching { nsd.stopServiceDiscovery(disc) } }
+            .show()
+        list.setOnItemClickListener { _, _, i, _ ->
+            val si = found.getOrNull(i) ?: return@setOnItemClickListener
+            d.dismiss()
+            @Suppress("DEPRECATION")
+            nsd.resolveService(si, object : android.net.nsd.NsdManager.ResolveListener {
+                override fun onResolveFailed(s: android.net.nsd.NsdServiceInfo, e: Int) {
+                    runOnUiThread { Toast.makeText(this@MainActivity, "Toestel niet bereikbaar (fout $e). Probeer ‘Handmatig’.", Toast.LENGTH_LONG).show() }
+                }
+                @Suppress("DEPRECATION")
+                override fun onServiceResolved(s: android.net.nsd.NsdServiceInfo) {
+                    val host = s.host?.hostAddress ?: return
+                    runOnUiThread { askLanCode(host, s.port) }
+                }
+            })
+        }
+    }
+
+    private fun askLanCode(host: String, port: Int) {
+        val input = EditText(this).apply {
+            hint = "Code van 4 cijfers"; setSingleLine(); textSize = 24f
+            inputType = android.text.InputType.TYPE_CLASS_NUMBER
+        }
+        val msg = TextView(this).apply { setTextColor(0xFFFF8A80.toInt()); setPadding(0, dp(8), 0, 0) }
+        val box = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(dp(20), dp(8), dp(20), 0); addView(input); addView(msg) }
+        val d = AlertDialog.Builder(this).setTitle("Code van het andere toestel").setView(box)
+            .setPositiveButton("Ophalen", null).setNegativeButton("Annuleren", null).show()
+        d.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener {
+            val code = input.text.toString().trim()
+            msg.text = "Ophalen…"
+            thread {
+                val r = runCatching {
+                    java.net.Socket().use { so ->
+                        so.connect(java.net.InetSocketAddress(host, port), 5_000); so.soTimeout = 15_000
+                        val w = so.getOutputStream().bufferedWriter(); w.write(code + "\n"); w.flush()
+                        so.getInputStream().bufferedReader().readLine()?.trim().orEmpty()
+                    }
+                }
+                runOnUiThread {
+                    val text = r.getOrNull()
+                    when {
+                        text == null -> msg.text = "Geen verbinding: ${r.exceptionOrNull()?.message}"
+                        !SettingsBackup.isCode(text) -> msg.text = "Code klopt niet"
+                        else -> { d.dismiss(); importSettingsCode(text) }
+                    }
+                }
+            }
+        }
     }
 
     private fun qrBitmap(text: String): android.graphics.Bitmap {
