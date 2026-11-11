@@ -1260,6 +1260,13 @@ class MainActivity : Activity() {
         content.addView(netPanel, content.indexOfChild(findViewById(R.id.settingsButton)),
             android.widget.FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
 
+        // ⚙ → API's → gezien-status van de gedeelde Kodi-bibliotheek op de NAS
+        findViewById<LinearLayout>(R.id.apiMenu).addView(TextView(this).apply {
+            text = "Kodi-bibliotheek op NAS"; textSize = 17f; setTextColor(Color.WHITE)
+            setBackgroundColor(0xFF1E1E1E.toInt()); setPadding(dp(18), dp(18), dp(18), dp(18))
+            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { topMargin = dp(12) }
+            isClickable = true; setOnClickListener { showKodiLibSettings() }
+        })
         // ⚙ → API's → Kodi op de TV+-ontvanger
         findViewById<LinearLayout>(R.id.apiMenu).addView(TextView(this).apply {
             text = "Kodi op TV+ woonkamer"; textSize = 17f; setTextColor(Color.WHITE)
@@ -1274,6 +1281,66 @@ class MainActivity : Activity() {
             layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { topMargin = dp(12) }
             isClickable = true; setOnClickListener { showUnifiSettings() }
         })
+    }
+
+    // ---- Gezien-status rechtstreeks uit de gedeelde Kodi-database op de NAS (kleine dienst op de Mint-pc) ----
+    private fun nasWatchedConfigured() = (prefs().getString("kodi_lib_token", "") ?: "").isNotBlank()
+    @Volatile private var nasWatchedCache: Map<String, Triple<Int, Double, Double>>? = null
+    @Volatile private var nasWatchedAt = 0L
+
+    /** Bestandsnaam → (aantal keer bekeken, hervatpunt s, totale duur s). null = dienst niet ingesteld/bereikbaar. */
+    private fun nasWatched(): Map<String, Triple<Int, Double, Double>>? {
+        if (!nasWatchedConfigured()) return null
+        nasWatchedCache?.let { if (System.currentTimeMillis() - nasWatchedAt < 30_000) return it }
+        val r = runCatching {
+            val host = prefs().getString("kodi_lib_url", "")!!.trim().ifEmpty { "192.168.50.208:8095" }
+                .removePrefix("http://").trimEnd('/')
+            val c = URL("http://$host/watched").openConnection() as HttpURLConnection
+            c.connectTimeout = 4_000; c.readTimeout = 10_000
+            c.setRequestProperty("X-Token", prefs().getString("kodi_lib_token", "")!!.trim())
+            if (c.responseCode != 200) throw IOException("fout ${c.responseCode}")
+            val files = JSONObject(c.inputStream.bufferedReader().use { it.readText() }).optJSONObject("files") ?: JSONObject()
+            val m = HashMap<String, Triple<Int, Double, Double>>()
+            for (k in files.keys()) files.optJSONArray(k)?.let { a -> m[k.lowercase()] = Triple(a.optInt(0), a.optDouble(1, 0.0), a.optDouble(2, 0.0)) }
+            m as Map<String, Triple<Int, Double, Double>>
+        }.getOrNull()
+        if (r != null) { nasWatchedCache = r; nasWatchedAt = System.currentTimeMillis() }
+        return r ?: nasWatchedCache
+    }
+
+    /** Kijkstatus van een bestand van Sonarr/Radarr (op bestandsnaam), als KodiApi.Entry; null = niet bekend via de NAS. */
+    private fun nasWatchedEntry(arrPath: String): KodiApi.Entry? {
+        val m = nasWatched() ?: return null
+        val name = arrPath.replace('\\', '/').substringAfterLast('/')
+        val w = m[name.lowercase()]
+        return KodiApi.Entry(name, arrPath, false, (w?.first ?: 0) > 0, w?.second ?: 0.0, w?.third ?: 0.0)
+    }
+
+    private fun showKodiLibSettings() {
+        val box = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(dp(20), dp(8), dp(20), 0) }
+        box.addView(TextView(this).apply {
+            text = "Kleine dienst op de Mint-pc die de gezien-status uit de gedeelde Kodi-database doorgeeft, zodat Kodi niet open hoeft te staan. Sleutel staat op de Mint-pc in /etc/kodi-watched.token."
+            textSize = 13f; setTextColor(0xFF9A9A9A.toInt())
+        })
+        val h = EditText(this).apply { hint = "Adres, bijv. 192.168.50.208:8095"; setText(prefs().getString("kodi_lib_url", "")!!.ifEmpty { "192.168.50.208:8095" }); setSingleLine(); box.addView(this) }
+        val t = EditText(this).apply {
+            hint = "Sleutel (token)"; setText(prefs().getString("kodi_lib_token", "")); setSingleLine()
+            inputType = android.text.InputType.TYPE_CLASS_TEXT or android.text.InputType.TYPE_TEXT_VARIATION_PASSWORD
+            box.addView(this)
+        }
+        val status = TextView(this).apply { textSize = 13f; setTextColor(0xFFB0B0B0.toInt()); setPadding(0, dp(8), 0, 0) }
+        box.addView(status)
+        val d = AlertDialog.Builder(this).setTitle("Kodi-bibliotheek op NAS").setView(box)
+            .setPositiveButton("Opslaan en testen", null).setNegativeButton("Sluiten", null).show()
+        d.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener {
+            prefs().edit().putString("kodi_lib_url", h.text.toString().trim()).putString("kodi_lib_token", t.text.toString().trim()).apply()
+            nasWatchedCache = null; nasWatchedAt = 0L
+            status.text = "Testen…"
+            thread {
+                val m = nasWatched()
+                runOnUiThread { status.text = if (m == null) "Geen antwoord (draait de dienst, en klopt de sleutel?)" else "Werkt ✓ · ${m.values.count { it.first > 0 }} bestanden bekeken" }
+            }
+        }
     }
 
     private fun showKodiTvSettings() {
@@ -6820,9 +6887,9 @@ class MainActivity : Activity() {
                                 val path = f.optString("path")
                                 row.isClickable = true
                                 row.setOnClickListener { playArrFile(path, "${s.optString("title")} ${"S%02dE%02d".format(n, e.optInt("episodeNumber"))}") { dialog.dismiss() } }
-                                // Kijkstatus uit Kodi erbij
+                                // Kijkstatus erbij: uit de gedeelde Kodi-bibliotheek op de NAS (Kodi hoeft niet open), anders uit Kodi zelf
                                 thread {
-                                    val k = runCatching { kodiPathFor(path)?.let { kodi.details(KodiApi.Entry(label, it, false, false, 0.0, 0.0)) } }.getOrNull()
+                                    val k = nasWatchedEntry(path) ?: runCatching { kodiPathFor(path)?.let { kodi.details(KodiApi.Entry(label, it, false, false, 0.0, 0.0)) } }.getOrNull()
                                     if (k != null) runOnUiThread {
                                         when {
                                             k.played -> { status.text = "$quality · bekeken"; icon.text = "✓" }
@@ -6871,7 +6938,7 @@ class MainActivity : Activity() {
                 val remembered = prefs().getInt(seasonKey, -1).takeIf { it in seasons }
                 val start = remembered ?: seasons.firstOrNull { it != 0 } ?: seasons.first()
                 showSeason(start)
-                if (kodiConfigured()) thread {
+                if (kodiConfigured() || nasWatchedConfigured()) thread {
                     // Eerste aflevering (op volgorde) die binnen is maar nog niet (helemaal) bekeken
                     val ordered = all.filter { it.optInt("seasonNumber") != 0 && fileById.containsKey(it.optInt("episodeFileId")) }
                         .sortedWith(compareBy({ it.optInt("seasonNumber") }, { it.optInt("episodeNumber") }))
@@ -6879,7 +6946,8 @@ class MainActivity : Activity() {
                     var anyWatched = false
                     for (e in ordered) {
                         val path = fileById[e.optInt("episodeFileId")]?.optString("path") ?: continue
-                        val k = runCatching { kodiPathFor(path)?.let { kodi.details(KodiApi.Entry("", it, false, false, 0.0, 0.0)) } }.getOrNull() ?: break
+                        val k = nasWatchedEntry(path)
+                            ?: runCatching { kodiPathFor(path)?.let { kodi.details(KodiApi.Entry("", it, false, false, 0.0, 0.0)) } }.getOrNull() ?: break
                         if (k.played) { anyWatched = true; continue }
                         if (k.resumeSec > 0 || anyWatched) found = e.optInt("seasonNumber")
                         break
