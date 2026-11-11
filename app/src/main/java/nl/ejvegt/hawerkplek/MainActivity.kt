@@ -5700,37 +5700,38 @@ class MainActivity : Activity() {
 
     /** Kodi vastgelopen? Geforceerd stoppen (en desgewenst opnieuw starten) via ADB. */
     private fun kodiTileMenu() {
-        val onTv = kodiOnTv
-        val adbEntity = if (onTv) TVPLUS_ADB else MEDIA_ADB
         val launch = "monkey -p $KODI_PKG -c android.intent.category.LEANBACK_LAUNCHER -c android.intent.category.LAUNCHER 1"
+        // Per ontvanger kiezen; 0-2 = GoogleTV-box, 3-5 = TV+ woonkamer, 6 = mappen
+        val items = arrayOf(
+            "⏹  Stoppen · GoogleTV-box", "↻  Herstarten · GoogleTV-box", "▶  Openen · GoogleTV-box",
+            "⏹  Stoppen · TV+ woonkamer", "↻  Herstarten · TV+ woonkamer", "▶  Openen · TV+ woonkamer",
+            "📁  Mappen bladeren",
+        )
         AlertDialog.Builder(this)
-            .setTitle(if (onTv) "Kodi · TV+ woonkamer" else "Kodi · GoogleTV-box")
-            .setItems(arrayOf("⏹  Kodi geforceerd stoppen", "↻  Kodi herstarten", "▶  Kodi openen op de tv", "📁  Mappen bladeren")) { _, i ->
-                if (i == 2 && !onTv) { MEDIA_APPS.firstOrNull { it.pkg == KODI_PKG }?.let { launchApp(it) }; return@setItems }
-                if (i == 2) {
-                    mediaStatus.text = "Kodi openen op TV+…"
-                    thread {
+            .setTitle("Kodi")
+            .setItems(items) { _, i ->
+                if (i == 6) { showKodiSheet(); return@setItems }
+                val tv = i >= 3
+                val action = i % 3   // 0 stoppen, 1 herstarten, 2 openen
+                val adbEntity = if (tv) TVPLUS_ADB else MEDIA_ADB
+                val where = if (tv) "TV+ woonkamer" else "GoogleTV-box"
+                if (action == 2 && !tv) { MEDIA_APPS.firstOrNull { it.pkg == KODI_PKG }?.let { launchApp(it) }; return@setItems }
+                mediaStatus.text = when (action) { 0 -> "Kodi stoppen op $where…"; 1 -> "Kodi herstarten op $where…"; else -> "Kodi openen op $where…" }
+                thread {
+                    if (action == 2) {
                         prepareWatching(SOURCE_TV)
                         quietService("remote/turn_on", JSONObject().put("entity_id", TVPLUS_REMOTE))
                         Thread.sleep(1_500)
-                        quietService("androidtv/adb_command", JSONObject().put("entity_id", TVPLUS_ADB).put("command", launch))
-                        runOnUiThread { mediaStatus.text = "Kodi is geopend op TV+" }
+                    } else {
+                        quietService("androidtv/adb_command", JSONObject().put("entity_id", adbEntity)
+                            .put("command", "am force-stop $KODI_PKG"))
                     }
-                    return@setItems
-                }
-                if (i == 3) { showKodiSheet(); return@setItems }
-                mediaStatus.text = if (i == 0) "Kodi stoppen…" else "Kodi herstarten…"
-                thread {
-                    quietService("androidtv/adb_command", JSONObject().put("entity_id", adbEntity)
-                        .put("command", "am force-stop $KODI_PKG"))
-                    if (i == 1) {
-                        Thread.sleep(1_500)
-                        quietService("androidtv/adb_command", JSONObject().put("entity_id", adbEntity).put(
-                            "command", "monkey -p $KODI_PKG -c android.intent.category.LEANBACK_LAUNCHER -c android.intent.category.LAUNCHER 1"
-                        ))
+                    if (action != 0) {
+                        if (action == 1) Thread.sleep(1_500)
+                        quietService("androidtv/adb_command", JSONObject().put("entity_id", adbEntity).put("command", launch))
                     }
                     runOnUiThread {
-                        mediaStatus.text = if (i == 0) "Kodi is gestopt" else "Kodi is opnieuw gestart"
+                        mediaStatus.text = when (action) { 0 -> "Kodi is gestopt op $where"; 1 -> "Kodi is opnieuw gestart op $where"; else -> "Kodi is geopend op $where" }
                         handler.postDelayed({ refreshMedia() }, 2_000)
                     }
                 }
