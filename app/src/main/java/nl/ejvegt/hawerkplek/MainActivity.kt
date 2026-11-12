@@ -5527,7 +5527,8 @@ class MainActivity : Activity() {
             isClickable = true
             setOnClickListener {
                 val r = nowRemote
-                if (r != null) showRemoteSheet(r, r == TVPLUS_REMOTE || r == TVPLUS2_REMOTE)
+                // TV+ met Kodi voorop: dezelfde bediening als bij de GoogleTV-box (typen i.p.v. gids)
+                if (r != null) showRemoteSheet(r, (r == TVPLUS_REMOTE && tvApp != KODI_PKG) || r == TVPLUS2_REMOTE)
                 else nowEntity?.let { showMediaSheet(it, nowTitle.text.toString().removeSuffix(" ▾")) }
             }
         }
@@ -5537,7 +5538,7 @@ class MainActivity : Activity() {
             setPadding(dp(10), dp(6), dp(6), dp(6))
             visibility = View.GONE
             isClickable = true
-            setOnClickListener { typeOnTv() }
+            setOnClickListener { typeOnTv(nowRemote) }
         }
         nowSubsBtn = ImageView(this).apply {
             setImageResource(R.drawable.ic_subtitles)
@@ -5545,7 +5546,11 @@ class MainActivity : Activity() {
             setPadding(dp(10), dp(6), dp(6), dp(6))
             visibility = View.GONE
             isClickable = true
-            setOnClickListener { showKodiSubsSheet() }
+            setOnClickListener {
+                // Ondertitels van de Kodi die nu speelt (TV+ of GoogleTV-box)
+                kodiOnTv = nowRemote == TVPLUS_REMOTE && kodiTvConfigured()
+                showKodiSubsSheet()
+            }
         }
         nowGuideBtn = TextView(this).apply {
             text = "Gids"
@@ -8062,8 +8067,11 @@ class MainActivity : Activity() {
             // maar dan speelt hij af zonder beeld. Openen via de Android TV-afstandsbediening in HA.
             quietService("remote/turn_on", JSONObject().put("entity_id", TVPLUS_REMOTE))
             quietService("remote/turn_on", JSONObject().put("entity_id", TVPLUS_REMOTE).put("activity", KODI_PKG))
+            // Net als bij de GoogleTV-box ook via ADB (betrouwbaarder); doet niets als hij al voorop staat
+            quietService("androidtv/adb_command", JSONObject().put("entity_id", TVPLUS_ADB).put(
+                "command", "monkey -p $KODI_PKG -c android.intent.category.LEANBACK_LAUNCHER -c android.intent.category.LAUNCHER 1"))
             Thread.sleep(2_000)
-            repeat(25) { if (kodi.ping()) return true; Thread.sleep(1_000) }
+            repeat(25) { if (kodi.ping()) { tvApp = KODI_PKG; return true }; Thread.sleep(1_000) }
             return false
         }
         if (kodi.ping()) return true
@@ -8093,7 +8101,7 @@ class MainActivity : Activity() {
                 val r = runCatching {
                     if (!kodiEnsureRunning()) throw IOException("Kodi reageert niet (staat http-bediening aan?)")
                     kodi.play(e.file, resume)
-                    boxApp = KODI_PKG
+                    if (kodiOnTv) tvApp = KODI_PKG else boxApp = KODI_PKG
                 }
                 runOnUiThread {
                     mediaStatus.text = r.exceptionOrNull()?.let { "Afspelen mislukt: ${it.message}" } ?: "▶ $name"
@@ -11710,7 +11718,7 @@ class MainActivity : Activity() {
             else btn("⌨ Typen", null).apply {
                 background = GradientDrawable().apply { setColor(0xFF1565C0.toInt()); cornerRadius = dp(14).toFloat() }
                 isClickable = true
-                setOnClickListener { typeOnTv() }
+                setOnClickListener { typeOnTv(remote) }
             },
             // Standby: het Android TV-apparaat (TV+-ontvanger of GoogleTV-box) uit via de integratie.
             // Echt aan/uit-icoon (het ⏻-teken staat niet in elk lettertype)
@@ -11990,7 +11998,7 @@ class MainActivity : Activity() {
      * Tekst typen op de GoogleTV-box met het toetsenbord van de telefoon. De tekst gaat via ADB
      * ("input text") naar het zoekveld dat op de tv openstaat.
      */
-    private fun typeOnTv() {
+    private fun typeOnTv(remote: String? = MEDIA_REMOTE) {
         val input = EditText(this).apply {
             hint = "Bijv. Yellowstone"
             inputType = InputType.TYPE_CLASS_TEXT
@@ -12011,12 +12019,12 @@ class MainActivity : Activity() {
         val dialog = AlertDialog.Builder(this)
             .setTitle("Typen op de tv")
             .setView(box)
-            .setPositiveButton("Zoeken") { _, _ -> sendTextToTv(input.text.toString(), enter = true) }
-            .setNeutralButton("Alleen typen") { _, _ -> sendTextToTv(input.text.toString(), enter = false) }
+            .setPositiveButton("Zoeken") { _, _ -> sendTextToTv(input.text.toString(), enter = true, remote = remote) }
+            .setNeutralButton("Alleen typen") { _, _ -> sendTextToTv(input.text.toString(), enter = false, remote = remote) }
             .setNegativeButton("Annuleren", null)
             .create()
         input.setOnEditorActionListener { _, _, _ ->
-            sendTextToTv(input.text.toString(), enter = true)
+            sendTextToTv(input.text.toString(), enter = true, remote = remote)
             dialog.dismiss()
             true
         }
@@ -12025,7 +12033,7 @@ class MainActivity : Activity() {
         input.requestFocus()
     }
 
-    private fun sendTextToTv(text: String, enter: Boolean) {
+    private fun sendTextToTv(text: String, enter: Boolean, remote: String? = MEDIA_REMOTE) {
         if (text.isBlank()) return
         // "input text" kent geen spaties (→ %s) en de tekst moet veilig tussen enkele aanhalingstekens
         val escaped = text.replace("%", "\\%").replace(" ", "%s").replace("'", "'\\''")
@@ -12033,7 +12041,7 @@ class MainActivity : Activity() {
         if (enter) cmd += " && input keyevent 66"
         mediaStatus.text = "Typen: $text"
         thread {
-            quietService("androidtv/adb_command", JSONObject().put("entity_id", MEDIA_ADB).put("command", cmd))
+            quietService("androidtv/adb_command", JSONObject().put("entity_id", adbFor(remote)).put("command", cmd))
         }
     }
 
@@ -12137,14 +12145,19 @@ class MainActivity : Activity() {
 
     /** App die nu op de GoogleTV-box openstaat (bijgewerkt door de infobalk). */
     @Volatile private var boxApp: String? = null
+    /** App die nu op de TV+ woonkamer openstaat (Kodi of de KPN-app). */
+    @Volatile private var tvApp: String? = null
+    /** ADB-entiteit bij een afstandsbediening: TV+ woonkamer of GoogleTV-box. */
+    private fun adbFor(remote: String?) = if (remote == TVPLUS_REMOTE) TVPLUS_ADB else MEDIA_ADB
 
     private fun sendRemoteKey(remote: String, key: String) {
         while (keyQueue.size >= 4) keyQueue.pollFirst()
         val kodiCode = KODI_ADB_KEYS[key]
-        val item = if (remote == MEDIA_REMOTE && kodiCode != null && boxApp == "org.xbmc.kodi") {
+        val kodiFront = (remote == MEDIA_REMOTE && boxApp == KODI_PKG) || (remote == TVPLUS_REMOTE && tvApp == KODI_PKG)
+        val item = if (kodiCode != null && kodiFront) {
             // Kodi reageert op OK/Terug via de Remote-integratie anders dan op de echte afstandsbediening.
-            // Via ADB komen ze binnen zoals een fysieke toets.
-            "androidtv/adb_command" to JSONObject().put("entity_id", MEDIA_ADB).put("command", "input keyevent $kodiCode")
+            // Via ADB komen ze binnen zoals een fysieke toets (GoogleTV-box én TV+ woonkamer).
+            "androidtv/adb_command" to JSONObject().put("entity_id", adbFor(remote)).put("command", "input keyevent $kodiCode")
         } else {
             "remote/send_command" to JSONObject().put("entity_id", remote).put("command", key).put("delay_secs", 0)
         }
@@ -12311,6 +12324,18 @@ class MainActivity : Activity() {
         return when (source) {
             SOURCE_TV -> {
                 val p = stateOf(TVPLUS_PLAYER)
+                val appId = attr(p, "app_id") ?: attr(stateOf(TVPLUS_REMOTE), "current_activity")
+                tvApp = appId
+                // Kodi op de TV+: net als bij de GoogleTV-box de app tonen (met ondertitels/typen/bediening)
+                if (appId == KODI_PKG) {
+                    val app = MEDIA_APPS.firstOrNull { it.pkg == KODI_PKG }
+                    return NowInfo(
+                        title = app?.name ?: "Kodi",
+                        sub = joinNonEmpty("TV+ woonkamer", attr(p, "media_title"), attr(p, "media_artist")),
+                        icon = app?.logo ?: R.drawable.ic_tv_watch, iconBg = app?.color ?: 0xFF1565C0.toInt(),
+                        entity = TVPLUS_PLAYER, playing = isPlaying(p), remote = TVPLUS_REMOTE,
+                    )
+                }
                 val last = lastChannel()
                 NowInfo(
                     title = "TV+ woonkamer",
@@ -12438,9 +12463,10 @@ class MainActivity : Activity() {
         // Afstandsbediening: box/TV+ met pijltjes, of bij muziek (Chromecast Audio, PiCore…) een speler-bediening
         val musicEntity = info.remote == null && info.entity != null && info.entity != "local"
         nowRemoteBtn.visibility = if (info.remote != null || musicEntity) View.VISIBLE else View.GONE
-        // Typen kan alleen op de GoogleTV-box (via ADB)
-        nowKeyboardBtn.visibility = if (info.remote == MEDIA_REMOTE) View.VISIBLE else View.GONE
-        nowSubsBtn.visibility = if (info.remote == MEDIA_REMOTE && boxApp == KODI_PKG) View.VISIBLE else View.GONE
+        // Typen (via ADB): GoogleTV-box altijd, TV+ woonkamer als Kodi openstaat
+        val kodiOnTvPlus = info.remote == TVPLUS_REMOTE && tvApp == KODI_PKG
+        nowKeyboardBtn.visibility = if (info.remote == MEDIA_REMOTE || kodiOnTvPlus) View.VISIBLE else View.GONE
+        nowSubsBtn.visibility = if ((info.remote == MEDIA_REMOTE && boxApp == KODI_PKG) || (kodiOnTvPlus && kodiTvConfigured())) View.VISIBLE else View.GONE
         nowPlayPause.text = if (info.playing) "❚❚" else "▶"
     }
 
