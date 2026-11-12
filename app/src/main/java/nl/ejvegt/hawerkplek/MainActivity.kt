@@ -10616,10 +10616,13 @@ class MainActivity : Activity() {
             layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f).apply { marginStart = dp(8); marginEnd = dp(8) }
         }
         fun setAt(t: Long?) {
-            at = t?.takeIf { it < System.currentTimeMillis() - 60_000L }
-            atLabel.text = at?.let { "↺  " + atFmt.format(java.util.Date(it)) } ?: "Nu"
+            val nowMs = System.currentTimeMillis()
+            // Terug in de tijd (terugkijken) of vooruit (wat er straks komt); rond "nu" = live
+            at = t?.takeIf { it < nowMs - 60_000L || it > nowMs + 60_000L }
+            val future = at?.let { it > nowMs } == true
+            atLabel.text = at?.let { (if (future) "→  " else "↺  ") + atFmt.format(java.util.Date(it)) } ?: "Nu"
             atLabel.background = GradientDrawable().apply {
-                setColor(if (at == null) 0xFF2A2A2A.toInt() else 0xFF4A3A10.toInt()); cornerRadius = dp(16).toFloat()
+                setColor(when { at == null -> 0xFF2A2A2A.toInt(); future -> 0xFF10344A.toInt(); else -> 0xFF4A3A10.toInt() }); cornerRadius = dp(16).toFloat()
             }
             render()
         }
@@ -10640,9 +10643,25 @@ class MainActivity : Activity() {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
             setPadding(0, dp(8), 0, dp(2))
-            addView(stepBtn("◀ 1 uur") { setAt(floorHour(at ?: System.currentTimeMillis()) - if (at == null) 0 else hour) })
+            addView(stepBtn("◀ 1 uur") {
+                val nowMs = System.currentTimeMillis()
+                val a = at
+                when {
+                    a == null -> setAt(floorHour(nowMs))                       // naar het begin van dit blok (terugkijken)
+                    a > nowMs -> setAt((a - hour).takeIf { it > nowMs })       // vanuit de toekomst terug; langs "nu" = live
+                    else -> setAt(a - hour)
+                }
+            })
             addView(atLabel)
-            addView(stepBtn("1 uur ▶") { at?.let { setAt(it + hour) } })
+            addView(stepBtn("1 uur ▶") {
+                val nowMs = System.currentTimeMillis()
+                val a = at
+                when {
+                    a == null -> setAt(floorHour(nowMs) + hour)                // vooruit: wat er straks komt
+                    a < nowMs -> setAt((a + hour).takeIf { floorHour(it) < floorHour(nowMs) })  // terugkijken → vooruit; voorbij nu = live
+                    else -> setAt(a + hour)
+                }
+            })
         }
         content.addView(stepRow, 2)  // direct onder de titel
         content.addView(boxChip { render() }, 2)
@@ -10696,7 +10715,8 @@ class MainActivity : Activity() {
                         ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT
                     ).apply { bottomMargin = dp(6) }
                     isClickable = true
-                    setOnClickListener { dialog.dismiss(); tuneChannel(ch.num, ch.name, if (at != null) now?.start else null) }
+                    // Terugkijken alleen voor het verleden; bij een tijd in de toekomst gewoon live overschakelen
+                    setOnClickListener { dialog.dismiss(); tuneChannel(ch.num, ch.name, if (at != null && at!! < System.currentTimeMillis()) now?.start else null) }
                 }
                 row.addView(LinearLayout(this).apply {
                     orientation = LinearLayout.VERTICAL
@@ -10774,6 +10794,7 @@ class MainActivity : Activity() {
             }
             for (grp in TV_GROUPS) rows(grp.channels, tvGroup(list, grp.title, grp.channels.size, grp.open))
             status.text = if (TvGuide.data.isEmpty()) status.text
+                else if (at != null && at!! > System.currentTimeMillis()) "Wat er straks loopt · tik = zender live · logo = dagoverzicht"
                 else if (at != null) "Wat er toen liep · tik = terugkijken · logo = dagoverzicht"
                 else "Tik op een zender om over te schakelen · tik op het logo voor het dagoverzicht"
         }
