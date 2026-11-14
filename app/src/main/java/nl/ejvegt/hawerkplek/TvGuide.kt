@@ -179,6 +179,22 @@ object TvGuide {
     fun range(channel: String, from: Long, to: Long): List<Prog> =
         data[channel]?.filter { it.stop > from && it.start < to }.orEmpty()
 
+    /**
+     * Programma [k] stappen vanaf het programma dat op [at] loopt (0 = dat programma, 1 = het volgende,
+     * -1 = het vorige), plus het programma daarna. Zo valt er nooit iets "tussen twee tijdsblokken".
+     */
+    fun relative(channel: String, at: Long, k: Int): Pair<Prog?, Prog?> {
+        if (k == 0) return nowNext(channel, at)
+        val list = data[channel] ?: return null to null
+        val i = list.indexOfFirst { it.start <= at && it.stop > at }
+        val j = if (i >= 0) i + k else {
+            // Gat in de gids op dit moment: tel vanaf het eerstvolgende programma
+            val f = list.indexOfFirst { it.start > at }.let { if (it < 0) list.size else it }
+            if (k > 0) f + k - 1 else f + k
+        }
+        return list.getOrNull(j) to list.getOrNull(j + 1)
+    }
+
     /** (nu, straks) voor een zender. */
     fun nowNext(channel: String, at: Long = System.currentTimeMillis()): Pair<Prog?, Prog?> {
         val list = data[channel] ?: return null to null

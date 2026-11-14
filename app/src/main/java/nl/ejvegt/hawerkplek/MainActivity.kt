@@ -10602,8 +10602,10 @@ class MainActivity : Activity() {
         val timeFmt = java.text.SimpleDateFormat("HH:mm", NL)
         fun hm(t: Long) = timeFmt.format(java.util.Date(t))
         val current = prefs().getInt(KEY_LAST_CHANNEL, -1)
-        // Tijdstip in de gids: null = nu (live), anders terugbladeren
+        // Tijdstip in de gids: null = nu (live), anders een gekozen dag/tijd (terugkijken)
         var at: Long? = null
+        // Bladeren per programma: 0 = wat er op dat moment loopt, +1 = volgende, -1 = vorige, ...
+        var shift = 0
         val atFmt = java.text.SimpleDateFormat("EEE d MMM HH:mm", NL)
         lateinit var render: () -> Unit
         val atLabel = TextView(this).apply {
@@ -10615,17 +10617,29 @@ class MainActivity : Activity() {
             background = GradientDrawable().apply { setColor(0xFF2A2A2A.toInt()); cornerRadius = dp(16).toFloat() }
             layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f).apply { marginStart = dp(8); marginEnd = dp(8) }
         }
+        fun updateLabel() {
+            val base = at?.let { "↺  " + atFmt.format(java.util.Date(it)) }
+            val step = when {
+                shift == 0 -> null
+                shift == 1 -> "Volgende"
+                shift == -1 -> "Vorige"
+                shift > 0 -> "+$shift programma's"
+                else -> "${shift} programma's"
+            }
+            atLabel.text = listOfNotNull(base, step).joinToString("  ·  ").ifEmpty { "Nu" }
+            atLabel.background = GradientDrawable().apply {
+                setColor(when { at != null -> 0xFF4A3A10.toInt(); shift > 0 -> 0xFF10344A.toInt(); shift < 0 -> 0xFF4A3A10.toInt(); else -> 0xFF2A2A2A.toInt() })
+                cornerRadius = dp(16).toFloat()
+            }
+        }
         fun setAt(t: Long?) {
             val nowMs = System.currentTimeMillis()
-            // Terug in de tijd (terugkijken) of vooruit (wat er straks komt); rond "nu" = live
             at = t?.takeIf { it < nowMs - 60_000L || it > nowMs + 60_000L }
-            val future = at?.let { it > nowMs } == true
-            atLabel.text = at?.let { (if (future) "→  " else "↺  ") + atFmt.format(java.util.Date(it)) } ?: "Nu"
-            atLabel.background = GradientDrawable().apply {
-                setColor(when { at == null -> 0xFF2A2A2A.toInt(); future -> 0xFF10344A.toInt(); else -> 0xFF4A3A10.toInt() }); cornerRadius = dp(16).toFloat()
-            }
+            shift = 0
+            updateLabel()
             render()
         }
+        fun setShift(k: Int) { shift = k.coerceIn(-40, 40); updateLabel(); render() }
         fun stepBtn(label: String, onTap: () -> Unit) = TextView(this).apply {
             text = label
             textSize = 14f
@@ -10637,31 +10651,13 @@ class MainActivity : Activity() {
             isClickable = true
             setOnClickListener { onTap() }
         }
-        val hour = 3_600_000L
-        fun floorHour(t: Long) = t - (t % (30 * 60_000L))
         val stepRow = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
             setPadding(0, dp(8), 0, dp(2))
-            addView(stepBtn("◀ 1 uur") {
-                val nowMs = System.currentTimeMillis()
-                val a = at
-                when {
-                    a == null -> setAt(floorHour(nowMs))                       // naar het begin van dit blok (terugkijken)
-                    a > nowMs -> setAt((a - hour).takeIf { it > nowMs })       // vanuit de toekomst terug; langs "nu" = live
-                    else -> setAt(a - hour)
-                }
-            })
+            addView(stepBtn("◀ vorige") { setShift(shift - 1) })
             addView(atLabel)
-            addView(stepBtn("1 uur ▶") {
-                val nowMs = System.currentTimeMillis()
-                val a = at
-                when {
-                    a == null -> setAt(floorHour(nowMs) + hour)                // vooruit: wat er straks komt
-                    a < nowMs -> setAt((a + hour).takeIf { floorHour(it) < floorHour(nowMs) })  // terugkijken → vooruit; voorbij nu = live
-                    else -> setAt(a + hour)
-                }
-            })
+            addView(stepBtn("volgende ▶") { setShift(shift + 1) })
         }
         content.addView(stepRow, 2)  // direct onder de titel
         content.addView(boxChip { render() }, 2)
@@ -10675,7 +10671,7 @@ class MainActivity : Activity() {
             val names = arrayOf("Nu (live)") + days.mapIndexed { i, c ->
                 when (i) { 0 -> "Vandaag"; 1 -> "Gisteren"; else -> dayFmt.format(c.time) }
             }
-            AlertDialog.Builder(this).setTitle("Terugkijken: welke dag?").setItems(names) { _, which ->
+            AlertDialog.Builder(this).setTitle("Terug naar nu, of terugkijken vanaf…").setItems(names) { _, which ->
                 if (which == 0) { setAt(null); return@setItems }
                 val c = days[which - 1]
                 android.app.TimePickerDialog(this, { _, h, m ->
@@ -10701,7 +10697,8 @@ class MainActivity : Activity() {
             })
             fun rows(chs: List<TvChannel>, into: LinearLayout) = chs.forEach { ch ->
                 val t = at ?: System.currentTimeMillis()
-                val (now, next) = TvGuide.nowNext(ch.name, t)
+                val realNow = System.currentTimeMillis()
+                val (now, next) = TvGuide.relative(ch.name, t, shift)
                 if (now == null && next == null) missing++
                 val row = LinearLayout(this).apply {
                     orientation = LinearLayout.HORIZONTAL
@@ -10715,15 +10712,21 @@ class MainActivity : Activity() {
                         ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT
                     ).apply { bottomMargin = dp(6) }
                     isClickable = true
-                    // Terugkijken alleen voor het verleden; bij een tijd in de toekomst gewoon live overschakelen
-                    setOnClickListener { dialog.dismiss(); tuneChannel(ch.num, ch.name, if (at != null && at!! < System.currentTimeMillis()) now?.start else null) }
+                    // Afgelopen of gekozen-in-het-verleden programma = terugkijken vanaf het begin; loopt het nu of komt het nog = live
+                    setOnClickListener {
+                        dialog.dismiss()
+                        val p = now
+                        val nowMs = System.currentTimeMillis()
+                        val replay = p != null && p.start < nowMs && (p.stop <= nowMs || at != null)
+                        tuneChannel(ch.num, ch.name, if (replay) p!!.start else null)
+                    }
                 }
                 row.addView(LinearLayout(this).apply {
                     orientation = LinearLayout.VERTICAL
                     gravity = Gravity.CENTER_HORIZONTAL
                     layoutParams = LinearLayout.LayoutParams(dp(64), ViewGroup.LayoutParams.WRAP_CONTENT).apply { marginEnd = dp(10) }
                     isClickable = true
-                    setOnClickListener { showChannelDaySheet(ch, at ?: System.currentTimeMillis()) }
+                    setOnClickListener { showChannelDaySheet(ch, now?.start ?: at ?: System.currentTimeMillis()) }
                     addView(TextView(this@MainActivity).apply {
                         text = ch.num.toString()
                         textSize = 12f
@@ -10758,8 +10761,15 @@ class MainActivity : Activity() {
                         maxLines = 1
                         ellipsize = android.text.TextUtils.TruncateAt.END
                     })
-                    if (now != null) {
-                        val frac = ((t - now.start).toFloat() / (now.stop - now.start).coerceAtLeast(1)).coerceIn(0f, 1f)
+                    // Loopt dit programma nu (of is het het "nu" van de gekozen tijd): voortgangsbalk; anders alleen de tijden
+                    val ref = if (shift == 0) t else realNow
+                    if (now != null && (now.start > ref || now.stop <= ref)) {
+                        addView(TextView(this@MainActivity).apply {
+                            text = "${hm(now.start)} – ${hm(now.stop)}" + if (now.stop <= realNow) "  ·  terugkijken" else ""
+                            textSize = 11f; setTextColor(0xFF9A9A9A.toInt()); setPadding(0, dp(4), 0, dp(2))
+                        })
+                    } else if (now != null) {
+                        val frac = ((ref - now.start).toFloat() / (now.stop - now.start).coerceAtLeast(1)).coerceIn(0f, 1f)
                         addView(LinearLayout(this@MainActivity).apply {
                             orientation = LinearLayout.HORIZONTAL
                             gravity = Gravity.CENTER_VERTICAL
@@ -10794,8 +10804,8 @@ class MainActivity : Activity() {
             }
             for (grp in TV_GROUPS) rows(grp.channels, tvGroup(list, grp.title, grp.channels.size, grp.open))
             status.text = if (TvGuide.data.isEmpty()) status.text
-                else if (at != null && at!! > System.currentTimeMillis()) "Wat er straks loopt · tik = zender live · logo = dagoverzicht"
-                else if (at != null) "Wat er toen liep · tik = terugkijken · logo = dagoverzicht"
+                else if (shift > 0 && at == null) "Wat er hierna komt · tik = zender live · logo = dagoverzicht"
+                else if (shift < 0 || at != null) "Wat er eerder liep · tik = terugkijken vanaf het begin · logo = dagoverzicht"
                 else "Tik op een zender om over te schakelen · tik op het logo voor het dagoverzicht"
         }
         render()
