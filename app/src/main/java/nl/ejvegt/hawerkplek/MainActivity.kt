@@ -8117,7 +8117,16 @@ class MainActivity : Activity() {
             progress("Wachten tot Kodi klaar is op $where… ${sec} s" +
                 (kodi.lastError?.takeIf { sec >= 5 }?.let { "\nKodi (${kodi.address()}): $it" } ?: "") +
                 (kodiLaunchError?.let { "\nADB-opdracht mislukt: $it" } ?: ""))
-            if (!relaunched && sec >= 8) { relaunched = true; kodiLaunch() }   // eerste poging niet aangekomen (box sliep?)
+            if (!relaunched && sec >= 8) {
+                // Na 8 s nog geen antwoord: Kodi hangt vaak half op de achtergrond (draait wel, maar de
+                // bediening reageert niet). Dan helpt alleen opnieuw starten: geforceerd stoppen en weer openen.
+                relaunched = true
+                progress("Kodi reageert niet, Kodi opnieuw opstarten op $where…")
+                quietService("androidtv/adb_command", JSONObject().put("entity_id", if (kodiOnTv) TVPLUS_ADB else MEDIA_ADB)
+                    .put("command", "am force-stop $KODI_PKG"))
+                Thread.sleep(1_500)
+                kodiLaunch()
+            }
             Thread.sleep(500)
         }
         return false
