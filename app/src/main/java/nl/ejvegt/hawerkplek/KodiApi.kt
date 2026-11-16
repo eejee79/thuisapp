@@ -55,7 +55,22 @@ class KodiApi(
     }
 
     /** Snelle check of Kodi antwoordt (kort wachten, zodat opstarten vlot gevolgd wordt). */
-    fun ping(): Boolean = runCatching { rpc("JSONRPC.Ping", timeoutMs = 1_500, readMs = 2_500) == "pong" }.getOrDefault(false)
+    fun ping(): Boolean {
+        val r = runCatching { rpc("JSONRPC.Ping", timeoutMs = 1_500, readMs = 2_500) }
+        lastError = r.exceptionOrNull()?.let { e ->
+            when (e) {
+                is java.net.ConnectException -> "verbinding geweigerd (draait Kodi, staat 'bediening via HTTP' aan?)"
+                is java.net.SocketTimeoutException -> "geen antwoord binnen de tijd"
+                is java.net.NoRouteToHostException -> "apparaat niet bereikbaar op het netwerk"
+                else -> e.message ?: e.javaClass.simpleName
+            }
+        } ?: if (r.getOrNull() != "pong") "onverwacht antwoord: ${r.getOrNull()}" else null
+        return lastError == null
+    }
+
+    /** Waarom de laatste ping mislukte (voor een duidelijke foutmelding). */
+    @Volatile var lastError: String? = null
+    fun address() = "${host()}:${port()}"
 
     /** Video-bronnen (de mappen die je in Kodi hebt toegevoegd). */
     fun sources(): List<Entry> = listOf("video", "files").flatMap { media ->

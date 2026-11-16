@@ -8114,7 +8114,9 @@ class MainActivity : Activity() {
             }
             first = false
             val sec = (System.currentTimeMillis() - t0) / 1000
-            progress("Wachten tot Kodi klaar is op $where… ${sec} s" + (kodiLaunchError?.let { "\n(ADB-opdracht mislukt: $it)" } ?: ""))
+            progress("Wachten tot Kodi klaar is op $where… ${sec} s" +
+                (kodi.lastError?.takeIf { sec >= 5 }?.let { "\nKodi (${kodi.address()}): $it" } ?: "") +
+                (kodiLaunchError?.let { "\nADB-opdracht mislukt: $it" } ?: ""))
             if (!relaunched && sec >= 8) { relaunched = true; kodiLaunch() }   // eerste poging niet aangekomen (box sliep?)
             Thread.sleep(500)
         }
@@ -8139,7 +8141,7 @@ class MainActivity : Activity() {
             thread { prepareWatching(if (kodiOnTv) "KPN Hangplek" else SOURCE_APPS) }   // tv + receiver klaarzetten
             thread {
                 val r = runCatching {
-                    if (!kodiEnsureRunning { step(it) }) throw IOException("Kodi reageert niet (staat http-bediening aan?)")
+                    if (!kodiEnsureRunning { step(it) }) throw IOException("Kodi op ${kodi.address()} reageert niet: ${kodi.lastError ?: "onbekend"}")
                     step("Afspelen…")
                     kodi.play(e.file, resume)
                     if (kodiOnTv) tvApp = KODI_PKG else boxApp = KODI_PKG
