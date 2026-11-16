@@ -8070,6 +8070,8 @@ class MainActivity : Activity() {
     /** Kodi draait en luistert? Zo niet: box aan en Kodi starten, dan wachten tot hij antwoordt. */
     @Volatile private var kodiLaunchAt = 0L
     @Volatile private var kodiLaunchThreads: List<Thread> = emptyList()
+    /** Foutmelding van de laatste ADB-startopdracht (null = gelukt). */
+    @Volatile private var kodiLaunchError: String? = null
 
     /**
      * Kodi openen op de gekozen ontvanger: aanzetten en Kodi naar voren halen, tegelijk (niet na elkaar)
@@ -8078,15 +8080,20 @@ class MainActivity : Activity() {
     private fun kodiLaunch() {
         kodiLaunchAt = System.currentTimeMillis()
         val launch = "monkey -p $KODI_PKG -c android.intent.category.LEANBACK_LAUNCHER -c android.intent.category.LAUNCHER 1"
-        kodiLaunchThreads = if (kodiOnTv) listOf(
+        val remote = if (kodiOnTv) TVPLUS_REMOTE else MEDIA_REMOTE
+        val adb = if (kodiOnTv) TVPLUS_ADB else MEDIA_ADB
+        kodiLaunchError = null
+        // Twee wegen tegelijk: de Android TV-afstandsbediening (app openen) én ADB. Werkt er één niet, dan de ander.
+        kodiLaunchThreads = listOf(
             thread {
-                quietService("remote/turn_on", JSONObject().put("entity_id", TVPLUS_REMOTE))
-                quietService("remote/turn_on", JSONObject().put("entity_id", TVPLUS_REMOTE).put("activity", KODI_PKG))
+                quietService("remote/turn_on", JSONObject().put("entity_id", remote))
+                quietService("remote/turn_on", JSONObject().put("entity_id", remote).put("activity", KODI_PKG))
             },
-            thread { quietService("androidtv/adb_command", JSONObject().put("entity_id", TVPLUS_ADB).put("command", launch)) },
-        ) else listOf(
-            thread { quietService("remote/turn_on", JSONObject().put("entity_id", MEDIA_REMOTE)) },
-            thread { quietService("androidtv/adb_command", JSONObject().put("entity_id", MEDIA_ADB).put("command", launch)) },
+            thread {
+                kodiLaunchError = runCatching {
+                    haRequest("POST", "/api/services/androidtv/adb_command", JSONObject().put("entity_id", adb).put("command", launch).toString())
+                }.exceptionOrNull()?.let { it.message ?: "onbekende fout" }
+            },
         )
     }
 
@@ -8107,7 +8114,7 @@ class MainActivity : Activity() {
             }
             first = false
             val sec = (System.currentTimeMillis() - t0) / 1000
-            progress("Wachten tot Kodi klaar is op $where… ${sec} s")
+            progress("Wachten tot Kodi klaar is op $where… ${sec} s" + (kodiLaunchError?.let { "\n(ADB-opdracht mislukt: $it)" } ?: ""))
             if (!relaunched && sec >= 8) { relaunched = true; kodiLaunch() }   // eerste poging niet aangekomen (box sliep?)
             Thread.sleep(500)
         }
