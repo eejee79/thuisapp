@@ -33,11 +33,11 @@ class KodiApi(
 
     private var id = 0
 
-    fun rpc(method: String, params: JSONObject = JSONObject(), timeoutMs: Int = 8_000): Any? {
+    fun rpc(method: String, params: JSONObject = JSONObject(), timeoutMs: Int = 8_000, readMs: Int = timeoutMs + 4_000): Any? {
         val conn = URL("http://${host()}:${port()}/jsonrpc").openConnection() as HttpURLConnection
         conn.requestMethod = "POST"
         conn.connectTimeout = timeoutMs
-        conn.readTimeout = timeoutMs + 4_000
+        conn.readTimeout = readMs
         conn.doOutput = true
         conn.setRequestProperty("Content-Type", "application/json")
         if (user().isNotEmpty()) {
@@ -54,7 +54,8 @@ class KodiApi(
         return json.opt("result")
     }
 
-    fun ping(): Boolean = runCatching { rpc("JSONRPC.Ping", timeoutMs = 2_000) == "pong" }.getOrDefault(false)
+    /** Snelle check of Kodi antwoordt (kort wachten, zodat opstarten vlot gevolgd wordt). */
+    fun ping(): Boolean = runCatching { rpc("JSONRPC.Ping", timeoutMs = 1_500, readMs = 2_500) == "pong" }.getOrDefault(false)
 
     /** Video-bronnen (de mappen die je in Kodi hebt toegevoegd). */
     fun sources(): List<Entry> = listOf("video", "files").flatMap { media ->

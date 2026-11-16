@@ -6662,9 +6662,16 @@ class MainActivity : Activity() {
 
     private fun playArrFileOn(arrPath: String, label: String, onStarted: () -> Unit) {
         mediaStatus.text = "$label zoeken in Kodi (${if (kodiOnTv) "TV+ woonkamer" else "GoogleTV-box"})…"
+        // Kodi alvast opstarten terwijl we het bestand opzoeken en eventueel "verder kijken?" vragen
+        if (System.currentTimeMillis() - kodiLaunchAt > 20_000) kodiLaunch()
         thread {
             val kp = runCatching { kodiPathFor(arrPath) }.getOrNull()
-            val e = kp?.let { f -> runCatching { kodi.details(KodiApi.Entry(label, f, false, false, 0.0, 0.0)) }.getOrElse { KodiApi.Entry(label, f, false, false, 0.0, 0.0) } }
+            // Hervatpunt eerst uit de gedeelde bibliotheek op de NAS (direct, ook als Kodi nog opstart)
+            val nas = nasWatchedEntry(arrPath)
+            val e = kp?.let { f ->
+                if (nas != null) KodiApi.Entry(label, f, false, nas.played, nas.resumeSec, nas.totalSec)
+                else runCatching { kodi.details(KodiApi.Entry(label, f, false, false, 0.0, 0.0)) }.getOrElse { KodiApi.Entry(label, f, false, false, 0.0, 0.0) }
+            }
             runOnUiThread {
                 if (e == null) { mediaStatus.text = "Kan $label niet vinden in de Kodi-bronnen"; return@runOnUiThread }
                 kodiPlay(KodiApi.Entry(label, e.file, false, e.played, e.resumeSec, e.totalSec), onStarted)
@@ -8061,32 +8068,48 @@ class MainActivity : Activity() {
     }
 
     /** Kodi draait en luistert? Zo niet: box aan en Kodi starten, dan wachten tot hij antwoordt. */
-    private fun kodiEnsureRunning(): Boolean {
-        if (kodiOnTv) {
-            // TV+-ontvanger: Kodi ALTIJD naar voren halen. Kodi kan op de achtergrond nog antwoorden,
-            // maar dan speelt hij af zonder beeld. Openen via de Android TV-afstandsbediening in HA.
-            quietService("remote/turn_on", JSONObject().put("entity_id", TVPLUS_REMOTE))
-            quietService("remote/turn_on", JSONObject().put("entity_id", TVPLUS_REMOTE).put("activity", KODI_PKG))
-            // Net als bij de GoogleTV-box ook via ADB (betrouwbaarder); doet niets als hij al voorop staat
-            quietService("androidtv/adb_command", JSONObject().put("entity_id", TVPLUS_ADB).put(
-                "command", "monkey -p $KODI_PKG -c android.intent.category.LEANBACK_LAUNCHER -c android.intent.category.LAUNCHER 1"))
-            Thread.sleep(2_000)
-            repeat(25) { if (kodi.ping()) { tvApp = KODI_PKG; return true }; Thread.sleep(1_000) }
-            return false
-        }
-        if (kodi.ping()) return true
-        // Box altijd aanzetten (doet niets als hij al aan staat), ook als HA denkt dat hij aan is
-        val wasOn = currentMediaState() == "on"
-        quietService("remote/turn_on", JSONObject().put("entity_id", MEDIA_REMOTE))
-        Thread.sleep(if (wasOn) 800 else 3_000)
-        quietService(
-            "androidtv/adb_command", JSONObject().put("entity_id", MEDIA_ADB).put(
-                "command", "monkey -p $KODI_PKG -c android.intent.category.LEANBACK_LAUNCHER -c android.intent.category.LAUNCHER 1"
-            )
+    @Volatile private var kodiLaunchAt = 0L
+    @Volatile private var kodiLaunchThreads: List<Thread> = emptyList()
+
+    /**
+     * Kodi openen op de gekozen ontvanger: aanzetten en Kodi naar voren halen, tegelijk (niet na elkaar)
+     * en zonder te wachten. Een al draaiende Kodi komt zo ook naar voren (anders speelt hij zonder beeld).
+     */
+    private fun kodiLaunch() {
+        kodiLaunchAt = System.currentTimeMillis()
+        val launch = "monkey -p $KODI_PKG -c android.intent.category.LEANBACK_LAUNCHER -c android.intent.category.LAUNCHER 1"
+        kodiLaunchThreads = if (kodiOnTv) listOf(
+            thread {
+                quietService("remote/turn_on", JSONObject().put("entity_id", TVPLUS_REMOTE))
+                quietService("remote/turn_on", JSONObject().put("entity_id", TVPLUS_REMOTE).put("activity", KODI_PKG))
+            },
+            thread { quietService("androidtv/adb_command", JSONObject().put("entity_id", TVPLUS_ADB).put("command", launch)) },
+        ) else listOf(
+            thread { quietService("remote/turn_on", JSONObject().put("entity_id", MEDIA_REMOTE)) },
+            thread { quietService("androidtv/adb_command", JSONObject().put("entity_id", MEDIA_ADB).put("command", launch)) },
         )
-        repeat(20) {
-            Thread.sleep(1_000)
-            if (kodi.ping()) { boxApp = KODI_PKG; return true }
+    }
+
+    /** Wacht (max ~30 s) tot Kodi antwoordt; start hem zo nodig (nog een keer). [progress] krijgt de huidige stap. */
+    private fun kodiEnsureRunning(progress: (String) -> Unit = {}): Boolean {
+        val where = if (kodiOnTv) "TV+ woonkamer" else "GoogleTV-box"
+        // Al gestart door het opwarmen (bij het aantikken)? Dan niet nog eens.
+        if (System.currentTimeMillis() - kodiLaunchAt > 20_000) { progress("Kodi openen op $where…"); kodiLaunch() }
+        val t0 = System.currentTimeMillis()
+        var relaunched = false
+        var first = true
+        while (System.currentTimeMillis() - t0 < 30_000) {
+            if (kodi.ping()) {
+                // Antwoordde hij meteen, dan liep hij al: wacht even tot hij echt voorop staat
+                if (first) kodiLaunchThreads.forEach { runCatching { it.join(6_000) } }
+                if (kodiOnTv) tvApp = KODI_PKG else boxApp = KODI_PKG
+                return true
+            }
+            first = false
+            val sec = (System.currentTimeMillis() - t0) / 1000
+            progress("Wachten tot Kodi klaar is op $where… ${sec} s")
+            if (!relaunched && sec >= 8) { relaunched = true; kodiLaunch() }   // eerste poging niet aangekomen (box sliep?)
+            Thread.sleep(500)
         }
         return false
     }
@@ -8096,15 +8119,29 @@ class MainActivity : Activity() {
             onStarted()
             val name = e.label.substringBeforeLast('.').ifEmpty { e.label }
             mediaStatus.text = "$name starten in Kodi…"
+            // Laten zien wat er gebeurt, i.p.v. stil wachten
+            val stepText = TextView(this).apply { textSize = 14f; setTextColor(0xFFCFCFCF.toInt()); text = "Tv en receiver aanzetten…" }
+            val spin = android.widget.ProgressBar(this).apply { isIndeterminate = true }
+            val pbox = LinearLayout(this).apply {
+                orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL; setPadding(dp(20), dp(16), dp(20), dp(8))
+                addView(spin, LinearLayout.LayoutParams(dp(32), dp(32)).apply { marginEnd = dp(14) })
+                addView(stepText, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+            }
+            val pd = AlertDialog.Builder(this).setTitle(name).setView(pbox).setNegativeButton("Verbergen", null).show()
+            fun step(t: String) = runOnUiThread { stepText.text = t; mediaStatus.text = t }
             thread { prepareWatching(if (kodiOnTv) "KPN Hangplek" else SOURCE_APPS) }   // tv + receiver klaarzetten
             thread {
                 val r = runCatching {
-                    if (!kodiEnsureRunning()) throw IOException("Kodi reageert niet (staat http-bediening aan?)")
+                    if (!kodiEnsureRunning { step(it) }) throw IOException("Kodi reageert niet (staat http-bediening aan?)")
+                    step("Afspelen…")
                     kodi.play(e.file, resume)
                     if (kodiOnTv) tvApp = KODI_PKG else boxApp = KODI_PKG
                 }
                 runOnUiThread {
                     mediaStatus.text = r.exceptionOrNull()?.let { "Afspelen mislukt: ${it.message}" } ?: "▶ $name"
+                    r.exceptionOrNull()?.let { ex ->
+                        spin.visibility = View.GONE; stepText.text = "Afspelen mislukt: ${ex.message}"
+                    } ?: runCatching { pd.dismiss() }
                     handler.postDelayed({ refreshMedia() }, 3_000)
                 }
                 // Zodra de video echt loopt (en de sporen bekend zijn): meteen ondertitels & audio tonen
