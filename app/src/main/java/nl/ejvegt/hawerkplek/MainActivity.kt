@@ -3799,13 +3799,14 @@ class MainActivity : Activity() {
         near.addView(nearList)
         val chipViews = mutableListOf<TextView>()
         fun paintNearChips() {
-            val sel = listOf(nearMode == 0, nearMode == 1, nearMode == 2, nearFast, nearBelgium)
+            val sel = listOf(nearMode == 0, nearMode == 1, nearMode == 2, nearMode == 3, nearFast, nearBelgium)
+            chipViews.getOrNull(3)?.text = nearSearch?.let { "🔍 ${it.third}" } ?: "🔍 Zoeken"
             chipViews.forEachIndexed { i, c ->
                 c.setTextColor(if (sel[i]) 0xFF0B2430.toInt() else Color.WHITE)
                 (c.background as GradientDrawable).setColor(if (sel[i]) 0xFF18BCF2.toInt() else 0xFF2A2A2A.toInt())
             }
         }
-        listOf("Rond mij", "Rond de auto", "Rond huis", "Alleen snelladers", "België").forEachIndexed { i, t ->
+        listOf("Rond mij", "Rond de auto", "Rond huis", "🔍 Zoeken", "Alleen snelladers", "België").forEachIndexed { i, t ->
             val c = TextView(this).apply {
                 text = t; textSize = 13f; setTypeface(typeface, Typeface.BOLD)
                 setPadding(dp(14), dp(7), dp(14), dp(7))
@@ -3814,8 +3815,13 @@ class MainActivity : Activity() {
                 isClickable = true
                 setOnClickListener {
                     when (i) {
-                        3 -> nearFast = !nearFast
-                        4 -> {
+                        3 -> {
+                            // Zoeken op postcode of plaats
+                            askNearSearch { nearMode = 3; paintNearChips(); loadChargers() }
+                            return@setOnClickListener
+                        }
+                        4 -> nearFast = !nearFast
+                        5 -> {
                             if (!nearBelgium && prefs().getString(KEY_OCM, "").isNullOrBlank()) {
                                 askOcmKey { nearBelgium = true; paintNearChips(); loadChargers() }
                                 return@setOnClickListener
@@ -3843,7 +3849,57 @@ class MainActivity : Activity() {
     // ---------- Openbare laadpalen (NDW) ----------
     private lateinit var nearList: LinearLayout
     private lateinit var nearStatus: TextView
-    private var nearMode = 0          // 0 = rond mij (telefoon), 1 = rond de auto, 2 = rond huis
+    private var nearMode = 0          // 0 = rond mij (telefoon), 1 = rond de auto, 2 = rond huis, 3 = gezochte plek
+    /** Gezochte plek: (lat, lon, omschrijving). */
+    private var nearSearch: Triple<Double, Double, String>? = null
+
+    /** Postcode, plaats of adres opzoeken (NL via PDOK, anders Android-geocoder) en daarna [onFound]. */
+    private fun askNearSearch(onFound: () -> Unit) {
+        val input = EditText(this).apply {
+            hint = "Postcode of plaats, bijv. 1338 MB of Utrecht"
+            setSingleLine(); imeOptions = android.view.inputmethod.EditorInfo.IME_ACTION_SEARCH
+            nearSearch?.let { setText(it.third); selectAll() }
+        }
+        val msg = TextView(this).apply { textSize = 13f; setTextColor(0xFFFF8A80.toInt()); setPadding(0, dp(6), 0, 0) }
+        val box = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(dp(20), dp(8), dp(20), 0); addView(input); addView(msg) }
+        val d = AlertDialog.Builder(this).setTitle("Laadpalen zoeken bij…").setView(box)
+            .setPositiveButton("Zoeken", null).setNegativeButton("Annuleren", null).show()
+        fun go() {
+            val q = input.text.toString().trim()
+            if (q.isEmpty()) return
+            msg.setTextColor(0xFF9A9A9A.toInt()); msg.text = "Zoeken…"
+            thread {
+                val hit = geocodePlace(q)
+                runOnUiThread {
+                    if (hit == null) { msg.setTextColor(0xFFFF8A80.toInt()); msg.text = "Niet gevonden. Probeer een postcode (1338 MB) of plaatsnaam." }
+                    else { nearSearch = hit; d.dismiss(); onFound() }
+                }
+            }
+        }
+        d.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener { go() }
+        input.setOnEditorActionListener { _, _, _ -> go(); true }
+    }
+
+    private fun geocodePlace(q: String): Triple<Double, Double, String>? {
+        // Nederland: PDOK Locatieserver (gratis, kent alle postcodes en adressen)
+        if (!nearBelgium) runCatching {
+            val url = "https://api.pdok.nl/bzk/locatieserver/search/v3_1/free?rows=1&fl=weergavenaam,centroide_ll&q=" +
+                java.net.URLEncoder.encode(q, "UTF-8")
+            val c = URL(url).openConnection() as HttpURLConnection
+            c.connectTimeout = 6_000; c.readTimeout = 8_000
+            val doc = JSONObject(c.inputStream.bufferedReader().use { it.readText() })
+                .getJSONObject("response").getJSONArray("docs").optJSONObject(0)
+            val m = Regex("POINT\\(([-\\d.]+) ([-\\d.]+)\\)").find(doc?.optString("centroide_ll").orEmpty())
+            if (doc != null && m != null) return Triple(m.groupValues[2].toDouble(), m.groupValues[1].toDouble(), doc.optString("weergavenaam", q))
+        }
+        // Anders (of België): de geocoder van Android
+        return runCatching {
+            @Suppress("DEPRECATION")
+            android.location.Geocoder(this, java.util.Locale("nl", "NL"))
+                .getFromLocationName(if (nearBelgium && !q.contains("belg", true)) "$q, België" else q, 1)
+                ?.firstOrNull()?.let { a -> Triple(a.latitude, a.longitude, q) }
+        }.getOrNull()
+    }
     private val REQ_LOCATION = 7201
 
     /** Huidige locatie van de telefoon (snel: netwerk, anders GPS); null = geen toestemming of niet bekend. */
@@ -3933,7 +3989,8 @@ class MainActivity : Activity() {
                     nearStatus.text = "Locatie van de telefoon niet bekend: geef de app toestemming voor locatie en zet locatie aan."
                 } else loadChargersAt(my, Triple(loc.latitude, loc.longitude, "jou"))
             }
-        } else loadChargersAt(my, null)
+        } else if (nearMode == 3 && nearSearch != null) loadChargersAt(my, nearSearch)
+        else loadChargersAt(my, null)
     }
 
     private fun loadChargersAt(my: Int, fixed: Triple<Double, Double, String>?) {
