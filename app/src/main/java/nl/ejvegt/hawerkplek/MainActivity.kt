@@ -5111,12 +5111,12 @@ class MainActivity : Activity() {
         val current = if (zoneUp) options.size else options.indexOfFirst { it.first == attrs?.optString("source") }
         AlertDialog.Builder(this)
             .setTitle("Bron kiezen")
-            .setSingleChoiceItems((options.map { it.second } + "PiCore (boven)").toTypedArray(), current) { d, which ->
+            .setSingleChoiceItems((options.map { it.second } + "Boven (AUX-2)").toTypedArray(), current) { d, which ->
                 d.dismiss()
                 if (which == options.size) {
                     zoneUp = true
-                    nowTitle.text = "PiCore (boven)"
-                    mediaStatus.text = "Bron: PiCore boven"
+                    nowTitle.text = "Boven (AUX-2)"
+                    mediaStatus.text = "Bron: boven (AUX-2)"
                     refreshMedia()
                     return@setSingleChoiceItems
                 }
@@ -5942,10 +5942,9 @@ class MainActivity : Activity() {
         }
         val bars = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(0, dp(8), 0, 0) }
         box.addView(bars)
-        // Kamers: woonkamer (HEOS) + PiCore en Kamer Denise uit Music Assistant
-        fun rooms(): List<Pair<String, String>> = listOf(DASH_HEOS to "Woonkamer") +
-            maPlayers().filter { (_, n) -> n.lowercase(NL).let { "picore" in it || "denise" in it } }
-                .sortedBy { (_, n) -> if ("picore" in n.lowercase(NL)) 0 else 1 }
+        // Kamers: woonkamer (HEOS) + boven (AUX-2) en Kamer Denise uit Music Assistant
+        fun rooms(): List<Pair<String, String>> = listOf(DASH_HEOS to "Woonkamer") + upstairsPlayers() +
+            maPlayers().filter { (_, n) -> "denise" in n.lowercase(NL) }
         fun barBtn(label: String, desc: String, white: Boolean, onTap: () -> Unit) = TextView(this).apply {
             text = label; textSize = if (white) 15f else 14f; gravity = Gravity.CENTER; contentDescription = desc
             setTextColor(if (white) Color.BLACK else Color.WHITE); setTypeface(typeface, Typeface.BOLD)
@@ -6014,9 +6013,8 @@ class MainActivity : Activity() {
                 val (name, match) = HEOS_STATIONS[which]
                 mediaStatus.text = "Spelers zoeken…"
                 thread {
-                    // Woonkamer via HEOS + alleen PiCore en Kamer Denise uit Music Assistant
-                    val others = maPlayers().filter { (_, n) -> n.lowercase(NL).let { "picore" in it || "denise" in it } }
-                        .sortedBy { (_, n) -> if ("picore" in n.lowercase(NL)) 0 else 1 }
+                    // Woonkamer via HEOS + alleen boven (AUX-2) en Kamer Denise uit Music Assistant
+                    val others = upstairsPlayers() + maPlayers().filter { (_, n) -> "denise" in n.lowercase(NL) }
                     runOnUiThread {
                         mediaStatus.text = ""
                         val rooms = listOf("WOONKAMER" to "Woonkamer (Denon)") + others
@@ -9114,7 +9112,7 @@ class MainActivity : Activity() {
         silencePhone()
         maFolder = Triple(entity, name, tracks)
         maStarted = null
-        zoneUp = "picore" in name.lowercase(NL)
+        zoneUp = isUpstairs(name)
         musicRun++   // oude wachtrij via de telefoon stoppen
         mediaStatus.text = "${tracks.size} nummers op $name…"
         thread {
@@ -9398,7 +9396,7 @@ class MainActivity : Activity() {
         silencePhone()
         maStarted = Triple(entity, name, item)
         maFolder = null
-        zoneUp = "picore" in name.lowercase(NL)
+        zoneUp = isUpstairs(name)
         prefs().edit().putString(KEY_MA_LAST_PLAYER, entity).apply()
         musicRun++   // eventuele oude wachtrij van de netwerkmap stoppen
         mediaStatus.text = "${item.name} op $name…"
@@ -10368,7 +10366,7 @@ class MainActivity : Activity() {
 
     private fun playSpotify(item: SpotifyApi.Item, device: SpotifyApi.Device) {
         silencePhone()
-        if ("picore" in device.name.lowercase(NL)) zoneUp = true
+        if (isUpstairs(device.name)) zoneUp = true
         mediaStatus.text = "${item.name} op ${device.name}…"
         thread {
             // Receiver aan en op de juiste ingang, afhankelijk van het apparaat
@@ -12551,15 +12549,32 @@ class MainActivity : Activity() {
         get() = prefs().getBoolean(KEY_ZONE_UP, false)
         set(v) { prefs().edit().putBoolean(KEY_ZONE_UP, v).apply() }
 
-    private fun picorePlayer(): Pair<String, String>? =
-        maPlayers().firstOrNull { (_, n) -> "picore" in n.lowercase(NL) }
+    /** Speler boven: de HA Connect AUX-2 (vroeger PiCore op de Raspberry Pi). */
+    private fun isUpstairs(name: String) = name.lowercase(NL).let { n ->
+        "aux-2" in n || "aux 2" in n || "aux_2" in n || "boven" in n || "picore" in n
+    }
+    private fun isAux(name: String) = name.lowercase(NL).let { "aux-2" in it || "aux 2" in it || "aux_2" in it }
+    /** Korte naam voor in de app i.p.v. "Home Assistant Connect AUX-2 1757e0". */
+    private fun upstairsLabel(name: String?) = when {
+        name == null -> "Boven"
+        isAux(name) -> "Boven (AUX-2)"
+        else -> "$name (boven)"
+    }
+    /** Spelers boven uit Music Assistant; staat de AUX-2 erin, dan telt de oude PiCore niet meer mee. */
+    private fun upstairsPlayers(): List<Pair<String, String>> {
+        val all = maPlayers().filter { (_, n) -> isUpstairs(n) }
+        val aux = all.filter { (_, n) -> isAux(n) }
+        return (aux.ifEmpty { all }).map { (id, n) -> id to upstairsLabel(n) }
+    }
+
+    private fun picorePlayer(): Pair<String, String>? = upstairsPlayers().firstOrNull()
 
     private fun picoreInfo(): NowInfo {
         val p = picorePlayer()
         val st = p?.let { stateOf(it.first) }
         val active = st?.optString("state") in listOf("playing", "paused")
         return NowInfo(
-            title = "${p?.second ?: "PiCore"} (boven)",
+            title = p?.second ?: "Boven (AUX-2)",
             sub = when {
                 p == null -> "Niet gevonden in Music Assistant"
                 active -> joinNonEmpty(attr(st, "media_artist"), attr(st, "media_title")).ifEmpty { "Music Assistant" }
